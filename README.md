@@ -18,7 +18,7 @@ Requirements: Docker Engine + Docker Compose v2, and network access from
 this host to your ESXi hosts.
 
 ```bash
-git clone https://github.com/santiagotoro2023/provisioning.git deploycore
+git clone https://github.com/santiagotoro2023/deploycore.git deploycore
 cd deploycore
 ./scripts/setup.sh
 ```
