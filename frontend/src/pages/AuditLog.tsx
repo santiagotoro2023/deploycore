@@ -52,7 +52,7 @@ export default function AuditLog() {
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Audit Log</h1>
         <button
-          className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+          className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
           onClick={exportCsv}
         >
           <Download size={15} strokeWidth={1.75} />

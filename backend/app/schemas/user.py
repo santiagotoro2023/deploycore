@@ -45,6 +45,8 @@ class UserRead(BaseModel):
     global_role: Role
     is_active: bool
     totp_enabled: bool
+    has_avatar: bool = False
+    org_roles: dict[str, Role] = {}
 
 
 class OrgRoleAssign(BaseModel):

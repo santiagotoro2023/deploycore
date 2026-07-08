@@ -69,7 +69,7 @@ export default function DiskLayouts() {
         {canManage && (
           <div className="flex items-center gap-2">
             <button
-              className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+              className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
               onClick={() => importInputRef.current?.click()}
             >
               <Upload size={15} strokeWidth={1.75} />
@@ -120,7 +120,7 @@ export default function DiskLayouts() {
                 <div className="flex items-center gap-1.5">
                   {l.org_id === selectedOrgId && (
                     <button
-                      className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                      className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
                       onClick={() => setEditing(l)}
                     >
                       <Pencil size={12} strokeWidth={1.75} />
@@ -128,7 +128,7 @@ export default function DiskLayouts() {
                     </button>
                   )}
                   <button
-                    className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     onClick={() => exportLayout(l)}
                   >
                     <Download size={12} strokeWidth={1.75} />
@@ -136,7 +136,7 @@ export default function DiskLayouts() {
                   </button>
                   {l.org_id === selectedOrgId && (
                     <button
-                      className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                      className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                       onClick={() => setConfirmDelete(l)}
                     >
                       <Trash2 size={12} strokeWidth={1.75} />
@@ -223,6 +223,10 @@ function DiskLayoutForm({
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!name) {
+      setError("Name is required.");
+      return;
+    }
     const body = {
       name,
       layout: {
@@ -247,38 +251,37 @@ function DiskLayoutForm({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 py-8">
-      <form onSubmit={onSubmit} className="w-[28rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
+      <form noValidate onSubmit={onSubmit} className="w-[28rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-4 text-sm font-semibold">{isEdit ? `Edit ${existing!.name}` : "New disk layout"}</h2>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
         <input
-          required
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">EFI size (MB)</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">EFI size (MB)</label>
             <input
               type="number"
-              className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={efiSizeMb}
               onChange={(e) => setEfiSizeMb(Number(e.target.value))}
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">MSR size (MB)</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">MSR size (MB)</label>
             <input
               type="number"
-              className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={msrSizeMb}
               onChange={(e) => setMsrSizeMb(Number(e.target.value))}
             />
           </div>
         </div>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">OS volume</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">OS volume</label>
         <Select
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={osVolumeMode}
           onChange={(e) => setOsVolumeMode(e.target.value as "remaining" | "fixed")}
         >
@@ -289,13 +292,13 @@ function DiskLayoutForm({
           <input
             type="number"
             placeholder="Size (MB)"
-            className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+            className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
             value={osVolumeSizeMb}
             onChange={(e) => setOsVolumeSizeMb(Number(e.target.value))}
           />
         )}
 
-        <label className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-600">
+        <label className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
           <input
             type="checkbox"
             checked={recoveryEnabled}
@@ -308,7 +311,7 @@ function DiskLayoutForm({
             <input
               type="number"
               placeholder="Recovery size (MB)"
-              className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={recoverySizeMb}
               onChange={(e) => setRecoverySizeMb(Number(e.target.value))}
             />
@@ -321,10 +324,10 @@ function DiskLayoutForm({
 
         <div className="mb-3">
           <div className="mb-1 flex items-center justify-between">
-            <label className="block text-xs font-medium text-neutral-600">Additional volumes</label>
+            <label className="block text-xs font-medium text-neutral-600 dark:text-neutral-400">Additional volumes</label>
             <button
               type="button"
-              className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900"
+              className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
               onClick={addVolume}
             >
               <Plus size={13} strokeWidth={2} />
@@ -336,27 +339,27 @@ function DiskLayoutForm({
             <div key={i} className="mb-2 grid grid-cols-[1fr_4rem_5rem_auto] items-center gap-2">
               <input
                 placeholder="Label"
-                className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-sm"
                 value={v.label}
                 onChange={(e) => updateVolume(i, { label: e.target.value })}
               />
               <input
                 placeholder="Letter"
                 maxLength={1}
-                className="rounded-md border border-neutral-300 px-2 py-1 text-sm uppercase"
+                className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-sm uppercase"
                 value={v.drive_letter}
                 onChange={(e) => updateVolume(i, { drive_letter: e.target.value.toUpperCase() })}
               />
               <input
                 type="number"
                 placeholder="MB"
-                className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+                className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-sm"
                 value={v.size_mb}
                 onChange={(e) => updateVolume(i, { size_mb: Number(e.target.value) })}
               />
               <button
                 type="button"
-                className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-red-600"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-red-600"
                 onClick={() => removeVolume(i)}
               >
                 <Trash2 size={14} strokeWidth={1.75} />
@@ -367,7 +370,7 @@ function DiskLayoutForm({
 
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>
+          <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" onClick={onClose}>
             Cancel
           </button>
           <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">

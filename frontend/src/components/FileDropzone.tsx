@@ -20,7 +20,7 @@ export default function FileDropzone({
 
   return (
     <div
-      className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-neutral-300 px-4 py-6 text-center hover:border-neutral-400 hover:bg-neutral-50 dark:border-neutral-700 dark:hover:border-neutral-600 dark:hover:bg-neutral-800/50"
+      className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-center hover:border-neutral-400 hover:bg-neutral-50 dark:hover:border-neutral-600 dark:hover:bg-neutral-800/50"
       onClick={() => inputRef.current?.click()}
     >
       <UploadCloud size={20} strokeWidth={1.5} className="mb-2 text-neutral-400" />

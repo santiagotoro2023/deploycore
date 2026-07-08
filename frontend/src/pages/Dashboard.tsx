@@ -47,11 +47,11 @@ function MspOverview() {
 
   return (
     <div>
-      <h2 className="mb-2 text-sm font-semibold text-neutral-700">All organizations</h2>
-      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+      <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">All organizations</h2>
+      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
         <table className="w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-neutral-200 text-xs text-neutral-500">
+            <tr className="border-b border-neutral-200 text-xs text-neutral-500 dark:border-neutral-700">
               <th className="px-4 py-2 font-medium">Organization</th>
               <th className="px-4 py-2 font-medium">Running</th>
               <th className="px-4 py-2 font-medium">Completed</th>
@@ -70,7 +70,7 @@ function MspOverview() {
             {rows.map((r) => (
               <tr
                 key={r.org_id}
-                className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50"
+                className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800"
                 onClick={() => selectOrg(r.org_id)}
               >
                 <td className="px-4 py-2 font-medium">{r.org_name}</td>
@@ -130,14 +130,14 @@ function OrgDashboard({ orgId }: { orgId: string }) {
       </div>
 
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-neutral-700">Recent deployments</h2>
-        <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white">
+        <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">Recent deployments</h2>
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
           {recent.length === 0 && <div className="p-4 text-sm text-neutral-400">No deployments yet.</div>}
           {recent.map((d) => (
             <Link
               key={d.id}
               to={`/deployments/${d.id}`}
-              className="flex items-center justify-between px-4 py-2.5 text-sm hover:bg-neutral-50"
+              className="flex items-center justify-between px-4 py-2.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
             >
               <span className="font-medium">{d.hostname}</span>
               <Badge value={d.state} />
@@ -147,8 +147,8 @@ function OrgDashboard({ orgId }: { orgId: string }) {
       </div>
 
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-neutral-700">Hypervisor connection health</h2>
-        <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white">
+        <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">Hypervisor connection health</h2>
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
           {hosts.length === 0 && <div className="p-4 text-sm text-neutral-400">No hypervisors registered.</div>}
           {hosts.map((h) => (
             <div key={h.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
@@ -178,9 +178,9 @@ function GettingStartedCard({
   ];
 
   return (
-    <div className="rounded-lg border border-blue-200 bg-blue-50 p-5">
-      <h2 className="mb-1 text-sm font-semibold text-blue-900">Getting started</h2>
-      <p className="mb-3 text-xs text-blue-800">
+    <div className="rounded-lg border border-blue-200 bg-blue-50 p-5 dark:border-blue-900 dark:bg-blue-950">
+      <h2 className="mb-1 text-sm font-semibold text-blue-900 dark:text-blue-300">Getting started</h2>
+      <p className="mb-3 text-xs text-blue-800 dark:text-blue-400">
         A few steps before you can deploy your first Windows Server:
       </p>
       <div className="space-y-1.5">
@@ -188,7 +188,7 @@ function GettingStartedCard({
           <Link
             key={step.to}
             to={step.to}
-            className="flex items-center gap-2 text-sm text-blue-900 hover:underline"
+            className="flex items-center gap-2 text-sm text-blue-900 hover:underline dark:text-blue-300"
           >
             {step.done ? (
               <CheckCircle2 size={16} strokeWidth={1.75} className="text-emerald-600" />
@@ -215,7 +215,7 @@ function StatTile({
   value: number | string;
 }) {
   return (
-    <div className="flex items-start justify-between rounded-lg border border-neutral-200 bg-white p-4">
+    <div className="flex items-start justify-between rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-4">
       <div>
         <div className="text-xs text-neutral-500">{label}</div>
         <div className="mt-1 text-2xl font-semibold">{value}</div>

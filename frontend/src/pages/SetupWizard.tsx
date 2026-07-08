@@ -1,5 +1,7 @@
 import { FormEvent, useState } from "react";
 import { api, ApiError, setToken } from "../api/client";
+import AuthBackground from "../components/AuthBackground";
+import BrandMark from "../components/BrandMark";
 
 const STEPS = ["Instance", "Admin account"];
 
@@ -17,6 +19,10 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   async function finish(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!displayName || !username || !password || !confirmPassword) {
+      setError("Fill in your name, username, and password.");
+      return;
+    }
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
       return;
@@ -39,9 +45,12 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral-50">
-      <div className="w-96 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
-        <div className="mb-1 text-center text-base font-semibold tracking-tight">Set up your instance</div>
+    <AuthBackground>
+      <div className="w-96 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-6 shadow-sm">
+        <div className="mb-4 flex justify-center">
+          <BrandMark size={40} />
+        </div>
+        <div className="mb-1 text-center text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">Set up your instance</div>
         <p className="mb-6 text-center text-xs text-neutral-500">
           This runs once. You can rename the instance later from Settings.
         </p>
@@ -51,7 +60,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             <div
               key={s}
               className={`flex-1 rounded-full px-2 py-1 text-center ${
-                i === step ? "bg-blue-600 text-white" : i < step ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-500"
+                i === step
+                  ? "bg-blue-600 text-white"
+                  : i < step
+                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+                    : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
               }`}
             >
               {i + 1}. {s}
@@ -59,15 +72,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           ))}
         </div>
 
-        <form onSubmit={step === 0 ? (e) => { e.preventDefault(); setStep(1); } : finish}>
+        <form noValidate onSubmit={step === 0 ? (e) => { e.preventDefault(); setStep(1); } : finish}>
           {step === 0 && (
             <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">MSP / instance name</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">MSP / instance name</label>
               <input
-                required
                 autoFocus
                 placeholder="Acme Managed Services"
-                className="mb-4 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                className="mb-4 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 value={instanceName}
                 onChange={(e) => setInstanceName(e.target.value)}
               />
@@ -87,41 +99,37 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
 
           {step === 1 && (
             <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Your name</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Your name</label>
               <input
-                required
                 autoFocus
-                className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
               />
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Username</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Username</label>
               <input
-                required
-                className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
               />
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Email (optional, for future notifications)</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Email (optional, for future notifications)</label>
               <input
                 type="email"
-                className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Password</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Password</label>
               <input
-                required
                 type="password"
-                className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Confirm password</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Confirm password</label>
               <input
-                required
                 type="password"
-                className="mb-4 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                className="mb-4 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
               />
@@ -129,7 +137,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
               <div className="flex gap-2">
                 <button
                   type="button"
-                  className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-sm"
                   onClick={() => setStep(0)}
                 >
                   Back
@@ -146,6 +154,6 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           )}
         </form>
       </div>
-    </div>
+    </AuthBackground>
   );
 }

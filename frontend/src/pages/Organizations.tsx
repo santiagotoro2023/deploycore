@@ -63,6 +63,10 @@ function CreateOrgForm({ onClose, onCreated }: { onClose: () => void; onCreated:
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!name || !slug) {
+      setError("Name and slug are required.");
+      return;
+    }
     try {
       await api.post("/organizations", { name, slug, description: description || null });
       onCreated();
@@ -73,34 +77,32 @@ function CreateOrgForm({ onClose, onCreated }: { onClose: () => void; onCreated:
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <form onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
+      <form noValidate onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-4 text-sm font-semibold">New organization</h2>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
         <input
-          required
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Slug</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Slug</label>
         <input
-          required
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
         />
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Description</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Description</label>
         <textarea
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>
+          <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">
             Create
           </button>
         </div>

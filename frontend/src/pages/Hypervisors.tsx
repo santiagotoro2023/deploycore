@@ -78,7 +78,7 @@ export default function Hypervisors() {
               canManage && (
                 <div className="flex items-center gap-2">
                   <button
-                    className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50"
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                     disabled={testingId === h.id}
                     onClick={() => testConnection(h.id)}
                   >
@@ -86,7 +86,7 @@ export default function Hypervisors() {
                     {testingId === h.id ? "Testing..." : "Test connection"}
                   </button>
                   <button
-                    className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                    className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                     onClick={() => setConfirmDelete(h)}
                   >
                     <Trash2 size={13} strokeWidth={1.75} />
@@ -171,6 +171,10 @@ function CreateHypervisorForm({
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!name || !apiEndpoint || !username || !credential) {
+      setError("Name, API endpoint, username, and password are required.");
+      return;
+    }
     try {
       await api.post(`/organizations/${orgId}/hypervisors`, {
         name,
@@ -190,33 +194,32 @@ function CreateHypervisorForm({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <form onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
+      <form noValidate onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-4 text-sm font-semibold">New hypervisor</h2>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
-        <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} />
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Type</label>
-        <Select className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={type} onChange={(e) => setType(e.target.value as HypervisorType)}>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
+        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={name} onChange={(e) => setName(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Type</label>
+        <Select className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={type} onChange={(e) => setType(e.target.value as HypervisorType)}>
           <option value="esxi">ESXi</option>
-          <option value="proxmox">Proxmox (not yet implemented)</option>
         </Select>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">API endpoint</label>
-        <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={apiEndpoint} onChange={(e) => setApiEndpoint(e.target.value)} />
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Username</label>
-        <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={username} onChange={(e) => setUsername(e.target.value)} />
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Password</label>
-        <input required type="password" className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={credential} onChange={(e) => setCredential(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">API endpoint</label>
+        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={apiEndpoint} onChange={(e) => setApiEndpoint(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Username</label>
+        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={username} onChange={(e) => setUsername(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Password</label>
+        <input type="password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={credential} onChange={(e) => setCredential(e.target.value)} />
         <div className="mb-3 grid grid-cols-2 gap-3">
-          <input placeholder="Default datastore" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={defaultDatastore} onChange={(e) => setDefaultDatastore(e.target.value)} />
-          <input placeholder="Default network" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={defaultNetwork} onChange={(e) => setDefaultNetwork(e.target.value)} />
+          <input placeholder="Default datastore" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={defaultDatastore} onChange={(e) => setDefaultDatastore(e.target.value)} />
+          <input placeholder="Default network" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={defaultNetwork} onChange={(e) => setDefaultNetwork(e.target.value)} />
         </div>
-        <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600">
+        <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
           <input type="checkbox" checked={tlsVerify} onChange={(e) => setTlsVerify(e.target.checked)} />
           Verify TLS certificate
         </label>
 
         <button
           type="button"
-          className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+          className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
           disabled={testing || !apiEndpoint || !username || !credential}
           onClick={testConnection}
         >
@@ -224,15 +227,15 @@ function CreateHypervisorForm({
           {testing ? "Testing..." : "Test connection"}
         </button>
         {testResult && (
-          <div className={`mb-3 rounded-md border p-2 text-xs ${testResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"}`}>
+          <div className={`mb-3 rounded-md border p-2 text-xs ${testResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400"}`}>
             {testResult.message}
           </div>
         )}
 
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
-          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">Create</button>
+          <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">Create</button>
         </div>
       </form>
     </div>

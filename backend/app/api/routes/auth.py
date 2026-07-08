@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes.users import user_has_avatar
 from app.db import get_db
 from app.models.user import User, UserOrgRole
 from app.redis import get_redis
@@ -158,4 +159,6 @@ async def me(
 ) -> MeResponse:
     result = await db.execute(select(UserOrgRole).where(UserOrgRole.user_id == current_user.id))
     org_roles = {str(row.org_id): row.role for row in result.scalars().all()}
-    return MeResponse(user=UserRead.model_validate(current_user), org_roles=org_roles)
+    user_read = UserRead.model_validate(current_user)
+    user_read.has_avatar = user_has_avatar(current_user)
+    return MeResponse(user=user_read, org_roles=org_roles)

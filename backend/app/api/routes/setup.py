@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,9 +7,11 @@ from app.db import get_db
 from app.models.disk_layout import DiskLayout
 from app.models.setting import Setting, SettingScope
 from app.models.user import Role, User
+from app.redis import get_redis
 from app.schemas.auth import TokenResponse
 from app.schemas.setup import SetupRequest, SetupStatus
 from app.security.auth import create_access_token, hash_password
+from app.security.sessions import create_session
 from app.services import audit
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
@@ -38,7 +41,9 @@ async def setup_status(db: AsyncSession = Depends(get_db)) -> SetupStatus:
 
 
 @router.post("", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def complete_setup(body: SetupRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+async def complete_setup(
+    body: SetupRequest, db: AsyncSession = Depends(get_db), redis: Redis = Depends(get_redis)
+) -> TokenResponse:
     """One-shot instance bootstrap: creates the first (global admin) user
     and the instance name. Refuses once any user already exists, after
     that the instance name is edited from Settings instead."""
@@ -66,4 +71,5 @@ async def complete_setup(body: SetupRequest, db: AsyncSession = Depends(get_db))
     )
     await db.commit()
 
-    return TokenResponse(access_token=create_access_token(admin.id))
+    session_id = await create_session(redis, admin.id)
+    return TokenResponse(access_token=create_access_token(admin.id, session_id))

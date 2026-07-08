@@ -5,7 +5,6 @@ import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable from "../components/DataTable";
 import FileDropzone from "../components/FileDropzone";
-import Select from "../components/Select";
 import { IsoAsset, IsoKind } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
@@ -71,7 +70,7 @@ export default function IsoAssets() {
               canManage &&
               i.org_id === selectedOrgId && (
                 <button
-                  className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                  className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                   onClick={() => setConfirmDelete(i)}
                 >
                   <Trash2 size={12} strokeWidth={1.75} />
@@ -105,7 +104,7 @@ export default function IsoAssets() {
 }
 
 function UploadIsoForm({ orgId, onClose, onDone }: { orgId: string; onClose: () => void; onDone: () => void }) {
-  const [kind, setKind] = useState<IsoKind>("windows_iso");
+  const kind: IsoKind = "windows_iso";
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -141,25 +140,20 @@ function UploadIsoForm({ orgId, onClose, onDone }: { orgId: string; onClose: () 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <form onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold">Upload ISO</h2>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Kind</label>
-        <Select className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={kind} onChange={(e) => setKind(e.target.value as IsoKind)}>
-          <option value="windows_iso">Windows Server ISO</option>
-          <option value="virtio_iso">VirtIO driver ISO</option>
-        </Select>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">File</label>
+      <form onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-5 shadow-sm">
+        <h2 className="mb-4 text-sm font-semibold">Upload Windows Server ISO</h2>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">File</label>
         <div className="mb-3">
           <FileDropzone accept=".iso" fileName={file?.name} hint="ISO files only" onSelect={setFile} />
         </div>
         {uploading && (
-          <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
+          <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
             <div className="h-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
           </div>
         )}
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose} disabled={uploading}>
+          <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" onClick={onClose} disabled={uploading}>
             Cancel
           </button>
           <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50" disabled={uploading || !file}>

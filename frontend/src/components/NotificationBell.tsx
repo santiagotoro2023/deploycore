@@ -66,7 +66,7 @@ export default function NotificationBell() {
   return (
     <div className="relative" ref={containerRef}>
       <button
-        className="relative flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
+        className="relative flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
         onClick={toggleOpen}
       >
         <Bell size={16} strokeWidth={1.75} />
@@ -77,11 +77,11 @@ export default function NotificationBell() {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-9 z-50 w-80 rounded-lg border border-neutral-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
-            <span className="text-xs font-semibold text-neutral-700">Notifications</span>
+        <div className="absolute right-0 top-9 z-50 w-80 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 shadow-sm">
+          <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2 dark:border-neutral-800">
+            <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">Notifications</span>
             {unreadCount > 0 && (
-              <button className="text-xs text-blue-600 hover:underline" onClick={markAllRead}>
+              <button className="text-xs text-blue-600 hover:underline dark:text-blue-400" onClick={markAllRead}>
                 Mark all read
               </button>
             )}
@@ -94,8 +94,8 @@ export default function NotificationBell() {
               <button
                 key={n.id}
                 onClick={() => openNotification(n)}
-                className={`flex w-full items-start gap-2 border-b border-neutral-50 px-3 py-2.5 text-left text-xs last:border-0 hover:bg-neutral-50 ${
-                  n.read ? "text-neutral-500" : "text-neutral-800"
+                className={`flex w-full items-start gap-2 border-b border-neutral-50 px-3 py-2.5 text-left text-xs last:border-0 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-800 ${
+                  n.read ? "text-neutral-500" : "text-neutral-800 dark:text-neutral-200"
                 }`}
               >
                 {!n.read && <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-600" />}

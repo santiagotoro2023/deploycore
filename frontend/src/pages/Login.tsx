@@ -1,6 +1,8 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
+import AuthBackground from "../components/AuthBackground";
+import BrandMark from "../components/BrandMark";
 import { useAuth } from "../state/auth";
 import { useInstanceInfo } from "../state/instance";
 
@@ -18,6 +20,10 @@ export default function Login() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!username || !password) {
+      setError("Enter your username and password.");
+      return;
+    }
     setSubmitting(true);
     try {
       const result = await login(username, password);
@@ -37,6 +43,10 @@ export default function Login() {
     e.preventDefault();
     if (!ticket) return;
     setError(null);
+    if (!code) {
+      setError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
     setSubmitting(true);
     try {
       await loginTotp(ticket, code);
@@ -49,31 +59,34 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral-50">
+    <AuthBackground>
       <form
+        noValidate
         onSubmit={ticket ? onSubmitTotp : onSubmit}
-        className="w-80 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm"
+        className="w-80 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-6 shadow-sm"
       >
         <div className="mb-6 flex flex-col items-center gap-2">
-          {hasLogo && <img src="/api/instance/logo" alt="" className="max-h-10 max-w-full object-contain" />}
-          <div className="text-center text-base font-semibold tracking-tight">{instanceName}</div>
+          {hasLogo ? (
+            <img src="/api/instance/logo" alt="" className="max-h-16 max-w-full object-contain" />
+          ) : (
+            <BrandMark size={40} />
+          )}
+          <div className="text-center text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">{instanceName}</div>
         </div>
         {!ticket && (
           <>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Username</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Username</label>
             <input
               type="text"
-              required
               autoFocus
-              className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Password</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Password</label>
             <input
               type="password"
-              required
-              className="mb-4 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="mb-4 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
@@ -81,13 +94,12 @@ export default function Login() {
         )}
         {ticket && (
           <>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Authenticator code</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Authenticator code</label>
             <input
               type="text"
               inputMode="numeric"
-              required
               autoFocus
-              className="mb-4 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="mb-4 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={code}
               onChange={(e) => setCode(e.target.value)}
             />
@@ -102,6 +114,6 @@ export default function Login() {
           {submitting ? "Signing in..." : ticket ? "Verify" : "Sign in"}
         </button>
       </form>
-    </div>
+    </AuthBackground>
   );
 }

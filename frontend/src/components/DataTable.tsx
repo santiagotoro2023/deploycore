@@ -71,7 +71,7 @@ export default function DataTable<T>({
         <div className="relative mb-3 w-72">
           <Search size={15} strokeWidth={1.75} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
           <input
-            className="w-full rounded-md border border-neutral-300 py-1.5 pl-8 pr-3 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 py-1.5 pl-8 pr-3 text-sm dark:bg-neutral-900"
             placeholder={searchPlaceholder}
             value={query}
             onChange={(e) => {
@@ -134,7 +134,7 @@ export default function DataTable<T>({
       {totalPages > 1 && (
         <div className="mt-3 flex items-center gap-2 text-sm text-neutral-500">
           <button
-            className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 disabled:opacity-40 dark:border-neutral-700"
+            className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 disabled:opacity-40"
             disabled={clampedPage <= 1}
             onClick={() => setPage(clampedPage - 1)}
           >
@@ -145,7 +145,7 @@ export default function DataTable<T>({
             Page {clampedPage} of {totalPages}
           </span>
           <button
-            className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 disabled:opacity-40 dark:border-neutral-700"
+            className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 disabled:opacity-40"
             disabled={clampedPage >= totalPages}
             onClick={() => setPage(clampedPage + 1)}
           >

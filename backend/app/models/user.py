@@ -30,6 +30,7 @@ class User(UUIDPKMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     totp_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    avatar_filename: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     @property
     def totp_secret(self) -> str | None:

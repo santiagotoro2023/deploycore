@@ -16,6 +16,8 @@ export interface User {
   global_role: Role;
   is_active: boolean;
   totp_enabled: boolean;
+  has_avatar: boolean;
+  org_roles: Record<string, Role>;
 }
 
 export type HypervisorType = "esxi" | "proxmox";

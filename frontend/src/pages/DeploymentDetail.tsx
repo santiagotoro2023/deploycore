@@ -185,7 +185,7 @@ export default function DeploymentDetail() {
           <Badge value={deployment.state} />
           {canRetry && (
             <button
-              className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+              className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
               onClick={() => setConfirmRetry(true)}
             >
               <RotateCw size={14} strokeWidth={1.75} />
@@ -197,8 +197,8 @@ export default function DeploymentDetail() {
 
       {deployment.state === "completed" && healthHistory.length > 0 && (
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-neutral-700">Health history</h2>
-          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">Health history</h2>
+          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-4">
             {[...healthHistory].reverse().map((check, i) => (
               <span key={i} title={`${check.status} at ${new Date(check.checked_at).toLocaleString()}`}>
                 <Badge value={check.status} />
@@ -209,15 +209,15 @@ export default function DeploymentDetail() {
       )}
 
       {deployment.error_message && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
           {deployment.error_message}
         </div>
       )}
 
       {deployment.vm_moref && (
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-neutral-700">Virtual machine</h2>
-          <div className="flex items-center justify-between rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">Virtual machine</h2>
+          <div className="flex items-center justify-between rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-4">
             <div className="flex items-center gap-3 text-sm">
               <span className="text-neutral-500">Power state:</span>
               {powerState ? <Badge value={powerState === "poweredOn" ? "ok" : powerState} /> : <span className="text-neutral-400">unknown</span>}
@@ -225,7 +225,7 @@ export default function DeploymentDetail() {
             {canOperateVm && (
               <div className="flex items-center gap-2">
                 <button
-                  className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                   disabled={powerBusy || powerState === "poweredOn"}
                   onClick={powerOn}
                 >
@@ -233,7 +233,7 @@ export default function DeploymentDetail() {
                   Power on
                 </button>
                 <button
-                  className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                   disabled={powerBusy || powerState === "poweredOff"}
                   onClick={() => powerOff(false)}
                 >
@@ -241,7 +241,7 @@ export default function DeploymentDetail() {
                   Shut down
                 </button>
                 <button
-                  className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
                   disabled={powerBusy || powerState === "poweredOff"}
                   onClick={() => powerOff(true)}
                 >
@@ -250,7 +250,7 @@ export default function DeploymentDetail() {
                 </button>
                 {canDeleteVm && (
                   <button
-                    className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+                    className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                     onClick={() => setConfirmDeleteVm(true)}
                   >
                     <Trash2 size={14} strokeWidth={1.75} />
@@ -264,32 +264,32 @@ export default function DeploymentDetail() {
       )}
 
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-neutral-700">Pipeline</h2>
-        <div className="flex items-center gap-1 rounded-lg border border-neutral-200 bg-white p-4">
+        <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">Pipeline</h2>
+        <div className="flex items-center gap-1 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-4">
           {STAGES.map((stage, i) => (
             <div key={stage} className="flex flex-1 items-center">
               <div
                 className={`flex h-6 flex-1 items-center justify-center rounded-md text-xs font-medium ${
                   deployment.state === "failed" && i > currentStageIndex
-                    ? "bg-neutral-100 text-neutral-400"
+                    ? "bg-neutral-100 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500"
                     : i < currentStageIndex || deployment.state === "completed"
-                      ? "bg-emerald-100 text-emerald-700"
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
                       : i === currentStageIndex
                         ? "bg-blue-600 text-white"
-                        : "bg-neutral-100 text-neutral-400"
+                        : "bg-neutral-100 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500"
                 }`}
               >
                 {stage.replace(/_/g, " ")}
               </div>
-              {i < STAGES.length - 1 && <div className="h-px w-2 bg-neutral-200" />}
+              {i < STAGES.length - 1 && <div className="h-px w-2 bg-neutral-200 dark:bg-neutral-700" />}
             </div>
           ))}
         </div>
       </div>
 
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-neutral-700">State history</h2>
-        <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white text-sm">
+        <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">State history</h2>
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 text-sm">
           {history.map((t, i) => (
             <div key={i} className="flex items-center justify-between px-4 py-2">
               <span>
@@ -304,9 +304,9 @@ export default function DeploymentDetail() {
 
       <div>
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-neutral-700">Log</h2>
+          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Log</h2>
           <button
-            className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900"
+            className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
             onClick={downloadFullLog}
           >
             <Download size={13} strokeWidth={1.75} />

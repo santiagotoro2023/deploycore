@@ -19,10 +19,14 @@ export default function SettingsPage() {
   return (
     <div className="space-y-8">
       <h1 className="text-lg font-semibold">Settings</h1>
-      {isGlobalAdmin && <MspOrganizationPanel />}
-      {isGlobalAdmin && <UpdatesPanel />}
-      {isGlobalAdmin && <M365Panel />}
-      {isGlobalAdmin && <BackupsPanel />}
+      {isGlobalAdmin && (
+        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+          <MspOrganizationPanel />
+          <UpdatesPanel />
+          <M365Panel />
+          <BackupsPanel />
+        </div>
+      )}
       <OrgSettingsPanel />
     </div>
   );
@@ -45,6 +49,10 @@ function MspOrganizationPanel() {
     e.preventDefault();
     setError(null);
     setSaved(false);
+    if (!name) {
+      setError("Instance name is required.");
+      return;
+    }
     try {
       await api.put("/settings/global/instance_name", { value: name });
       setSaved(true);
@@ -81,35 +89,35 @@ function MspOrganizationPanel() {
   }
 
   return (
-    <div className="max-w-md space-y-4">
-      <form onSubmit={onSubmit} className="rounded-lg border border-neutral-200 bg-white p-5">
+    <div className="space-y-4">
+      <form noValidate onSubmit={onSubmit} className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-1 text-sm font-semibold">MSP Organization</h2>
-        <p className="mb-3 text-xs text-neutral-500">
+        <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
           Your own organization's name, set once during initial setup, shown in the sidebar and sign-in screen.
         </p>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
         <input
-          required
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         {saved && <div className="mb-3 text-xs text-emerald-600">Saved.</div>}
-        <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">
-          Save
+        <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">
+          Apply changes
         </button>
       </form>
 
-      <div className="rounded-lg border border-neutral-200 bg-white p-5">
+      <div className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-1 text-sm font-semibold">Logo</h2>
-        <p className="mb-3 text-xs text-neutral-500">
+        <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
           Shown alongside the instance name in the sidebar and sign-in screen. PNG, JPEG, or SVG, under 5 MB.
+          Transparent backgrounds are preserved, so a PNG or SVG cut to just the mark looks best.
         </p>
         {logoExists && (
-          <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-200 p-3">
-            <img src="/api/instance/logo" alt="Current logo" className="max-h-10" />
-            <button className="text-xs text-red-600 hover:underline" onClick={() => setConfirmRemoveLogo(true)}>
+          <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-200 bg-[repeating-conic-gradient(#f5f5f5_0%_25%,white_0%_50%)] bg-[length:16px_16px] p-3 dark:border-neutral-700 dark:bg-[repeating-conic-gradient(#262626_0%_25%,#171717_0%_50%)]">
+            <img src="/api/instance/logo" alt="Current logo" className="max-h-16 max-w-[12rem] object-contain" />
+            <button className="text-xs text-red-600 hover:underline dark:text-red-400" onClick={() => setConfirmRemoveLogo(true)}>
               Remove
             </button>
           </div>
@@ -193,31 +201,31 @@ function UpdatesPanel() {
   const upToDate = status.commits_behind === 0;
 
   return (
-    <div className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+    <div className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
       <h2 className="mb-1 text-sm font-semibold">Updates</h2>
       {!status.git_available ? (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
           Self-update is unavailable, this instance isn't running from a git checkout (or PROJECT_DIR isn't
           set correctly in .env). Update manually: <code>git pull && docker compose up -d --build</code>.
         </p>
       ) : (
         <>
-          <p className="mb-3 text-xs text-neutral-500">
+          <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
             Current version: <span className="font-mono">{status.current_commit ?? "unknown"}</span>
             {upToDate ? (
-              <span className="ml-2 text-emerald-600">up to date</span>
+              <span className="ml-2 text-emerald-600 dark:text-emerald-400">up to date</span>
             ) : (
-              <span className="ml-2 text-amber-600">{status.commits_behind} commit(s) behind</span>
+              <span className="ml-2 text-amber-600 dark:text-amber-400">{status.commits_behind} commit(s) behind</span>
             )}
           </p>
           {inProgress && (
-            <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700">
+            <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-400">
               {STAGE_LABELS[status.stage] ?? status.stage}
               {" "}(the app will be briefly unreachable while it restarts)
             </div>
           )}
           {status.stage === "failed" && status.error && (
-            <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+            <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
               Last update failed: {status.error}
             </div>
           )}
@@ -297,11 +305,11 @@ function BackupsPanel() {
   }
 
   return (
-    <div className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+    <div className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-semibold">Database backups</h2>
-          <p className="text-xs text-neutral-500">Daily automatic backup, plus manual runs. Newest 14 kept.</p>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">Daily automatic backup, plus manual runs. Newest 14 kept.</p>
         </div>
         <button
           disabled={running}
@@ -312,7 +320,7 @@ function BackupsPanel() {
         </button>
       </div>
       {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
-      <div className="divide-y divide-neutral-100 rounded-md border border-neutral-200 text-sm">
+      <div className="divide-y divide-neutral-100 rounded-md border border-neutral-200 text-sm dark:divide-neutral-800 dark:border-neutral-700">
         {backups.length === 0 && <div className="p-3 text-xs text-neutral-400">No backups yet.</div>}
         {backups.map((b) => (
           <div key={b.filename} className="flex items-center justify-between px-3 py-2">
@@ -322,7 +330,7 @@ function BackupsPanel() {
                 {new Date(b.created_at * 1000).toLocaleString()} · {formatSize(b.size_bytes)}
               </div>
             </div>
-            <button className="text-xs text-blue-600 hover:underline" onClick={() => downloadBackup(b.filename)}>
+            <button className="text-xs text-blue-600 hover:underline dark:text-blue-400" onClick={() => downloadBackup(b.filename)}>
               Download
             </button>
           </div>
@@ -398,29 +406,38 @@ function M365Panel() {
     }
   }
 
+  async function onSubmitChecked(e: FormEvent) {
+    if (!tenantId || !clientId || !senderUpn || (!configured && !clientSecret)) {
+      e.preventDefault();
+      setError("Tenant ID, client ID, sender mailbox, and a client secret are required.");
+      return;
+    }
+    await onSubmit(e);
+  }
+
   return (
-    <form onSubmit={onSubmit} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+    <form noValidate onSubmit={onSubmitChecked} className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
       <h2 className="mb-1 text-sm font-semibold">Email notifications (Microsoft 365)</h2>
-      <p className="mb-3 text-xs text-neutral-500">
+      <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
         Sends deployment notifications by email via Microsoft Graph, using an app-only Azure AD app
         registration (Mail.Send application permission). Instance-wide, not per-organization.
       </p>
-      <label className="mb-1 block text-xs font-medium text-neutral-600">Tenant ID</label>
-      <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
-      <label className="mb-1 block text-xs font-medium text-neutral-600">Client ID</label>
-      <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={clientId} onChange={(e) => setClientId(e.target.value)} />
-      <label className="mb-1 block text-xs font-medium text-neutral-600">
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Tenant ID</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Client ID</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
         Client secret {configured && <span className="text-neutral-400">(leave blank to keep the current one)</span>}
       </label>
       <input
         type="password"
-        className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+        className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
         value={clientSecret}
         onChange={(e) => setClientSecret(e.target.value)}
       />
-      <label className="mb-1 block text-xs font-medium text-neutral-600">Sender mailbox (UPN)</label>
-      <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={senderUpn} onChange={(e) => setSenderUpn(e.target.value)} />
-      <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600">
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Sender mailbox (UPN)</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={senderUpn} onChange={(e) => setSenderUpn(e.target.value)} />
+      <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         Enabled
       </label>
@@ -428,13 +445,13 @@ function M365Panel() {
       {saved && <div className="mb-3 text-xs text-emerald-600">Saved.</div>}
       <div className="flex items-center gap-2">
         <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">
-          Save
+          Apply changes
         </button>
         {configured && (
           <button
             type="button"
             disabled={testing}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+            className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
             onClick={sendTest}
           >
             {testing ? "Sending..." : "Send test email"}
@@ -442,7 +459,7 @@ function M365Panel() {
         )}
       </div>
       {testResult && (
-        <div className={`mt-3 rounded-md border p-2 text-xs ${testResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"}`}>
+        <div className={`mt-3 rounded-md border p-2 text-xs ${testResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400"}`}>
           {testResult.message}
         </div>
       )}
@@ -515,34 +532,34 @@ function OrgSettingsPanel() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-sm font-semibold text-neutral-700">Deployment settings</h2>
-        <p className="text-sm text-neutral-500">Applies to this organization only.</p>
+        <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Deployment settings</h2>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">Applies to this organization only.</p>
       </div>
 
-      <form onSubmit={saveTimeout} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Deployment timeout (minutes)</label>
-        <p className="mb-2 text-xs text-neutral-500">
+      <form onSubmit={saveTimeout} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Deployment timeout (minutes)</label>
+        <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
           A deployment stuck past this many minutes in any non-terminal stage is force-failed automatically.
         </p>
         <input
           type="number"
           min={1}
           disabled={!canManage}
-          className="mb-3 w-32 rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:bg-neutral-50"
+          className="mb-3 w-32 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm disabled:bg-neutral-50 dark:bg-neutral-900 dark:disabled:bg-neutral-800"
           value={timeoutMinutes}
           onChange={(e) => setTimeoutMinutes(Number(e.target.value))}
         />
         {timeoutError && <div className="mb-3 text-xs text-red-600">{timeoutError}</div>}
         {timeoutSaved && <div className="mb-3 text-xs text-emerald-600">Saved.</div>}
         {canManage && (
-          <button type="submit" className="block rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">
-            Save
+          <button type="submit" className="block rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">
+            Apply changes
           </button>
         )}
       </form>
 
       <button
-        className="text-xs text-neutral-500 hover:text-neutral-900"
+        className="text-xs text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
         onClick={() => setShowAdvanced(!showAdvanced)}
       >
         {showAdvanced ? "Hide advanced" : "Advanced: view/set raw settings keys"}
@@ -550,7 +567,7 @@ function OrgSettingsPanel() {
 
       {showAdvanced && (
         <div className="space-y-4">
-          <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white text-sm">
+          <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white text-sm dark:divide-neutral-800 dark:border-neutral-700 dark:bg-neutral-900">
             {rows.length === 0 && <div className="p-4 text-neutral-400">No settings overrides configured.</div>}
             {rows.map((r) => (
               <div key={`${r.scope}-${r.key}`} className="flex items-center justify-between px-4 py-2.5">
@@ -562,14 +579,14 @@ function OrgSettingsPanel() {
           </div>
 
           {canManage && (
-            <form onSubmit={onSubmit} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+            <form noValidate onSubmit={onSubmit} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
               <h2 className="mb-3 text-sm font-semibold">Set organization override</h2>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Key</label>
-              <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={key} onChange={(e) => setKey(e.target.value)} />
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Value (JSON or plain text)</label>
-              <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={value} onChange={(e) => setValue(e.target.value)} />
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Key</label>
+              <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={key} onChange={(e) => setKey(e.target.value)} />
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Value (JSON or plain text)</label>
+              <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={value} onChange={(e) => setValue(e.target.value)} />
               {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
-              <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">Save</button>
+              <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">Save</button>
             </form>
           )}
         </div>

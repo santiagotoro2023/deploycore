@@ -58,11 +58,14 @@ practice. Set it to this host's real, routable address, then
    taking the rest), created automatically during setup. Most people never
    need to touch this.
 6. **Create a template.** Templates page. This is the reusable "recipe" for
-   a server: which ISO, which disk layout, CPU/RAM/disk size, network
-   settings, local administrator password, optional domain join, and which
-   Windows roles to install, picked from checkboxes (AD Domain Services,
-   DNS, DHCP, IIS, File Server, Print Services, RD Session Host, DFS,
-   Hyper-V, WDS).
+   a server: which ISO, which disk layout, CPU/RAM/disk size, network name
+   (the ESXi/vCenter port group or vSwitch the VM's NIC attaches to, not a
+   Windows network name), local administrator password, optional domain
+   join, and which Windows roles to install, picked from checkboxes (AD
+   Domain Services, DNS, DHCP, IIS, Print Services, RD Session Host, DFS
+   Namespaces, DFS Replication). Installing AD Domain Services installs the
+   role binaries only, it does not promote the server to a domain
+   controller or configure any GPOs/OUs, see "Known limitations" below.
 7. **Deploy.** Deployments page → New deployment. Pick the template and
    hypervisor, give the new server a hostname and IP configuration, review
    the exact answer file that will be used, and deploy. Watch it happen
@@ -167,8 +170,9 @@ org-scoped copy.
   (8+ characters, at least one letter and one digit) enforced on account
   creation and password changes
 - Optional TOTP two-factor authentication per user (Account page): enroll
-  with any standard authenticator app, login then requires a second-step
-  code
+  by scanning a QR code with any standard authenticator app (a manual
+  entry key is also available if you can't scan), login then requires a
+  second-step code
 - Session revocation: every login is tracked in Redis, not just a stateless
   JWT. "Sign out everywhere" (Account page) or an admin's "force logout"
   action on another user (Users page) immediately invalidates every
@@ -188,10 +192,15 @@ org-scoped copy.
   active session for that user immediately)
 - Users are identified and log in by username, not email. Email is optional,
   used only for M365 notification delivery if configured (see below)
+- Each user can set their own profile picture (Account page: PNG or JPEG,
+  under 2 MB), shown next to their name in the sidebar and in the Users
+  list; falls back to their initials if none is set
 
 ### Hypervisors
-- Per-organization. Type `esxi` (implemented) or `proxmox` (registers, but
-  every operation raises "not implemented", no Proxmox provisioning yet)
+- Per-organization. ESXi only for now, selectable in the UI. (A Proxmox
+  driver is stubbed in the codebase for possible future support, but it
+  isn't wired into any user-facing surface yet, every method it has raises
+  `NotImplementedError`.)
 - Fields: name, API endpoint, username, credential (write-only, never
   returned by the API after creation), TLS verification toggle, default
   datastore, default network
@@ -218,8 +227,9 @@ org-scoped copy.
   that JSON as a new org-scoped layout), and a delete button (operator+)
 
 ### ISO Assets
-- Org-scoped or global. Two kinds: `windows_iso`, `virtio_iso` (the latter
-  only matters once Proxmox is implemented)
+- Org-scoped or global. Windows Server ISOs only, uploaded through the UI
+  as `windows_iso`. (A `virtio_iso` kind also exists in the data model for
+  the stubbed Proxmox driver above, but nothing in the UI offers it today.)
 - Chunked upload from the browser (8 MB chunks over sequential POSTs, then
   a finalize call that assembles the file, computes its SHA-256, and marks
   it `complete`), built for multi-gigabyte ISOs without loading the whole
@@ -236,11 +246,15 @@ org-scoped copy.
   (write-only), optional domain join (FQDN, join account, join credential
   [write-only], target OU, and timing, `answer_file` bakes the join into
   the unattended install, `post_install` joins afterward over WinRM),
-  Windows roles/features picked as checkboxes from a curated common-roles
-  list (AD Domain Services, DNS, DHCP, Web Server (IIS), File Server, Print
-  Services, Remote Desktop Session Host, DFS Namespace, DFS Replication,
-  Hyper-V, WDS), list of post-install PowerShell scripts (name + script
-  text, run in order after roles)
+  Windows roles/features picked as checkboxes from a curated list scoped to
+  what a standalone Windows Server actually needs (AD Domain Services, DNS,
+  DHCP, Web Server (IIS), Print Services, Remote Desktop Session Host, DFS
+  Namespaces, DFS Replication), list of post-install PowerShell scripts
+  (name + script text, run in order after roles). Each role is installed
+  with a plain `Install-WindowsFeature`, nothing more: AD Domain Services
+  installs the role binaries only, not a forest/domain promotion or any
+  GPO/OU/delegation setup, do that yourself afterward (`Install-ADDSForest`
+  or `dcpromo`, then GPMC) if you need a real domain controller
 - Create/edit/delete (operator+); editing a password/credential field blank
   leaves the stored value unchanged. Editing a template only affects
   deployments created from it afterward, deployments already completed or
@@ -274,9 +288,9 @@ pending → creating_vm → booting → installing_os → post_install → confi
   per-VM static IP allocation
 - Pipeline (runs in the background worker, not the request thread): renders
   the answer file, builds a per-deployment answer-file ISO, uploads the
-  Windows ISO and the answer-file ISO (and, for Proxmox once implemented, a
-  VirtIO ISO) to the hypervisor datastore, creates the VM (UEFI firmware,
-  PVSCSI controller on ESXi), attaches media, powers on. The guest's
+  Windows ISO and the answer-file ISO to the hypervisor datastore, creates
+  the VM (UEFI firmware, PVSCSI controller on ESXi), attaches media, powers
+  on. The guest's
   `FirstLogonCommands` enable WinRM and call back to
   `/api/callback/{token}` (single-use per-deployment token) once Windows
   Setup finishes, which is what advances `booting → installing_os`
@@ -366,7 +380,12 @@ Hierarchical key/value store, four scopes: `global` < `org` < `template` <
 have UI/API surface today (`template`/`deployment` scopes exist in the data
 model for future use). The per-organization deployment timeout has its own
 dedicated, labeled field in the UI; an "Advanced" section underneath still
-exposes the raw key/value form for anything else. Known keys in active use:
+exposes the raw key/value form for anything else. Global panels (MSP
+Organization, Updates, Email notifications, Backups) are laid out side by
+side on wide screens instead of stacking, and each panel that has more than
+one field to change (Email notifications, for example) has a single
+"Apply changes" button for the whole panel instead of one per field. Known
+keys in active use:
 `instance_name`, `logo_filename`, `update_requested`/`update_status`/
 `current_commit`/`latest_commit`/`commits_behind`/`checked_at`/
 `git_available` (all global, managed by the self-update feature, not meant
@@ -392,15 +411,39 @@ deployment's log stream and "Download full log" button instead.
   organization with the same counts, click a row to switch the active
   organization
 
+### Documentation
+A built-in "Documentation" tab (`frontend/src/wiki`), available to every
+signed-in user regardless of role, covers every configurable feature in the
+app: setup and updating, users/roles/2FA/sessions, organizations,
+hypervisors, ISO assets, disk layouts, templates and Windows roles (including
+the AD DS limitation above, stated plainly there too), deployments, email
+notifications, webhooks, backups, self-update, the audit log, and branding.
+Every article has a short "quick overview" (what it does, in plain language)
+and a full "deep dive" underneath (exact fields, defaults, and edge cases),
+searchable from a filter box in the sidebar. It's static content shipped with
+the app, no network access needed to read it.
+
 ### Visual design
 Blue accent color for primary actions/links/icons against a neutral light
 theme by default, with a full dark mode (toggle in the header, remembers
-your choice). Scaled up roughly 10% from a typical dense admin-UI baseline.
-Styled dropdowns and drag-and-drop-styled file inputs throughout, no raw
-unstyled `<select>`/`<input type=file>` elements anywhere in the app.
-Destructive actions (deleting a hypervisor, disk layout, ISO, template,
-webhook, VM, or logo; running an update) are all gated behind a confirmation
-dialog.
+your choice, and applied consistently across every page). Scaled up roughly
+10% from a typical dense admin-UI baseline. Every dropdown in the app is a
+fully custom-built listbox component, not a raw `<select>`, so it can
+actually be restyled (and is) instead of falling back to the browser's own
+unstyled popup; file inputs are drag-and-drop styled throughout too. Form
+validation is custom and inline (red text under the field), not the
+browser's own "please fill in this field" tooltip. Destructive actions
+(deleting a hypervisor, disk layout, ISO, template, webhook, VM, or logo;
+running an update) are all gated behind a confirmation dialog.
+
+DeployCore ships with its own default visual identity (an icon mark and
+browser-tab favicon, `frontend/src/components/BrandMark.tsx` and
+`frontend/public/favicon.svg`), shown in the sidebar and sign-in screen
+until an MSP uploads their own logo (Settings → MSP Organization), which
+then takes its place everywhere the same way. The sign-in and setup-wizard
+screens sit on a subtly animated background (a few soft, blurred shapes
+drifting slowly), matching the light/dark theme and respecting
+`prefers-reduced-motion`.
 
 ## API reference
 
@@ -430,6 +473,8 @@ minimum effective role for the request's organization unless marked
 | GET/PATCH | `/api/users/{user_id}` | admin (global) | |
 | POST/DELETE | `/api/users/{user_id}/org-roles[/{org_id}]` | admin (global) | |
 | POST | `/api/users/{user_id}/force-logout` | admin (global) | revokes every session for that user |
+| PUT/DELETE | `/api/users/me/avatar` | authenticated | multipart upload; PNG/JPEG, 2 MB max |
+| GET | `/api/users/{user_id}/avatar` | authenticated | any user's profile picture, `404` if unset |
 | GET/POST | `/api/organizations/{org_id}/hypervisors` | readonly / admin | |
 | GET/PATCH/DELETE | `/api/organizations/{org_id}/hypervisors/{host_id}` | readonly / admin | |
 | POST | `.../hypervisors/test-connection` | admin | ad-hoc, no saved host, tests values in the request body directly |
@@ -530,10 +575,49 @@ machine (every legal/illegal transition, retry semantics), Fernet credential
 round-trip, ISO-builder temp-directory cleanup on both success and
 subprocess failure, deployment/hypervisor org-scoping.
 
+## Uninstalling
+
+To completely remove DeployCore and every trace of its data from this host:
+
+```bash
+docker compose down -v --rmi local
+cd ..
+rm -rf deploycore
+```
+
+- `docker compose down -v --rmi local` stops and removes every container in
+  the stack, plus its named volumes (`postgres_data`, `iso_storage`,
+  `iso_build_tmp`, `db_backups`) and the images this repo builds locally
+  (`api`/`worker`/`frontend`/`updater`). This is what actually deletes the
+  database, so every organization, user, deployment record, uploaded ISO,
+  and backup goes with it, there is no undo once this runs.
+- `rm -rf deploycore` (from the parent directory, adjust the path if you
+  cloned it somewhere else or under a different name) removes the cloned
+  repository itself, including your `.env` file and its `APP_SECRET_KEY`.
+- Nothing outside this repo's own containers/volumes/directory is touched:
+  DeployCore never modifies your ESXi hosts, and deleting it does not
+  delete any VM it already created there, those keep running exactly as
+  they are until you remove them yourself (from ESXi directly, or from
+  DeployCore's own "Delete VM" button before you uninstall, if you want
+  them gone too).
+- If you only want to reset the app back to a fresh setup wizard while
+  keeping the rest of the host alone, `docker compose down -v` without
+  `--rmi local` is enough, it drops all data but leaves the built images in
+  place so the next `docker compose up -d` is fast.
+
 ## Known limitations
 
-- Proxmox: registers as a hypervisor type but every driver method raises
-  `NotImplementedError`. ESXi is the only working target.
+- ESXi is the only working hypervisor target. A Proxmox driver exists in
+  the codebase as a stub for possible future support (every method raises
+  `NotImplementedError`), but it isn't exposed anywhere in the UI.
+- Installing "Active Directory Domain Services" from a template only runs
+  `Install-WindowsFeature AD-Domain-Services`, i.e. it installs the role
+  binaries. It does **not** promote the server to a domain controller and
+  does **not** create or configure any Group Policy Objects, OUs, or
+  delegation, none of that is automated today. If you need an actual
+  domain controller, run `Install-ADDSForest`/`Install-ADDSDomainController`
+  (or the classic `dcpromo` flow) and configure GPOs through GPMC yourself
+  after the server comes up.
 - No VM lifecycle beyond create/power-on/power-off/delete (no snapshots,
   migration, resize, clone-as-VM).
 - No LDAP/SSO, local username+password accounts only (with optional TOTP

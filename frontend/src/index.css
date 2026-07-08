@@ -7,3 +7,38 @@
 html {
   font-size: 110%;
 }
+
+@keyframes drift-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(4%, 6%) scale(1.08); }
+}
+
+@keyframes drift-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-5%, -4%) scale(1.05); }
+}
+
+@keyframes drift-c {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(3%, -5%) scale(1.1); }
+}
+
+.auth-bg-blob-a {
+  animation: drift-a 26s ease-in-out infinite;
+}
+
+.auth-bg-blob-b {
+  animation: drift-b 32s ease-in-out infinite;
+}
+
+.auth-bg-blob-c {
+  animation: drift-c 22s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-bg-blob-a,
+  .auth-bg-blob-b,
+  .auth-bg-blob-c {
+    animation: none;
+  }
+}

@@ -76,7 +76,7 @@ export default function Deployments() {
         <h1 className="text-lg font-semibold">Deployments</h1>
         <div className="flex items-center gap-2">
           <button
-            className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+            className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
             onClick={exportCsv}
           >
             <Download size={15} strokeWidth={1.75} />
@@ -97,12 +97,12 @@ export default function Deployments() {
       <div className="flex items-center gap-2">
         <input
           placeholder="Search hostname..."
-          className="w-56 rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="w-56 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={hostnameFilter}
           onChange={(e) => setHostnameFilter(e.target.value)}
         />
         <Select
-          className="w-48 rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="w-48 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={stateFilter}
           onChange={(e) => setStateFilter(e.target.value as DeploymentState | "")}
         >

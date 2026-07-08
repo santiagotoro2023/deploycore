@@ -21,6 +21,7 @@ import SetupWizard from "./pages/SetupWizard";
 import Templates from "./pages/Templates";
 import Users from "./pages/Users";
 import Webhooks from "./pages/Webhooks";
+import Wiki from "./pages/Wiki";
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const { user, loading } = useAuth();
@@ -55,6 +56,7 @@ function AppRoutes() {
         <Route path="account" element={<AccountSettings />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="audit-log" element={<AuditLog />} />
+        <Route path="wiki" element={<Wiki />} />
       </Route>
     </Routes>
   );

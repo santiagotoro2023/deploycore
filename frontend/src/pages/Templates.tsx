@@ -15,13 +15,10 @@ const WINDOWS_FEATURES: { name: string; label: string }[] = [
   { name: "DNS", label: "DNS Server" },
   { name: "DHCP", label: "DHCP Server" },
   { name: "Web-Server", label: "Web Server (IIS)" },
-  { name: "FS-FileServer", label: "File Server" },
   { name: "Print-Services", label: "Print Services" },
   { name: "RDS-RD-Server", label: "RD Session Host" },
   { name: "FS-DFS-Namespace", label: "DFS Namespaces" },
   { name: "FS-DFS-Replication", label: "DFS Replication" },
-  { name: "Hyper-V", label: "Hyper-V" },
-  { name: "WDS", label: "Windows Deployment Services" },
 ];
 
 export default function Templates() {
@@ -92,7 +89,7 @@ export default function Templates() {
         {canManage && (
           <div className="flex items-center gap-2">
             <button
-              className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+              className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
               onClick={() => importInputRef.current?.click()}
             >
               <Upload size={15} strokeWidth={1.75} />
@@ -140,7 +137,7 @@ export default function Templates() {
                 <div className="flex items-center gap-1.5">
                   {t.org_id === selectedOrgId && (
                     <button
-                      className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                      className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
                       onClick={() => setEditing(t)}
                     >
                       <Pencil size={12} strokeWidth={1.75} />
@@ -148,14 +145,14 @@ export default function Templates() {
                     </button>
                   )}
                   <button
-                    className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     onClick={() => cloneTemplate(t.id)}
                   >
                     <Copy size={12} strokeWidth={1.75} />
                     Clone
                   </button>
                   <button
-                    className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
                     onClick={() => exportTemplate(t)}
                   >
                     <Download size={12} strokeWidth={1.75} />
@@ -163,7 +160,7 @@ export default function Templates() {
                   </button>
                   {t.org_id === selectedOrgId && (
                     <button
-                      className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                      className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                       onClick={() => setConfirmDelete(t)}
                     >
                       <Trash2 size={12} strokeWidth={1.75} />
@@ -230,7 +227,7 @@ function TemplateForm({
 }) {
   const isEdit = !!existing;
   const [name, setName] = useState(existing?.name ?? "");
-  const [isoAssetId, setIsoAssetId] = useState(existing?.iso_asset_id ?? "");
+  const [isoAssetId, setIsoAssetId] = useState(existing?.iso_asset_id ?? isoAssets[0]?.id ?? "");
   const [diskLayoutId, setDiskLayoutId] = useState(existing?.disk_layout_id ?? "");
   const [cpuCount, setCpuCount] = useState(existing?.cpu_count ?? 2);
   const [ramMb, setRamMb] = useState(existing?.ram_mb ?? 4096);
@@ -251,6 +248,10 @@ function TemplateForm({
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!name || !diskLayoutId || !networkName || (!isEdit && !localAdminPassword)) {
+      setError("Name, disk layout, network name, and a local administrator password are required.");
+      return;
+    }
     const body = {
       name,
       iso_asset_id: isoAssetId || null,
@@ -281,7 +282,7 @@ function TemplateForm({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 py-8">
-      <form onSubmit={onSubmit} className="w-[32rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
+      <form noValidate onSubmit={onSubmit} className="w-[32rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-1 text-sm font-semibold">{isEdit ? `Edit ${existing!.name}` : "New template"}</h2>
         {isEdit && (
           <p className="mb-4 text-xs text-neutral-500">
@@ -291,13 +292,13 @@ function TemplateForm({
         )}
         {!isEdit && <div className="mb-4" />}
 
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
-        <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
+        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={name} onChange={(e) => setName(e.target.value)} />
 
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Windows ISO</label>
-            <Select className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={isoAssetId} onChange={(e) => setIsoAssetId(e.target.value)}>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Windows ISO</label>
+            <Select className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={isoAssetId} onChange={(e) => setIsoAssetId(e.target.value)}>
               <option value="">None yet, cannot deploy</option>
               {isoAssets.map((iso) => (
                 <option key={iso.id} value={iso.id}>{iso.filename}</option>
@@ -305,8 +306,8 @@ function TemplateForm({
             </Select>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Disk layout</label>
-            <Select required className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={diskLayoutId} onChange={(e) => setDiskLayoutId(e.target.value)}>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Disk layout</label>
+            <Select className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={diskLayoutId} onChange={(e) => setDiskLayoutId(e.target.value)}>
               <option value="">Select...</option>
               {diskLayouts.map((l) => (
                 <option key={l.id} value={l.id}>{l.name}</option>
@@ -317,37 +318,40 @@ function TemplateForm({
 
         <div className="mb-3 grid grid-cols-3 gap-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">vCPU</label>
-            <input type="number" className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={cpuCount} onChange={(e) => setCpuCount(Number(e.target.value))} />
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">vCPU</label>
+            <input type="number" className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={cpuCount} onChange={(e) => setCpuCount(Number(e.target.value))} />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">RAM (MB)</label>
-            <input type="number" className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={ramMb} onChange={(e) => setRamMb(Number(e.target.value))} />
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">RAM (MB)</label>
+            <input type="number" className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={ramMb} onChange={(e) => setRamMb(Number(e.target.value))} />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Disk (GB)</label>
-            <input type="number" className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={diskSizeGb} onChange={(e) => setDiskSizeGb(Number(e.target.value))} />
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Disk (GB)</label>
+            <input type="number" className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={diskSizeGb} onChange={(e) => setDiskSizeGb(Number(e.target.value))} />
           </div>
         </div>
 
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Network name</label>
-        <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={networkName} onChange={(e) => setNetworkName(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Network name</label>
+        <p className="mb-1 text-xs text-neutral-400">
+          The port group / vSwitch network name exactly as it appears in ESXi or vCenter networking, not a
+          Windows network name, this is what the new VM's virtual NIC attaches to.
+        </p>
+        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={networkName} onChange={(e) => setNetworkName(e.target.value)} />
 
-        <label className="mb-1 block text-xs font-medium text-neutral-600">
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
           Local administrator password{isEdit && " (leave blank to keep unchanged)"}
         </label>
         <input
-          required={!isEdit}
           type="password"
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={localAdminPassword}
           onChange={(e) => setLocalAdminPassword(e.target.value)}
         />
 
-        <label className="mb-2 block text-xs font-medium text-neutral-600">Windows roles and features</label>
-        <div className="mb-3 grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-neutral-200 p-3">
+        <label className="mb-2 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Windows roles and features</label>
+        <div className="mb-3 grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-neutral-200 p-3 dark:border-neutral-700">
           {WINDOWS_FEATURES.map((f) => (
-            <label key={f.name} className="flex items-center gap-1.5 text-xs text-neutral-700">
+            <label key={f.name} className="flex items-center gap-1.5 text-xs text-neutral-700 dark:text-neutral-300">
               <input
                 type="checkbox"
                 checked={windowsFeatures.includes(f.name)}
@@ -358,18 +362,18 @@ function TemplateForm({
           ))}
         </div>
 
-        <label className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-600">
+        <label className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
           <input type="checkbox" checked={domainJoinEnabled} onChange={(e) => setDomainJoinEnabled(e.target.checked)} />
           Join a domain
         </label>
         {domainJoinEnabled && (
           <div className="mb-3 grid grid-cols-2 gap-3">
-            <input placeholder="Domain FQDN" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={domainFqdn} onChange={(e) => setDomainFqdn(e.target.value)} />
-            <input placeholder="Join account" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={domainJoinAccount} onChange={(e) => setDomainJoinAccount(e.target.value)} />
+            <input placeholder="Domain FQDN" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={domainFqdn} onChange={(e) => setDomainFqdn(e.target.value)} />
+            <input placeholder="Join account" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={domainJoinAccount} onChange={(e) => setDomainJoinAccount(e.target.value)} />
             <input
               placeholder={isEdit ? "Join password (leave blank to keep unchanged)" : "Join password"}
               type="password"
-              className="col-span-2 rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="col-span-2 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={domainJoinCredential}
               onChange={(e) => setDomainJoinCredential(e.target.value)}
             />
@@ -378,8 +382,8 @@ function TemplateForm({
 
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
-          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">{isEdit ? "Save" : "Create"}</button>
+          <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">{isEdit ? "Save" : "Create"}</button>
         </div>
       </form>
     </div>

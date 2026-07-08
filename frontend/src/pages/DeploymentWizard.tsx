@@ -94,21 +94,21 @@ export default function DeploymentWizard() {
         {STEPS.map((s, i) => (
           <div
             key={s}
-            className={`rounded-full px-3 py-1 ${i === step ? "bg-blue-600 text-white" : "bg-neutral-100 text-neutral-500"}`}
+            className={`rounded-full px-3 py-1 ${i === step ? "bg-blue-600 text-white" : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"}`}
           >
             {i + 1}. {s}
           </div>
         ))}
       </div>
 
-      {error && <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {error && <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">{error}</div>}
 
-      <div className="rounded-lg border border-neutral-200 bg-white p-5">
+      <div className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-5">
         {step === 0 && (
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Deployment template</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Deployment template</label>
             <Select
-              className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
             >
@@ -124,9 +124,9 @@ export default function DeploymentWizard() {
 
         {step === 1 && (
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">Hypervisor</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Hypervisor</label>
             <Select
-              className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={hypervisorHostId}
               onChange={(e) => setHypervisorHostId(e.target.value)}
             >
@@ -142,16 +142,16 @@ export default function DeploymentWizard() {
 
         {step === 2 && (
           <div className="space-y-3">
-            <label className="flex items-center gap-2 text-xs font-medium text-neutral-600">
+            <label className="flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
               <input type="checkbox" checked={bulk} onChange={(e) => setBulk(e.target.checked)} />
               Bulk deployment (creates multiple VMs from this template, DHCP only)
             </label>
             <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
                 {bulk ? "Hostname prefix" : "Hostname"}
               </label>
               <input
-                className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 placeholder={bulk ? "e.g. WEB- (becomes WEB-01, WEB-02, ...)" : undefined}
                 value={hostname}
                 onChange={(e) => setHostname(e.target.value)}
@@ -159,12 +159,12 @@ export default function DeploymentWizard() {
             </div>
             {bulk && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600">Number of VMs</label>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Number of VMs</label>
                 <input
                   type="number"
                   min={1}
                   max={50}
-                  className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                   value={bulkCount}
                   onChange={(e) => setBulkCount(Number(e.target.value))}
                 />
@@ -172,9 +172,9 @@ export default function DeploymentWizard() {
             )}
             {!bulk && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600">IP configuration</label>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">IP configuration</label>
                 <Select
-                  className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                   value={ipMode}
                   onChange={(e) => setIpMode(e.target.value as IpMode)}
                 >
@@ -187,25 +187,25 @@ export default function DeploymentWizard() {
               <div className="grid grid-cols-2 gap-3">
                 <input
                   placeholder="IP address"
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                   value={staticIp}
                   onChange={(e) => setStaticIp(e.target.value)}
                 />
                 <input
                   placeholder="Netmask (e.g. 255.255.255.0)"
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                   value={staticNetmask}
                   onChange={(e) => setStaticNetmask(e.target.value)}
                 />
                 <input
                   placeholder="Gateway"
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                   value={staticGateway}
                   onChange={(e) => setStaticGateway(e.target.value)}
                 />
                 <input
                   placeholder="DNS servers, comma-separated"
-                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                   value={staticDns}
                   onChange={(e) => setStaticDns(e.target.value)}
                 />
@@ -226,7 +226,7 @@ export default function DeploymentWizard() {
         )}
 
         {step === 4 && (
-          <div className="text-sm text-neutral-600">
+          <div className="text-sm text-neutral-600 dark:text-neutral-400">
             {bulk ? (
               <>
                 Ready to deploy <span className="font-medium">{bulkCount}</span> VMs (
@@ -251,7 +251,7 @@ export default function DeploymentWizard() {
 
       <div className="flex justify-between">
         <button
-          className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-40"
+          className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm disabled:opacity-40"
           disabled={step === 0}
           onClick={() => setStep(step - 1)}
         >

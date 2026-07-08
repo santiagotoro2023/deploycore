@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Building2,
   Disc,
   FileText,
@@ -16,6 +17,8 @@ import {
   Webhook as WebhookIcon,
 } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
+import Avatar from "./Avatar";
+import BrandMark from "./BrandMark";
 import NotificationBell from "./NotificationBell";
 import Select from "./Select";
 import { useAuth, roleAtLeast } from "../state/auth";
@@ -25,6 +28,7 @@ import { useTheme } from "../state/theme";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", end: true, icon: LayoutDashboard },
+  { to: "/wiki", label: "Documentation", icon: BookOpen },
   { to: "/organizations", label: "Organizations", icon: Building2 },
   { to: "/deployments", label: "Deployments", icon: Rocket },
   { to: "/templates", label: "Templates", icon: FileText },
@@ -53,11 +57,15 @@ export default function Layout() {
       <aside className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
         <div className="border-b border-neutral-200 p-4 dark:border-neutral-800">
           <div className="flex items-center gap-2">
-            {hasLogo && <img src="/api/instance/logo" alt="" className="h-6 w-6 shrink-0 object-contain" />}
+            {hasLogo ? (
+              <img src="/api/instance/logo" alt="" className="h-9 w-9 shrink-0 object-contain" />
+            ) : (
+              <BrandMark size={28} />
+            )}
             <div className="truncate text-sm font-semibold tracking-tight">{instanceName}</div>
           </div>
           <Select
-            className="mt-2 w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            className="mt-2 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1.5 text-sm dark:bg-neutral-900"
             value={selectedOrgId ?? ""}
             onChange={(e) => selectOrg(e.target.value)}
           >
@@ -89,8 +97,13 @@ export default function Layout() {
           ))}
         </nav>
         <div className="border-t border-neutral-200 p-4 text-sm dark:border-neutral-800">
-          <div className="truncate text-neutral-700 dark:text-neutral-300">{user?.display_name}</div>
-          <div className="truncate text-xs text-neutral-400">@{user?.username}</div>
+          <div className="flex items-center gap-2.5">
+            {user && <Avatar userId={user.id} displayName={user.display_name} hasAvatar={user.has_avatar} size={32} />}
+            <div className="min-w-0">
+              <div className="truncate text-neutral-700 dark:text-neutral-300">{user?.display_name}</div>
+              <div className="truncate text-xs text-neutral-400">@{user?.username}</div>
+            </div>
+          </div>
           <button
             className="mt-2 flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
             onClick={logout}

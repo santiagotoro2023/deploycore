@@ -16,6 +16,7 @@ interface AuthState {
   logout: () => void;
   logoutEverywhere: () => Promise<void>;
   effectiveRole: (orgId: string | null) => Role;
+  refreshUser: () => Promise<void>;
 }
 
 const ROLE_ORDER: Record<Role, number> = { none: 0, readonly: 1, operator: 2, admin: 3 };
@@ -96,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, orgRoles, loading, login, loginTotp, logout, logoutEverywhere, effectiveRole }}
+      value={{ user, orgRoles, loading, login, loginTotp, logout, logoutEverywhere, effectiveRole, refreshUser: refreshMe }}
     >
       {children}
     </AuthContext.Provider>
