@@ -14,7 +14,6 @@ class HypervisorHostCreate(BaseModel):
     credential: str
     tls_verify: bool = True
     default_datastore: str | None = None
-    default_network: str | None = None
 
 
 class HypervisorHostUpdate(BaseModel):
@@ -24,7 +23,6 @@ class HypervisorHostUpdate(BaseModel):
     credential: str | None = None
     tls_verify: bool | None = None
     default_datastore: str | None = None
-    default_network: str | None = None
 
 
 class HypervisorHostRead(BaseModel):
@@ -38,7 +36,6 @@ class HypervisorHostRead(BaseModel):
     username: str
     tls_verify: bool
     default_datastore: str | None
-    default_network: str | None
     last_test_status: ConnectionStatus
     last_test_at: datetime | None
     last_test_message: str | None

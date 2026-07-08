@@ -82,7 +82,7 @@ export default function Users() {
         rowKey={(u) => u.id}
         searchValue={(u) => u.username}
         columns={[
-          { key: "username", header: "Username", render: (u) => u.username, sortValue: (u) => u.username },
+          { key: "username", header: "Username", render: (u) => u.username, sortValue: (u) => u.username, shrink: true },
           {
             key: "display_name",
             header: "Name",
@@ -95,8 +95,8 @@ export default function Users() {
             sortValue: (u) => u.display_name,
           },
           { key: "email", header: "Email", render: (u) => u.email ?? "(none)" },
-          { key: "global_role", header: "Global role", render: (u) => <Badge value={u.global_role} /> },
-          { key: "status", header: "Status", render: (u) => <Badge value={u.is_active ? "active" : "unknown"} /> },
+          { key: "global_role", header: "Global role", render: (u) => <Badge value={u.global_role} />, shrink: true },
+          { key: "status", header: "Status", render: (u) => <Badge value={u.is_active ? "active" : "unknown"} />, shrink: true },
           {
             key: "org_roles",
             header: "Organization roles",
@@ -123,6 +123,7 @@ export default function Users() {
           {
             key: "actions",
             header: "",
+            shrink: true,
             render: (u) => (
               <div className="flex items-center gap-2">
                 <button

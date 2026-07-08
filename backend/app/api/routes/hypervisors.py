@@ -45,7 +45,6 @@ async def create_hypervisor(
         username=body.username,
         tls_verify=body.tls_verify,
         default_datastore=body.default_datastore,
-        default_network=body.default_network,
     )
     host.credential = body.credential
     db.add(host)

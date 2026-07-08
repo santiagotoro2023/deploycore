@@ -48,7 +48,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     <AuthBackground>
       <div className="w-96 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-6 shadow-sm">
         <div className="mb-4 flex justify-center">
-          <BrandMark size={40} />
+          <BrandMark size={56} />
         </div>
         <div className="mb-1 text-center text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">Set up your instance</div>
         <p className="mb-6 text-center text-xs text-neutral-500">

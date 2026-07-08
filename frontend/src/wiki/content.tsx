@@ -269,8 +269,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
           <>
             <P>
               A hypervisor connection tells DeployCore where to actually create VMs. Each organization
-              manages its own list, an ESXi host or vCenter endpoint, a service account, and the default
-              datastore/network to use.
+              manages its own list, an ESXi host or vCenter endpoint, a service account, and a default
+              datastore to use.
             </P>
           </>
         ),
@@ -283,9 +283,14 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                 "API endpoint (the ESXi/vCenter host address)",
                 "Username and credential (the credential is write-only, it's never returned by the API again once saved)",
                 "TLS verification toggle (turn off only for a self-signed lab host you trust)",
-                "Default datastore and default network",
+                "Default datastore, used when creating a VM if nothing more specific is set",
               ]}
             />
+            <P>
+              There's no network setting here: the port group/vSwitch a VM's NIC attaches to is defined
+              per-template instead (see "Templates and Windows roles"), since different templates on the
+              same hypervisor connection can reasonably need different networks.
+            </P>
             <P>
               Use <strong>Test Connection</strong> two ways: against whatever is currently typed into the
               create form, before you've saved anything, or against an already-saved host, which stores
@@ -315,6 +320,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               multi-gigabyte ISOs upload reliably without ever holding the whole file in memory on either
               end, and a flaky connection just means a slower upload, not a failed one. Deleting an ISO
               asset removes both the database record and the file on disk immediately.
+            </P>
+            <P>
+              A global admin uploading an ISO gets an extra "Available to" choice in the upload dialog:
+              this organization only, or every organization. A global ISO shows up (read-only, as
+              "Global" in the Scope column) in every organization's list and can be attached to any
+              organization's templates, handy for a Windows ISO every customer environment should share
+              instead of re-uploading the same multi-gigabyte file once per organization.
             </P>
           </>
         ),
@@ -577,15 +589,16 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               tell the host's Docker daemon what to do. That is a real privilege: that container can, in
               principle, control anything else running on the same Docker host. It's a reasonable
               trade-off for a self-hosted tool where you already control the host, worth knowing before
-              you rely on it.
+              you rely on it. Nothing needs configuring for it to find this repo on the host either: it
+              asks the Docker API for its own bind mount's source path itself, so it works the same on a
+              brand-new install and on an instance that's been running since before this feature existed.
             </P>
             <P>
-              If this isn't a git checkout, or <Code>PROJECT_DIR</Code> isn't set correctly in{" "}
-              <Code>.env</Code>, the panel shows a clear "self-update unavailable" message instead of
-              failing silently, with the manual fallback (<Code>git pull &amp;&amp; docker compose up -d
-              --build</Code>) right there. There's no automatic rollback: if a migration or restart fails
-              partway through, whatever containers are already running keep running on what they had,
-              check the panel's error message and container logs to recover.
+              If this isn't a git checkout, the panel shows a clear "self-update unavailable" message
+              instead of failing silently, with the manual fallback (<Code>git pull &amp;&amp; docker
+              compose up -d --build</Code>) right there. There's no automatic rollback: if a migration or
+              restart fails partway through, whatever containers are already running keep running on what
+              they had, check the panel's error message and container logs to recover.
             </P>
           </>
         ),

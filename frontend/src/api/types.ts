@@ -32,7 +32,6 @@ export interface HypervisorHost {
   username: string;
   tls_verify: boolean;
   default_datastore: string | null;
-  default_network: string | null;
   last_test_status: ConnectionStatus;
   last_test_at: string | null;
   last_test_message: string | null;

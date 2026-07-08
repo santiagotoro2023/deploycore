@@ -14,6 +14,8 @@ from app.services import audit, iso_upload
 
 router = APIRouter(tags=["iso-assets"])
 
+_admin_global = Depends(require_role(Role.ADMIN, org_scoped=False))
+
 
 @router.get(
     "/api/organizations/{org_id}/iso-assets",
@@ -119,6 +121,97 @@ async def delete_iso_asset(
         Path(iso.storage_path).unlink(missing_ok=True)
     audit.record(
         db, action="iso_asset.delete", target_type="iso_asset", org_id=org_id,
+        user_id=current_user.id, target_id=iso.id, detail={"filename": iso.filename},
+    )
+    await db.delete(iso)
+    await db.commit()
+
+
+async def _get_global_iso(db: AsyncSession, iso_id: uuid.UUID) -> IsoAsset:
+    iso = await db.get(IsoAsset, iso_id)
+    if iso is None or iso.org_id is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "global ISO asset not found")
+    return iso
+
+
+@router.post(
+    "/api/iso-assets/global",
+    response_model=IsoAssetRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_admin_global],
+)
+async def create_global_iso_asset(
+    body: IsoAssetCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> IsoAsset:
+    """Global admin only: an ISO with no org_id, inherited read-only by
+    every organization the same way global disk layouts and templates
+    already are. Uses the same chunk/finalize upload flow as an org-scoped
+    ISO, just under /api/iso-assets/global instead of an org path."""
+    iso = IsoAsset(org_id=None, kind=body.kind, filename=body.filename, storage_path="")
+    db.add(iso)
+    await db.flush()
+    audit.record(
+        db, action="iso_asset.create_global", target_type="iso_asset",
+        user_id=current_user.id, target_id=iso.id, detail={"filename": iso.filename},
+    )
+    await db.commit()
+    await db.refresh(iso)
+    return iso
+
+
+@router.post(
+    "/api/iso-assets/global/{iso_id}/chunk",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[_admin_global],
+)
+async def upload_global_iso_chunk(iso_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)) -> None:
+    iso = await _get_global_iso(db, iso_id)
+    chunk = await request.body()
+    iso_upload.append_chunk(iso.id, chunk)
+    if iso.upload_status != UploadStatus.UPLOADING:
+        iso.upload_status = UploadStatus.UPLOADING
+        await db.commit()
+
+
+@router.post(
+    "/api/iso-assets/global/{iso_id}/finalize",
+    response_model=IsoAssetRead,
+    dependencies=[_admin_global],
+)
+async def finalize_global_iso_upload(
+    iso_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> IsoAsset:
+    iso = await _get_global_iso(db, iso_id)
+    try:
+        storage_path, checksum, size_bytes = iso_upload.finalize(iso.id, iso.filename)
+    except FileNotFoundError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no chunks were uploaded for this ISO asset")
+    iso.storage_path = storage_path
+    iso.checksum_sha256 = checksum
+    iso.size_bytes = size_bytes
+    iso.upload_status = UploadStatus.COMPLETE
+    audit.record(
+        db, action="iso_asset.finalize_global", target_type="iso_asset",
+        user_id=current_user.id, target_id=iso.id, detail={"size_bytes": size_bytes},
+    )
+    await db.commit()
+    await db.refresh(iso)
+    return iso
+
+
+@router.delete(
+    "/api/iso-assets/global/{iso_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[_admin_global],
+)
+async def delete_global_iso_asset(
+    iso_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> None:
+    iso = await _get_global_iso(db, iso_id)
+    if iso.storage_path:
+        Path(iso.storage_path).unlink(missing_ok=True)
+    audit.record(
+        db, action="iso_asset.delete_global", target_type="iso_asset",
         user_id=current_user.id, target_id=iso.id, detail={"filename": iso.filename},
     )
     await db.delete(iso)

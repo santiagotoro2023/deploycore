@@ -1,5 +1,6 @@
 import { ChevronDown } from "lucide-react";
-import { Children, isValidElement, KeyboardEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { Children, isValidElement, KeyboardEvent, ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface ParsedOption {
   value: string;
@@ -30,17 +31,56 @@ interface SelectProps {
  * be restyled once open (browsers always render the option popup with OS
  * chrome), which is the "still looks like plain HTML" gap this closes.
  * Accepts the same <option> children / value / onChange shape as a native
- * select so every existing call site works unchanged. */
+ * select so every existing call site works unchanged.
+ *
+ * The open option list is rendered through a portal into document.body,
+ * positioned from the trigger's own bounding rect, rather than as a plain
+ * absolutely-positioned child. A Select living inside a scrollable
+ * container (a table wrapped in overflow-x-auto, for example) would
+ * otherwise have its popup clipped by that ancestor's overflow, portaling
+ * it out to the body sidesteps that entirely. */
 export default function Select({ className = "", value, onChange, children, disabled, id }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
+  const [rect, setRect] = useState<{ anchor: number; left: number; width: number; openUpward: boolean } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   const options = parseOptions(children);
   const selected = options.find((o) => o.value === String(value ?? "")) ?? null;
 
+  function updatePosition() {
+    const el = containerRef.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - box.bottom;
+    const openUpward = spaceBelow < 240 && box.top > spaceBelow;
+    setRect({ anchor: openUpward ? box.top : box.bottom, left: box.left, width: box.width, openUpward });
+  }
+
+  useLayoutEffect(() => {
+    if (open) updatePosition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onScrollOrResize() {
+      updatePosition();
+    }
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [open]);
+
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (listRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
@@ -101,34 +141,46 @@ export default function Select({ className = "", value, onChange, children, disa
         strokeWidth={2}
         className={`pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-neutral-400 transition-transform ${open ? "rotate-180" : ""}`}
       />
-      {open && !disabled && (
-        <ul
-          role="listbox"
-          className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border border-neutral-200 bg-white py-1 text-sm shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
-        >
-          {options.length === 0 && <li className="px-3 py-1.5 text-neutral-400">No options</li>}
-          {options.map((opt, i) => (
-            <li
-              key={opt.value}
-              role="option"
-              aria-selected={opt.value === selected?.value}
-              onMouseEnter={() => setHighlighted(i)}
-              onClick={() => selectOption(opt)}
-              className={`cursor-pointer px-3 py-1.5 ${
-                opt.disabled
-                  ? "cursor-not-allowed text-neutral-300 dark:text-neutral-600"
-                  : i === highlighted
-                    ? "bg-blue-600 text-white"
-                    : opt.value === selected?.value
-                      ? "bg-blue-50 dark:bg-blue-900/40"
-                      : "hover:bg-neutral-50 dark:hover:bg-neutral-700"
-              }`}
-            >
-              {opt.label}
-            </li>
-          ))}
-        </ul>
-      )}
+      {open &&
+        !disabled &&
+        rect &&
+        createPortal(
+          <ul
+            ref={listRef}
+            role="listbox"
+            style={{
+              position: "fixed",
+              top: rect.openUpward ? undefined : rect.anchor,
+              bottom: rect.openUpward ? window.innerHeight - rect.anchor : undefined,
+              left: rect.left,
+              width: rect.width,
+            }}
+            className="z-50 mt-1 max-h-60 overflow-auto rounded-md border border-neutral-200 bg-white py-1 text-sm shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
+          >
+            {options.length === 0 && <li className="px-3 py-1.5 text-neutral-400">No options</li>}
+            {options.map((opt, i) => (
+              <li
+                key={opt.value}
+                role="option"
+                aria-selected={opt.value === selected?.value}
+                onMouseEnter={() => setHighlighted(i)}
+                onClick={() => selectOption(opt)}
+                className={`cursor-pointer px-3 py-1.5 ${
+                  opt.disabled
+                    ? "cursor-not-allowed text-neutral-300 dark:text-neutral-600"
+                    : i === highlighted
+                      ? "bg-blue-600 text-white"
+                      : opt.value === selected?.value
+                        ? "bg-blue-50 dark:bg-blue-900/40"
+                        : "hover:bg-neutral-50 dark:hover:bg-neutral-700"
+                }`}
+              >
+                {opt.label}
+              </li>
+            ))}
+          </ul>,
+          document.body,
+        )}
     </div>
   );
 }

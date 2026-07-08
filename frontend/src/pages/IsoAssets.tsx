@@ -5,6 +5,7 @@ import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable from "../components/DataTable";
 import FileDropzone from "../components/FileDropzone";
+import Select from "../components/Select";
 import { IsoAsset, IsoKind } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
@@ -13,10 +14,12 @@ const CHUNK_SIZE = 8 * 1024 * 1024;
 
 export default function IsoAssets() {
   const { selectedOrgId } = useOrg();
-  const { effectiveRole } = useAuth();
+  const { user, effectiveRole } = useAuth();
   const [isos, setIsos] = useState<IsoAsset[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<IsoAsset | null>(null);
+
+  const isGlobalAdmin = !!user && roleAtLeast(user.global_role, "admin");
 
   async function load() {
     if (!selectedOrgId) return;
@@ -25,7 +28,11 @@ export default function IsoAssets() {
 
   async function deleteIso() {
     if (!confirmDelete) return;
-    await api.delete(`/organizations/${selectedOrgId}/iso-assets/${confirmDelete.id}`);
+    if (confirmDelete.org_id) {
+      await api.delete(`/organizations/${confirmDelete.org_id}/iso-assets/${confirmDelete.id}`);
+    } else {
+      await api.delete(`/iso-assets/global/${confirmDelete.id}`);
+    }
     setConfirmDelete(null);
     await load();
   }
@@ -62,13 +69,12 @@ export default function IsoAssets() {
           { key: "kind", header: "Kind", render: (i) => (i.kind === "windows_iso" ? "Windows Server ISO" : "VirtIO driver ISO") },
           { key: "scope", header: "Scope", render: (i) => (i.org_id ? "Organization" : "Global") },
           { key: "size", header: "Size", render: (i) => (i.size_bytes ? `${(i.size_bytes / 1e9).toFixed(2)} GB` : "(unknown)") },
-          { key: "status", header: "Status", render: (i) => <Badge value={i.upload_status} /> },
+          { key: "status", header: "Status", render: (i) => <Badge value={i.upload_status} />, shrink: true },
           {
             key: "actions",
             header: "",
             render: (i) =>
-              canManage &&
-              i.org_id === selectedOrgId && (
+              (i.org_id ? canManage && i.org_id === selectedOrgId : isGlobalAdmin) && (
                 <button
                   className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                   onClick={() => setConfirmDelete(i)}
@@ -83,6 +89,7 @@ export default function IsoAssets() {
       {showUpload && (
         <UploadIsoForm
           orgId={selectedOrgId}
+          allowGlobal={isGlobalAdmin}
           onClose={() => setShowUpload(false)}
           onDone={async () => {
             setShowUpload(false);
@@ -94,7 +101,11 @@ export default function IsoAssets() {
       <ConfirmDialog
         open={!!confirmDelete}
         title="Delete ISO asset"
-        message={`Delete "${confirmDelete?.filename}"? This removes the file from disk. Templates referencing it will refuse to deploy until a new ISO is attached. This cannot be undone.`}
+        message={
+          confirmDelete?.org_id
+            ? `Delete "${confirmDelete?.filename}"? This removes the file from disk. Templates referencing it will refuse to deploy until a new ISO is attached. This cannot be undone.`
+            : `Delete "${confirmDelete?.filename}"? This is a global ISO, every organization that references it will refuse to deploy until a new ISO is attached. This cannot be undone.`
+        }
         confirmLabel="Delete"
         onConfirm={deleteIso}
         onCancel={() => setConfirmDelete(null)}
@@ -103,8 +114,19 @@ export default function IsoAssets() {
   );
 }
 
-function UploadIsoForm({ orgId, onClose, onDone }: { orgId: string; onClose: () => void; onDone: () => void }) {
+function UploadIsoForm({
+  orgId,
+  allowGlobal,
+  onClose,
+  onDone,
+}: {
+  orgId: string;
+  allowGlobal: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const kind: IsoKind = "windows_iso";
+  const [scope, setScope] = useState<"org" | "global">("org");
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -116,11 +138,15 @@ function UploadIsoForm({ orgId, onClose, onDone }: { orgId: string; onClose: () 
     setError(null);
     setUploading(true);
     try {
-      const iso = await api.post<IsoAsset>(`/organizations/${orgId}/iso-assets`, { filename: file.name, kind });
+      const createPath = scope === "global" ? "/iso-assets/global" : `/organizations/${orgId}/iso-assets`;
+      const chunkBase = scope === "global" ? "/api/iso-assets/global" : `/api/organizations/${orgId}/iso-assets`;
+      const finalizePath = scope === "global" ? "/iso-assets/global" : `/organizations/${orgId}/iso-assets`;
+
+      const iso = await api.post<IsoAsset>(createPath, { filename: file.name, kind });
       let offset = 0;
       while (offset < file.size) {
         const chunk = file.slice(offset, offset + CHUNK_SIZE);
-        const res = await fetch(`/api/organizations/${orgId}/iso-assets/${iso.id}/chunk`, {
+        const res = await fetch(`${chunkBase}/${iso.id}/chunk`, {
           method: "POST",
           headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/octet-stream" },
           body: chunk,
@@ -129,7 +155,7 @@ function UploadIsoForm({ orgId, onClose, onDone }: { orgId: string; onClose: () 
         offset += CHUNK_SIZE;
         setProgress(Math.min(100, Math.round((offset / file.size) * 100)));
       }
-      await api.post(`/organizations/${orgId}/iso-assets/${iso.id}/finalize`);
+      await api.post(`${finalizePath}/${iso.id}/finalize`);
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Upload failed.");
@@ -142,6 +168,19 @@ function UploadIsoForm({ orgId, onClose, onDone }: { orgId: string; onClose: () 
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
       <form onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold">Upload Windows Server ISO</h2>
+        {allowGlobal && (
+          <>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Available to</label>
+            <Select
+              className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm"
+              value={scope}
+              onChange={(e) => setScope(e.target.value as "org" | "global")}
+            >
+              <option value="org">This organization only</option>
+              <option value="global">Every organization (global)</option>
+            </Select>
+          </>
+        )}
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">File</label>
         <div className="mb-3">
           <FileDropzone accept=".iso" fileName={file?.name} hint="ISO files only" onSelect={setFile} />

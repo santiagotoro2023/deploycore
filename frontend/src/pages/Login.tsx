@@ -69,7 +69,7 @@ export default function Login() {
           {hasLogo ? (
             <img src="/api/instance/logo" alt="" className="max-h-16 max-w-full object-contain" />
           ) : (
-            <BrandMark size={40} />
+            <BrandMark size={56} />
           )}
           <div className="text-center text-base font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">{instanceName}</div>
         </div>

@@ -20,11 +20,11 @@ export default function SettingsPage() {
     <div className="space-y-8">
       <h1 className="text-lg font-semibold">Settings</h1>
       {isGlobalAdmin && (
-        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-          <MspOrganizationPanel />
+        <div className="columns-1 gap-4 xl:columns-2 [&>*]:mb-4 [&>*]:break-inside-avoid">
           <UpdatesPanel />
-          <M365Panel />
+          <MspOrganizationPanel />
           <BackupsPanel />
+          <M365Panel />
         </div>
       )}
       <OrgSettingsPanel />
@@ -205,8 +205,9 @@ function UpdatesPanel() {
       <h2 className="mb-1 text-sm font-semibold">Updates</h2>
       {!status.git_available ? (
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          Self-update is unavailable, this instance isn't running from a git checkout (or PROJECT_DIR isn't
-          set correctly in .env). Update manually: <code>git pull && docker compose up -d --build</code>.
+          Self-update is unavailable, this instance isn't running from a git checkout (or the updater
+          container couldn't resolve this repo's path). Update manually:{" "}
+          <code>git pull && docker compose up -d --build</code>.
         </p>
       ) : (
         <>

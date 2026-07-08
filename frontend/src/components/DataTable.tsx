@@ -6,6 +6,11 @@ export interface Column<T> {
   header: string;
   render: (row: T) => ReactNode;
   sortValue?: (row: T) => string | number;
+  /** Shrinks the column to fit its content instead of letting it stretch
+   * with the table's full width, for short fixed-vocabulary columns
+   * (status badges, roles, sizes) so the remaining space goes to columns
+   * that actually need it (names, emails, filenames). */
+  shrink?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -88,7 +93,7 @@ export default function DataTable<T>({
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  className={`px-4 py-2 font-medium ${col.sortValue ? "cursor-pointer select-none" : ""}`}
+                  className={`px-4 py-2 font-medium ${col.sortValue ? "cursor-pointer select-none" : ""} ${col.shrink ? "w-px whitespace-nowrap" : ""}`}
                   onClick={() => col.sortValue && toggleSort(col.key)}
                 >
                   <span className="inline-flex items-center gap-1">
@@ -122,7 +127,7 @@ export default function DataTable<T>({
                 className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-800/50"
               >
                 {columns.map((col) => (
-                  <td key={col.key} className="px-4 py-2">
+                  <td key={col.key} className={`px-4 py-2 ${col.shrink ? "w-px whitespace-nowrap" : ""}`}>
                     {col.render(row)}
                   </td>
                 ))}

@@ -146,7 +146,6 @@ async def make_hypervisor_host(db_session, org: Organization) -> HypervisorHost:
         api_endpoint="esxi.test.local",
         username="root",
         default_datastore="datastore1",
-        default_network="VM Network",
     )
     host.credential = "hunter2"
     db_session.add(host)

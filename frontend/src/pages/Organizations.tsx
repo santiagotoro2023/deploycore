@@ -37,7 +37,7 @@ export default function Organizations() {
           { key: "name", header: "Name", render: (o) => o.name, sortValue: (o) => o.name },
           { key: "slug", header: "Slug", render: (o) => o.slug },
           { key: "description", header: "Description", render: (o) => o.description ?? "(none)" },
-          { key: "status", header: "Status", render: (o) => <Badge value={o.is_active ? "active" : "unknown"} /> },
+          { key: "status", header: "Status", render: (o) => <Badge value={o.is_active ? "active" : "unknown"} />, shrink: true },
         ]}
       />
 

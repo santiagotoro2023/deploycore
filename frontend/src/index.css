@@ -6,6 +6,19 @@
    based, so bumping the root font size scales it all proportionally */
 html {
   font-size: 110%;
+  color-scheme: light;
+}
+
+/* Without this, native form controls (checkboxes, scrollbars, date
+   pickers) keep rendering with their light-mode OS chrome even on a dark
+   page, since the browser has no other way to know the page went dark.
+   This also gives every scrollbar in the app a dark track/thumb for free. */
+html.dark {
+  color-scheme: dark;
+}
+
+input[type="checkbox"] {
+  accent-color: #2563eb; /* blue-600, the same accent used everywhere else */
 }
 
 @keyframes drift-a {

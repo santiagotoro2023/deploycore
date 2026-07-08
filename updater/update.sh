@@ -2,16 +2,40 @@
 # Polls the settings table (global scope) for an update_requested flag and,
 # when set, pulls the latest code, rebuilds, and restarts the app services.
 # Runs with the Docker socket mounted so it can drive the host's dockerd
-# directly, and with the repo bind-mounted at PROJECT_DIR (same absolute
-# path inside this container as on the host, set in .env) so both git
-# operations and the nested `docker compose` calls resolve paths correctly.
+# directly, and with the repo bind-mounted at the fixed container path
+# /repo.
+#
+# `docker compose` itself, though, needs to run from a path that is BOTH:
+#   - readable locally (it reads .env and the Dockerfile build contexts
+#     itself, client-side, before ever talking to the daemon), and
+#   - identical to the repo's real path on the HOST (the bind-mount
+#     sources it hands the daemon for api/worker/frontend's own volumes,
+#     like ./backend:/app, are resolved by the daemon against ITS OWN
+#     filesystem, which only knows the host's real paths).
+# A fixed container path like /repo satisfies the first requirement but
+# not the second. Rather than requiring the host path to be hand-
+# configured (a PROJECT_DIR .env variable that's easy to forget, goes
+# stale if the repo is ever moved, or simply doesn't exist yet on an
+# instance that predates this feature), this container asks the Docker
+# API for its own bind mount's source to learn that host path itself, then
+# symlinks it (inside this container only) to the real /repo mount so both
+# requirements are satisfied by the same literal path string, no manual
+# configuration required at all.
 # See README.md "Updating" for the trade-offs of this design.
 set -uo pipefail
 
 PSQL_URL=$(printf '%s' "$DATABASE_URL" | sed 's/+asyncpg//')
 POLL_INTERVAL=5
 CHECK_INTERVAL=300
-REPO_DIR="${PROJECT_DIR:-}"
+CONTAINER_REPO_DIR=/repo
+
+discover_host_repo_dir() {
+  local container_id
+  container_id=$(cat /etc/hostname 2>/dev/null || hostname)
+  docker inspect "$container_id" \
+    --format '{{ range .Mounts }}{{ if eq .Destination "/repo" }}{{ .Source }}{{ end }}{{ end }}' \
+    2>/dev/null
+}
 
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 
@@ -49,34 +73,43 @@ idle_forever() {
   while true; do sleep 3600; done
 }
 
-if [ -z "$REPO_DIR" ] || [ ! -d "$REPO_DIR" ]; then
-  echo "PROJECT_DIR is not set correctly (got: '$REPO_DIR'), self-update disabled." >&2
+if [ ! -d "$CONTAINER_REPO_DIR/.git" ]; then
+  echo "Not a git checkout ($CONTAINER_REPO_DIR/.git missing), self-update disabled." >&2
   upsert_setting git_available 'false'
-  upsert_setting update_status '{"stage": "disabled", "error": "PROJECT_DIR is not set in .env", "commit": null}'
+  upsert_setting update_status '{"stage": "disabled", "error": "not running from a git checkout", "commit": null}'
   idle_forever
+fi
+
+HOST_REPO_DIR="$(discover_host_repo_dir)"
+if [ -z "$HOST_REPO_DIR" ]; then
+  echo "Could not determine this repo's path on the host (docker inspect on our own bind mount came back empty), self-update disabled." >&2
+  upsert_setting git_available 'false'
+  upsert_setting update_status '{"stage": "disabled", "error": "could not resolve the repo'"'"'s host path via the Docker API", "commit": null}'
+  idle_forever
+fi
+
+# Make the discovered host path resolve, inside this container only, to the
+# same bind-mounted files /repo already points at. Everything below
+# operates on $REPO_DIR (the host path) rather than $CONTAINER_REPO_DIR
+# directly, so docker compose's own local file reads and the daemon's
+# bind-mount resolution agree on one path string.
+REPO_DIR="$HOST_REPO_DIR"
+if [ ! -e "$REPO_DIR" ]; then
+  mkdir -p "$(dirname "$REPO_DIR")"
+  ln -s "$CONTAINER_REPO_DIR" "$REPO_DIR"
 fi
 
 # The repo is bind-mounted from the host, usually owned by the host user,
 # while this container runs as root: git refuses to operate on a repo it
-# doesn't own unless told it's safe to.
+# doesn't own unless told it's safe to. Needed for both the real mount and
+# the symlinked path above, since git resolves symlinks when checking this.
+git config --global --add safe.directory "$CONTAINER_REPO_DIR"
 git config --global --add safe.directory "$REPO_DIR"
 
-if [ ! -d "$REPO_DIR/.git" ]; then
-  echo "Not a git checkout ($REPO_DIR/.git missing), self-update disabled."
-  upsert_setting git_available 'false'
-  set_status disabled
-  idle_forever
-fi
-
 upsert_setting git_available 'true'
-echo "Using repo at: $REPO_DIR"
+echo "Using repo at (host path, symlinked to /repo inside this container): $REPO_DIR"
 
-# PROJECT_DIR is the same absolute path inside this container as on the
-# host (both docker-compose.yml's bind mount and this container's env var
-# are set from the same PROJECT_DIR value), so both the compose file read
-# and the volume/env_file paths it resolves line up correctly without any
-# extra --project-directory juggling.
-COMPOSE_ARGS=(-f "$REPO_DIR/docker-compose.yml")
+COMPOSE_ARGS=(--project-directory "$REPO_DIR" -f "$REPO_DIR/docker-compose.yml")
 
 refresh_commit_status() {
   local branch remote_ref latest behind now_iso

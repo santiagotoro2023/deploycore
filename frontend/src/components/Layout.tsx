@@ -38,8 +38,8 @@ const NAV_ITEMS = [
   { to: "/webhooks", label: "Webhooks", icon: WebhookIcon },
   { to: "/users", label: "Users", icon: UsersIcon, globalAdminOnly: true },
   { to: "/account", label: "Account", icon: Shield },
-  { to: "/settings", label: "Settings", icon: SettingsIcon },
   { to: "/audit-log", label: "Audit Log", icon: ScrollText },
+  { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export default function Layout() {
@@ -60,7 +60,7 @@ export default function Layout() {
             {hasLogo ? (
               <img src="/api/instance/logo" alt="" className="h-9 w-9 shrink-0 object-contain" />
             ) : (
-              <BrandMark size={28} />
+              <BrandMark size={34} />
             )}
             <div className="truncate text-sm font-semibold tracking-tight">{instanceName}</div>
           </div>

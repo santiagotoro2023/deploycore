@@ -92,7 +92,7 @@ export default function Webhooks() {
           { key: "name", header: "Name", render: (w) => w.name, sortValue: (w) => w.name },
           { key: "url", header: "URL", render: (w) => w.url },
           { key: "events", header: "Events", render: (w) => w.events.join(", ") },
-          { key: "enabled", header: "Status", render: (w) => <Badge value={w.enabled ? "active" : "unknown"} /> },
+          { key: "enabled", header: "Status", render: (w) => <Badge value={w.enabled ? "active" : "unknown"} />, shrink: true },
           {
             key: "actions",
             header: "",

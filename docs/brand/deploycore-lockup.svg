@@ -1,9 +1,15 @@
-<svg width="360" height="72" viewBox="0 0 360 72" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <g transform="translate(4, 8)">
-    <rect x="6" y="6" width="16" height="5" rx="1.5" fill="#1d4ed8" />
-    <rect x="6" y="13.5" width="16" height="5" rx="1.5" fill="#2563eb" />
-    <rect x="6" y="21" width="16" height="5" rx="1.5" fill="#3b82f6" />
-    <path d="M22 21.2 L28 23.5 L22 25.8 Z" fill="#38bdf8" />
+<svg width="480" height="96" viewBox="0 0 480 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .wordmark { fill: #111827; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #f5f5f5; }
+    }
+  </style>
+  <g transform="translate(6, 11)">
+    <rect x="8" y="8" width="21.3" height="6.7" rx="2" fill="#1d4ed8" />
+    <rect x="8" y="18" width="21.3" height="6.7" rx="2" fill="#2563eb" />
+    <rect x="8" y="28" width="21.3" height="6.7" rx="2" fill="#3b82f6" />
+    <path d="M29.3 28.3 L37.3 31.3 L29.3 34.3 Z" fill="#38bdf8" />
   </g>
-  <text x="52" y="47" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="#111827">Deploy<tspan fill="#2563eb">Core</tspan></text>
+  <text x="69" y="62" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="45" font-weight="700" class="wordmark">Deploy<tspan fill="#2563eb">Core</tspan></text>
 </svg>

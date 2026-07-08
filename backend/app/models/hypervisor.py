@@ -34,7 +34,6 @@ class HypervisorHost(UUIDPKMixin, TimestampMixin, Base):
     credential_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     tls_verify: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     default_datastore: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    default_network: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_test_status: Mapped[ConnectionStatus] = enum_column(
         ConnectionStatus, "connection_status", default=ConnectionStatus.UNKNOWN, nullable=False
     )

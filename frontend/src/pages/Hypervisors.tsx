@@ -70,7 +70,7 @@ export default function Hypervisors() {
           { key: "name", header: "Name", render: (h) => h.name, sortValue: (h) => h.name },
           { key: "type", header: "Type", render: (h) => h.type },
           { key: "endpoint", header: "Endpoint", render: (h) => h.api_endpoint },
-          { key: "status", header: "Status", render: (h) => <Badge value={h.last_test_status} /> },
+          { key: "status", header: "Status", render: (h) => <Badge value={h.last_test_status} />, shrink: true },
           {
             key: "actions",
             header: "",
@@ -136,7 +136,6 @@ function CreateHypervisorForm({
   const [credential, setCredential] = useState("");
   const [tlsVerify, setTlsVerify] = useState(true);
   const [defaultDatastore, setDefaultDatastore] = useState("");
-  const [defaultNetwork, setDefaultNetwork] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -184,7 +183,6 @@ function CreateHypervisorForm({
         credential,
         tls_verify: tlsVerify,
         default_datastore: defaultDatastore || null,
-        default_network: defaultNetwork || null,
       });
       onCreated();
     } catch (err) {
@@ -208,10 +206,12 @@ function CreateHypervisorForm({
         <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={username} onChange={(e) => setUsername(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Password</label>
         <input type="password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={credential} onChange={(e) => setCredential(e.target.value)} />
-        <div className="mb-3 grid grid-cols-2 gap-3">
-          <input placeholder="Default datastore" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={defaultDatastore} onChange={(e) => setDefaultDatastore(e.target.value)} />
-          <input placeholder="Default network" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={defaultNetwork} onChange={(e) => setDefaultNetwork(e.target.value)} />
-        </div>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Default datastore</label>
+        <p className="mb-1 text-xs text-neutral-400">
+          Used when creating a VM if nothing more specific is set. The network/port group a VM's NIC
+          attaches to is defined per-template instead, not here.
+        </p>
+        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={defaultDatastore} onChange={(e) => setDefaultDatastore(e.target.value)} />
         <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
           <input type="checkbox" checked={tlsVerify} onChange={(e) => setTlsVerify(e.target.checked)} />
           Verify TLS certificate

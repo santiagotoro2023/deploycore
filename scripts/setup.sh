@@ -1,14 +1,13 @@
 #!/bin/sh
-# One-command install: copies .env if missing, fills in APP_SECRET_KEY and
-# PROJECT_DIR if blank, then builds and starts the stack. Migrations run
-# automatically on api container startup (see backend/entrypoint.sh), so
-# nothing else is needed after this to reach a working setup wizard at
-# http://localhost:5173. Safe to re-run: only fills in blank/missing values,
-# never touches ones you've already set.
+# One-command install: copies .env if missing, fills in APP_SECRET_KEY if
+# blank, then builds and starts the stack. Migrations run automatically on
+# api container startup (see backend/entrypoint.sh), so nothing else is
+# needed after this to reach a working setup wizard at
+# http://localhost:5173. Safe to re-run: only fills in blank/missing
+# values, never touches ones you've already set.
 set -e
 
 cd "$(dirname "$0")/.."
-REPO_DIR="$(pwd)"
 
 if [ ! -f .env ]; then
   echo "Creating .env from .env.example"
@@ -25,7 +24,6 @@ ensure_line_exists() {
 }
 
 ensure_line_exists APP_SECRET_KEY
-ensure_line_exists PROJECT_DIR
 
 if grep -q '^APP_SECRET_KEY=$' .env; then
   echo "Generating APP_SECRET_KEY"
@@ -39,12 +37,6 @@ if grep -q '^APP_SECRET_KEY=$' .env; then
     exit 1
   fi
   sed -i.bak "s|^APP_SECRET_KEY=\$|APP_SECRET_KEY=${SECRET}|" .env
-  rm -f .env.bak
-fi
-
-if grep -q '^PROJECT_DIR=$' .env; then
-  echo "Setting PROJECT_DIR to $REPO_DIR (needed for the self-update feature)"
-  sed -i.bak "s|^PROJECT_DIR=\$|PROJECT_DIR=${REPO_DIR}|" .env
   rm -f .env.bak
 fi
 

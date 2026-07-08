@@ -129,11 +129,12 @@ export default function Deployments() {
             ),
             sortValue: (d) => d.hostname,
           },
-          { key: "state", header: "State", render: (d) => <Badge value={d.state} /> },
+          { key: "state", header: "State", render: (d) => <Badge value={d.state} />, shrink: true },
           {
             key: "health",
             header: "Health",
             render: (d) => (d.state === "completed" ? <Badge value={d.last_health_status} /> : "-"),
+            shrink: true,
           },
           { key: "ip_mode", header: "IP mode", render: (d) => d.ip_mode },
           {

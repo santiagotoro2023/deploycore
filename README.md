@@ -1,4 +1,4 @@
-# DeployCore
+<img src="docs/brand/deploycore-lockup.svg" alt="DeployCore" width="360" />
 
 DeployCore turns "provision a Windows Server VM" from a manual, error-prone
 routine into a few clicks. Point it at your ESXi hosts, upload a Windows
@@ -97,8 +97,12 @@ privilege (that container can, in principle, control anything else running
 on the same Docker host), which is why it's worth understanding before you
 rely on it: it's a reasonable trade-off for a self-hosted tool where you
 already control the host, less so if you'd hand this instance to someone you
-don't fully trust. If you'd rather not run it at all, remove the `updater`
-service from `docker-compose.yml` and update by hand instead:
+don't fully trust. Nothing needs to be configured for it to find this repo
+on the host, either: it asks the Docker API for its own bind mount's source
+path and uses that, so it works out of the box on both a fresh install and
+an existing instance that's never touched this feature before. If you'd
+rather not run it at all, remove the `updater` service from
+`docker-compose.yml` and update by hand instead:
 
 ```bash
 git pull
@@ -154,13 +158,16 @@ org-scoped copy.
 - Self-update: Settings → Updates shows current commit and how many commits
   behind `origin` you are (refreshed automatically every 5 minutes by the
   `updater` service), one button pulls, rebuilds, migrates, and restarts,
-  with a live staged progress indicator. Falls back cleanly (a clear
-  "self-update unavailable" message) if this isn't a git checkout or
-  `PROJECT_DIR` isn't configured
-- Instance name and, if set, a logo shown together (never one instead of
-  the other) in the sidebar and sign-in screen; both editable from
-  Settings → MSP Organization (global-admin only). Logo accepts PNG, JPEG,
-  or SVG up to 5 MB
+  with a live staged progress indicator. No configuration needed: the
+  updater container figures out this repo's real path on the host itself
+  (asking the Docker API for its own bind mount's source), so it works the
+  same on a brand new install and on an instance that's been running since
+  before this feature existed. Falls back cleanly (a clear "self-update
+  unavailable" message) if this isn't a git checkout
+- DeployCore ships its own default branding (an icon + favicon, shown in
+  the sidebar and sign-in screen); a global admin can replace it with the
+  MSP's own name and logo from Settings → MSP Organization at any time.
+  Logo accepts PNG, JPEG, or SVG up to 5 MB
 - Dashboard shows a "Getting started" checklist (add a hypervisor, upload a
   Windows ISO, create a template) for any organization that hasn't
   completed first-time setup yet, disappears once all three exist
@@ -203,7 +210,9 @@ org-scoped copy.
   `NotImplementedError`.)
 - Fields: name, API endpoint, username, credential (write-only, never
   returned by the API after creation), TLS verification toggle, default
-  datastore, default network
+  datastore (used when creating a VM if nothing more specific is set). The
+  network a VM's NIC attaches to is defined per-template instead (see
+  Deployment Templates below), not on the hypervisor connection
 - Test Connection, two forms: an ad-hoc test against whatever is currently
   typed into the create form, before anything is saved, and a
   test-connection button on an already-saved host that updates and displays
@@ -230,6 +239,11 @@ org-scoped copy.
 - Org-scoped or global. Windows Server ISOs only, uploaded through the UI
   as `windows_iso`. (A `virtio_iso` kind also exists in the data model for
   the stubbed Proxmox driver above, but nothing in the UI offers it today.)
+- A global admin gets an "Available to" scope choice in the upload dialog
+  (this organization only, or every organization); a global ISO is
+  inherited read-only by every organization the same way global disk
+  layouts and templates already are (`POST /api/iso-assets/global` and its
+  own chunk/finalize/delete routes, global-admin only)
 - Chunked upload from the browser (8 MB chunks over sequential POSTs, then
   a finalize call that assembles the file, computes its SHA-256, and marks
   it `complete`), built for multi-gigabyte ISOs without loading the whole
@@ -426,24 +440,30 @@ the app, no network access needed to read it.
 ### Visual design
 Blue accent color for primary actions/links/icons against a neutral light
 theme by default, with a full dark mode (toggle in the header, remembers
-your choice, and applied consistently across every page). Scaled up roughly
-10% from a typical dense admin-UI baseline. Every dropdown in the app is a
-fully custom-built listbox component, not a raw `<select>`, so it can
-actually be restyled (and is) instead of falling back to the browser's own
-unstyled popup; file inputs are drag-and-drop styled throughout too. Form
-validation is custom and inline (red text under the field), not the
-browser's own "please fill in this field" tooltip. Destructive actions
-(deleting a hypervisor, disk layout, ISO, template, webhook, VM, or logo;
-running an update) are all gated behind a confirmation dialog.
+your choice, and applied consistently across every page, including native
+form controls like checkboxes and scrollbars via `color-scheme`). Scaled up
+roughly 10% from a typical dense admin-UI baseline. Every dropdown in the
+app is a fully custom-built listbox component, not a raw `<select>`, so it
+can actually be restyled (and is) instead of falling back to the browser's
+own unstyled popup; its option list renders through a portal so it's never
+clipped by a scrollable ancestor (a table wrapper, for example) the way a
+plain absolutely-positioned popup would be. File inputs are drag-and-drop
+styled throughout too. Form validation is custom and inline (red text
+under the field), not the browser's own "please fill in this field"
+tooltip, and server-side validation errors (a password that's too short,
+for example) are turned into one plain sentence instead of a raw error
+payload. Destructive actions (deleting a hypervisor, disk layout, ISO,
+template, webhook, VM, or logo; running an update) are all gated behind a
+confirmation dialog.
 
 DeployCore ships with its own default visual identity (an icon mark and
 browser-tab favicon, `frontend/src/components/BrandMark.tsx` and
 `frontend/public/favicon.svg`), shown in the sidebar and sign-in screen
 until an MSP uploads their own logo (Settings → MSP Organization), which
 then takes its place everywhere the same way. The sign-in and setup-wizard
-screens sit on a subtly animated background (a few soft, blurred shapes
-drifting slowly), matching the light/dark theme and respecting
-`prefers-reduced-motion`.
+screens sit on a subtly animated background (soft blurred shapes drifting
+slowly, plus a faint network of slowly-moving connected dots), matching
+the light/dark theme and respecting `prefers-reduced-motion`.
 
 ## API reference
 
@@ -532,7 +552,7 @@ minimum effective role for the request's organization unless marked
 ## Environment variables
 
 Set in `.env` (loaded by all containers via `env_file`). `scripts/setup.sh`
-fills in `APP_SECRET_KEY` and `PROJECT_DIR` for you.
+fills in `APP_SECRET_KEY` for you.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -543,7 +563,6 @@ fills in `APP_SECRET_KEY` and `PROJECT_DIR` for you.
 | `ISO_STORAGE_PATH` | no | `/data/isos` | Permanent ISO and logo storage inside the `api`/`worker` containers |
 | `ISO_BUILD_TMP` | no | `/data/iso_build_tmp` | Scratch space for answer-file ISO builds and in-progress uploads |
 | `BACKUP_DIR` | no | `/data/backups` | Where database backups are written and served from |
-| `PROJECT_DIR` | no (self-update only) | none | Absolute host path to this repo, needed only so the `updater` container can resolve volumes/env files correctly when it drives `docker compose` |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | no | `deploycore` / `deploycore` / `deploycore` | Postgres container credentials |
 
 ## Development
@@ -629,9 +648,9 @@ rm -rf deploycore
   partway through, the containers already running keep running on whatever
   they had, check the Settings page's error message and the container logs.
   It also requires `git pull` to work without a credential prompt (public
-  repo, or a credential helper/SSH key already set up on the host) and
-  `PROJECT_DIR` to be set correctly; if either isn't true, the feature
-  disables itself with a clear message instead of failing silently.
+  repo, or a credential helper/SSH key already set up on the host); if it
+  can't (or this isn't a git checkout at all), the feature disables itself
+  with a clear message instead of failing silently.
 - No tunnel/relay networking, DeployCore assumes it already has a routable
   path to every hypervisor and every hypervisor's guest network.
 - Linux provisioning and PXE are out of scope entirely; the whole pipeline
