@@ -14,12 +14,12 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-role_enum = postgresql.ENUM("none", "readonly", "operator", "admin", name="role")
+role_enum = postgresql.ENUM("none", "readonly", "operator", "admin", name="role", create_type=False)
 
 
 def upgrade() -> None:
     role_enum.create(op.get_bind(), checkfirst=True)
-    role_col = sa.Enum("none", "readonly", "operator", "admin", name="role", create_type=False)
+    role_col = role_enum
 
     op.create_table(
         "organizations",

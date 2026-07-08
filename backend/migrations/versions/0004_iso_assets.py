@@ -14,8 +14,10 @@ down_revision = "0003"
 branch_labels = None
 depends_on = None
 
-iso_kind_enum = postgresql.ENUM("windows_iso", "virtio_iso", name="iso_kind")
-upload_status_enum = postgresql.ENUM("pending", "uploading", "complete", "failed", name="upload_status")
+iso_kind_enum = postgresql.ENUM("windows_iso", "virtio_iso", name="iso_kind", create_type=False)
+upload_status_enum = postgresql.ENUM(
+    "pending", "uploading", "complete", "failed", name="upload_status", create_type=False
+)
 
 
 def upgrade() -> None:
@@ -31,14 +33,14 @@ def upgrade() -> None:
             sa.ForeignKey("organizations.id", ondelete="CASCADE"),
             nullable=True,
         ),
-        sa.Column("kind", sa.Enum("windows_iso", "virtio_iso", name="iso_kind", create_type=False), nullable=False),
+        sa.Column("kind", iso_kind_enum, nullable=False),
         sa.Column("filename", sa.String(255), nullable=False),
         sa.Column("storage_path", sa.String(1024), nullable=False),
         sa.Column("checksum_sha256", sa.String(64), nullable=True),
         sa.Column("size_bytes", sa.BigInteger(), nullable=False, server_default="0"),
         sa.Column(
             "upload_status",
-            sa.Enum("pending", "uploading", "complete", "failed", name="upload_status", create_type=False),
+            upload_status_enum,
             nullable=False,
             server_default="pending",
         ),

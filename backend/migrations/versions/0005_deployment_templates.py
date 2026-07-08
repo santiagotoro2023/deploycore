@@ -14,7 +14,7 @@ down_revision = "0004"
 branch_labels = None
 depends_on = None
 
-domain_join_timing_enum = postgresql.ENUM("answer_file", "post_install", name="domain_join_timing")
+domain_join_timing_enum = postgresql.ENUM("answer_file", "post_install", name="domain_join_timing", create_type=False)
 
 
 def upgrade() -> None:
@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.Column("domain_target_ou", sa.String(512), nullable=True),
         sa.Column(
             "domain_join_timing",
-            sa.Enum("answer_file", "post_install", name="domain_join_timing", create_type=False),
+            domain_join_timing_enum,
             nullable=False,
             server_default="answer_file",
         ),

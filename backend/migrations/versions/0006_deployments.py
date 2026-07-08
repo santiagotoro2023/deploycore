@@ -14,12 +14,12 @@ down_revision = "0005"
 branch_labels = None
 depends_on = None
 
-ip_mode_enum = postgresql.ENUM("dhcp", "static", name="ip_mode")
+ip_mode_enum = postgresql.ENUM("dhcp", "static", name="ip_mode", create_type=False)
 deployment_state_enum = postgresql.ENUM(
     "pending", "creating_vm", "booting", "installing_os", "post_install", "configuring", "completed", "failed",
-    name="deployment_state",
+    name="deployment_state", create_type=False,
 )
-log_level_enum = postgresql.ENUM("info", "warn", "error", name="log_level")
+log_level_enum = postgresql.ENUM("info", "warn", "error", name="log_level", create_type=False)
 
 
 def upgrade() -> None:
@@ -34,17 +34,14 @@ def upgrade() -> None:
         sa.Column("template_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("deployment_templates.id"), nullable=False),
         sa.Column("hypervisor_host_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("hypervisor_hosts.id"), nullable=False),
         sa.Column("hostname", sa.String(255), nullable=False),
-        sa.Column("ip_mode", sa.Enum("dhcp", "static", name="ip_mode", create_type=False), nullable=False),
+        sa.Column("ip_mode", ip_mode_enum, nullable=False),
         sa.Column("static_ip", sa.String(64), nullable=True),
         sa.Column("static_netmask", sa.String(64), nullable=True),
         sa.Column("static_gateway", sa.String(64), nullable=True),
         sa.Column("static_dns", postgresql.JSONB(), nullable=True),
         sa.Column(
             "state",
-            sa.Enum(
-                "pending", "creating_vm", "booting", "installing_os", "post_install", "configuring", "completed", "failed",
-                name="deployment_state", create_type=False,
-            ),
+            deployment_state_enum,
             nullable=False,
             server_default="pending",
         ),
@@ -78,7 +75,7 @@ def upgrade() -> None:
         sa.Column("deployment_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("deployments.id", ondelete="CASCADE"), nullable=False),
         sa.Column("ts", sa.DateTime(timezone=True), nullable=False),
         sa.Column("stage", sa.String(32), nullable=False),
-        sa.Column("level", sa.Enum("info", "warn", "error", name="log_level", create_type=False), nullable=False, server_default="info"),
+        sa.Column("level", log_level_enum, nullable=False, server_default="info"),
         sa.Column("message", sa.Text(), nullable=False),
     )
     op.create_index("ix_deployment_log_lines_deployment_id_ts", "deployment_log_lines", ["deployment_id", "ts"])

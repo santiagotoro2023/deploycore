@@ -14,8 +14,8 @@ down_revision = "0001"
 branch_labels = None
 depends_on = None
 
-hypervisor_type_enum = postgresql.ENUM("esxi", "proxmox", name="hypervisor_type")
-connection_status_enum = postgresql.ENUM("unknown", "ok", "failed", name="connection_status")
+hypervisor_type_enum = postgresql.ENUM("esxi", "proxmox", name="hypervisor_type", create_type=False)
+connection_status_enum = postgresql.ENUM("unknown", "ok", "failed", name="connection_status", create_type=False)
 
 
 def upgrade() -> None:
@@ -34,7 +34,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column(
             "type",
-            sa.Enum("esxi", "proxmox", name="hypervisor_type", create_type=False),
+            hypervisor_type_enum,
             nullable=False,
         ),
         sa.Column("api_endpoint", sa.String(255), nullable=False),
@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.Column("default_network", sa.String(255), nullable=True),
         sa.Column(
             "last_test_status",
-            sa.Enum("unknown", "ok", "failed", name="connection_status", create_type=False),
+            connection_status_enum,
             nullable=False,
             server_default="unknown",
         ),

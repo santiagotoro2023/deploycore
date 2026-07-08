@@ -14,7 +14,7 @@ down_revision = "0006"
 branch_labels = None
 depends_on = None
 
-setting_scope_enum = postgresql.ENUM("global", "org", "template", "deployment", name="setting_scope")
+setting_scope_enum = postgresql.ENUM("global", "org", "template", "deployment", name="setting_scope", create_type=False)
 
 
 def upgrade() -> None:
@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
             "scope",
-            sa.Enum("global", "org", "template", "deployment", name="setting_scope", create_type=False),
+            setting_scope_enum,
             nullable=False,
         ),
         sa.Column("org_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True),
