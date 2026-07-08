@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-deploycore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deploycore}
+      POSTGRES_DB: ${POSTGRES_DB:-deploycore}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deploycore}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./scripts:/app/scripts
+      - iso_storage:/data/isos
+      - iso_build_tmp:/data/iso_build_tmp
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/backend
+      - ./worker:/app
+      - iso_storage:/data/isos
+      - iso_build_tmp:/data/iso_build_tmp
+    command: arq worker.main.WorkerSettings
+
+  frontend:
+    build: ./frontend
+    env_file: .env
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+
+volumes:
+  postgres_data:
+  iso_storage:
+  iso_build_tmp:

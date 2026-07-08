@@ -1,0 +1,10 @@
+<SynchronousCommand wcm:action="add">
+    <Order>1</Order>
+    <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Enable-PSRemoting -Force; New-NetFirewallRule -DisplayName 'DeployCore WinRM' -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow"</CommandLine>
+    <Description>Enable WinRM for post-install configuration</Description>
+</SynchronousCommand>
+<SynchronousCommand wcm:action="add">
+    <Order>2</Order>
+    <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri '{{ callback_base_url }}/api/callback/{{ deployment.callback_token }}' -Method POST -UseBasicParsing"</CommandLine>
+    <Description>Notify DeployCore that OS install is complete</Description>
+</SynchronousCommand>

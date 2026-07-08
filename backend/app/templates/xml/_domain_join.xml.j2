@@ -1,0 +1,13 @@
+<component name="Microsoft-Windows-UnattendedJoin" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+    <Identification>
+        <Credentials>
+            <Domain>{{ template.domain_fqdn }}</Domain>
+            <Username>{{ template.domain_join_account }}</Username>
+            <Password>{{ template.domain_join_credential }}</Password>
+        </Credentials>
+        <JoinDomain>{{ template.domain_fqdn }}</JoinDomain>
+{% if template.domain_target_ou %}
+        <MachineObjectOU>{{ template.domain_target_ou }}</MachineObjectOU>
+{% endif %}
+    </Identification>
+</component>
