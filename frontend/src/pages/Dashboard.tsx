@@ -1,9 +1,9 @@
-import { Activity, CheckCircle2, Server, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Circle, Server, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import Badge from "../components/Badge";
-import { Deployment, HypervisorHost } from "../api/types";
+import { Deployment, DeploymentTemplate, HypervisorHost, IsoAsset } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
 
@@ -92,10 +92,14 @@ function MspOverview() {
 function OrgDashboard({ orgId }: { orgId: string }) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [hosts, setHosts] = useState<HypervisorHost[]>([]);
+  const [isoAssets, setIsoAssets] = useState<IsoAsset[]>([]);
+  const [templates, setTemplates] = useState<DeploymentTemplate[]>([]);
 
   useEffect(() => {
     api.get<Deployment[]>(`/organizations/${orgId}/deployments`).then(setDeployments);
     api.get<HypervisorHost[]>(`/organizations/${orgId}/hypervisors`).then(setHosts);
+    api.get<IsoAsset[]>(`/organizations/${orgId}/iso-assets`).then(setIsoAssets);
+    api.get<DeploymentTemplate[]>(`/organizations/${orgId}/templates`).then(setTemplates);
   }, [orgId]);
 
   const running = deployments.filter((d) => RUNNING_STATES.has(d.state)).length;
@@ -103,14 +107,23 @@ function OrgDashboard({ orgId }: { orgId: string }) {
   const completed = deployments.filter((d) => d.state === "completed").length;
   const recent = [...deployments].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 8);
 
+  const hasHypervisor = hosts.length > 0;
+  const hasWindowsIso = isoAssets.some((i) => i.kind === "windows_iso");
+  const hasTemplate = templates.length > 0;
+
   return (
     <div className="space-y-8">
+      {!(hasHypervisor && hasWindowsIso && hasTemplate) && (
+        <GettingStartedCard hasHypervisor={hasHypervisor} hasWindowsIso={hasWindowsIso} hasTemplate={hasTemplate} />
+      )}
+
       <div className="grid grid-cols-4 gap-4">
-        <StatTile icon={Activity} label="Running" value={running} />
-        <StatTile icon={CheckCircle2} label="Completed" value={completed} />
-        <StatTile icon={XCircle} label="Failed" value={failed} />
+        <StatTile icon={Activity} color="text-blue-500" label="Running" value={running} />
+        <StatTile icon={CheckCircle2} color="text-emerald-500" label="Completed" value={completed} />
+        <StatTile icon={XCircle} color="text-red-500" label="Failed" value={failed} />
         <StatTile
           icon={Server}
+          color="text-violet-500"
           label="Hypervisors OK"
           value={`${hosts.filter((h) => h.last_test_status === "ok").length} / ${hosts.length}`}
         />
@@ -149,12 +162,55 @@ function OrgDashboard({ orgId }: { orgId: string }) {
   );
 }
 
+function GettingStartedCard({
+  hasHypervisor,
+  hasWindowsIso,
+  hasTemplate,
+}: {
+  hasHypervisor: boolean;
+  hasWindowsIso: boolean;
+  hasTemplate: boolean;
+}) {
+  const steps = [
+    { done: hasHypervisor, label: "Add a hypervisor", to: "/hypervisors" },
+    { done: hasWindowsIso, label: "Upload a Windows Server ISO", to: "/iso-assets" },
+    { done: hasTemplate, label: "Create a deployment template", to: "/templates" },
+  ];
+
+  return (
+    <div className="rounded-lg border border-blue-200 bg-blue-50 p-5">
+      <h2 className="mb-1 text-sm font-semibold text-blue-900">Getting started</h2>
+      <p className="mb-3 text-xs text-blue-800">
+        A few steps before you can deploy your first Windows Server:
+      </p>
+      <div className="space-y-1.5">
+        {steps.map((step) => (
+          <Link
+            key={step.to}
+            to={step.to}
+            className="flex items-center gap-2 text-sm text-blue-900 hover:underline"
+          >
+            {step.done ? (
+              <CheckCircle2 size={16} strokeWidth={1.75} className="text-emerald-600" />
+            ) : (
+              <Circle size={16} strokeWidth={1.75} className="text-blue-400" />
+            )}
+            <span className={step.done ? "text-blue-700 line-through" : ""}>{step.label}</span>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StatTile({
   icon: Icon,
+  color,
   label,
   value,
 }: {
   icon: typeof Activity;
+  color: string;
   label: string;
   value: number | string;
 }) {
@@ -164,7 +220,7 @@ function StatTile({
         <div className="text-xs text-neutral-500">{label}</div>
         <div className="mt-1 text-2xl font-semibold">{value}</div>
       </div>
-      <Icon size={18} strokeWidth={1.75} className="text-neutral-300" />
+      <Icon size={18} strokeWidth={1.75} className={color} />
     </div>
   );
 }

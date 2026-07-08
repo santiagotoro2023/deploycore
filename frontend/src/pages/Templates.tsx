@@ -1,11 +1,28 @@
-import { Copy, Pencil, Plus } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
+import { Copy, Download, Pencil, Plus, Trash2, Upload } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import Badge from "../components/Badge";
+import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable from "../components/DataTable";
+import Select from "../components/Select";
+import { downloadJson, readJsonFile } from "../lib/jsonFile";
 import { DeploymentTemplate, DiskLayout, IsoAsset } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
+
+const WINDOWS_FEATURES: { name: string; label: string }[] = [
+  { name: "AD-Domain-Services", label: "Active Directory Domain Services" },
+  { name: "DNS", label: "DNS Server" },
+  { name: "DHCP", label: "DHCP Server" },
+  { name: "Web-Server", label: "Web Server (IIS)" },
+  { name: "FS-FileServer", label: "File Server" },
+  { name: "Print-Services", label: "Print Services" },
+  { name: "RDS-RD-Server", label: "RD Session Host" },
+  { name: "FS-DFS-Namespace", label: "DFS Namespaces" },
+  { name: "FS-DFS-Replication", label: "DFS Replication" },
+  { name: "Hyper-V", label: "Hyper-V" },
+  { name: "WDS", label: "Windows Deployment Services" },
+];
 
 export default function Templates() {
   const { selectedOrgId } = useOrg();
@@ -15,6 +32,9 @@ export default function Templates() {
   const [isoAssets, setIsoAssets] = useState<IsoAsset[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<DeploymentTemplate | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<DeploymentTemplate | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     if (!selectedOrgId) return;
@@ -41,20 +61,61 @@ export default function Templates() {
     await load();
   }
 
+  async function exportTemplate(t: DeploymentTemplate) {
+    const data = await api.get(`/organizations/${selectedOrgId}/templates/${t.id}/export`);
+    downloadJson(`template-${t.name.toLowerCase().replace(/\s+/g, "-")}.json`, data);
+  }
+
+  async function importTemplate(file: File | undefined) {
+    if (!file || !selectedOrgId) return;
+    setImportError(null);
+    try {
+      const data = await readJsonFile(file);
+      await api.post(`/organizations/${selectedOrgId}/templates/import`, data);
+      await load();
+    } catch (err) {
+      setImportError(err instanceof ApiError ? err.message : "Import failed: invalid or incompatible file.");
+    }
+  }
+
+  async function deleteTemplate() {
+    if (!confirmDelete) return;
+    await api.delete(`/organizations/${selectedOrgId}/templates/${confirmDelete.id}`);
+    setConfirmDelete(null);
+    await load();
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Templates</h1>
         {canManage && (
-          <button
-            className="flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
-            onClick={() => setShowCreate(true)}
-          >
-            <Plus size={15} strokeWidth={2} />
-            New template
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+              onClick={() => importInputRef.current?.click()}
+            >
+              <Upload size={15} strokeWidth={1.75} />
+              Import
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(e) => importTemplate(e.target.files?.[0])}
+            />
+            <button
+              className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+              onClick={() => setShowCreate(true)}
+            >
+              <Plus size={15} strokeWidth={2} />
+              New template
+            </button>
+          </div>
         )}
       </div>
+      {importError && <div className="text-xs text-red-600">{importError}</div>}
 
       <DataTable<DeploymentTemplate>
         rows={templates}
@@ -70,7 +131,7 @@ export default function Templates() {
           },
           { key: "sizing", header: "CPU / RAM / Disk", render: (t) => `${t.cpu_count} vCPU / ${t.ram_mb} MB / ${t.disk_size_gb} GB` },
           { key: "domain", header: "Domain join", render: (t) => (t.domain_join_enabled ? t.domain_fqdn : "Workgroup") },
-          { key: "features", header: "Roles", render: (t) => t.windows_features.join(", ") || "—" },
+          { key: "features", header: "Roles", render: (t) => t.windows_features.join(", ") || "(none)" },
           {
             key: "actions",
             header: "",
@@ -93,6 +154,21 @@ export default function Templates() {
                     <Copy size={12} strokeWidth={1.75} />
                     Clone
                   </button>
+                  <button
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                    onClick={() => exportTemplate(t)}
+                  >
+                    <Download size={12} strokeWidth={1.75} />
+                    Export
+                  </button>
+                  {t.org_id === selectedOrgId && (
+                    <button
+                      className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                      onClick={() => setConfirmDelete(t)}
+                    >
+                      <Trash2 size={12} strokeWidth={1.75} />
+                    </button>
+                  )}
                 </div>
               ),
           },
@@ -124,6 +200,15 @@ export default function Templates() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete template"
+        message={`Delete "${confirmDelete?.name}"? Deployments already created from it keep their own copy of these settings and are unaffected. This cannot be undone.`}
+        confirmLabel="Delete"
+        onConfirm={deleteTemplate}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }
@@ -156,8 +241,12 @@ function TemplateForm({
   const [domainFqdn, setDomainFqdn] = useState(existing?.domain_fqdn ?? "");
   const [domainJoinAccount, setDomainJoinAccount] = useState(existing?.domain_join_account ?? "");
   const [domainJoinCredential, setDomainJoinCredential] = useState("");
-  const [windowsFeatures, setWindowsFeatures] = useState(existing?.windows_features.join(", ") ?? "");
+  const [windowsFeatures, setWindowsFeatures] = useState<string[]>(existing?.windows_features ?? []);
   const [error, setError] = useState<string | null>(null);
+
+  function toggleFeature(name: string) {
+    setWindowsFeatures((prev) => (prev.includes(name) ? prev.filter((f) => f !== name) : [...prev, name]));
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -175,10 +264,7 @@ function TemplateForm({
       domain_fqdn: domainJoinEnabled ? domainFqdn : null,
       domain_join_account: domainJoinEnabled ? domainJoinAccount : null,
       domain_join_credential: domainJoinEnabled ? domainJoinCredential : null,
-      windows_features: windowsFeatures
-        .split(",")
-        .map((f) => f.trim())
-        .filter(Boolean),
+      windows_features: windowsFeatures,
       post_install_scripts: existing?.post_install_scripts ?? [],
     };
     try {
@@ -196,7 +282,14 @@ function TemplateForm({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 py-8">
       <form onSubmit={onSubmit} className="w-[32rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold">{isEdit ? `Edit ${existing!.name}` : "New template"}</h2>
+        <h2 className="mb-1 text-sm font-semibold">{isEdit ? `Edit ${existing!.name}` : "New template"}</h2>
+        {isEdit && (
+          <p className="mb-4 text-xs text-neutral-500">
+            Changes apply to deployments created from this template afterward. Deployments already completed or
+            in progress are not affected.
+          </p>
+        )}
+        {!isEdit && <div className="mb-4" />}
 
         <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
         <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} />
@@ -204,21 +297,21 @@ function TemplateForm({
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">Windows ISO</label>
-            <select className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={isoAssetId} onChange={(e) => setIsoAssetId(e.target.value)}>
-              <option value="">None yet — cannot deploy</option>
+            <Select className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={isoAssetId} onChange={(e) => setIsoAssetId(e.target.value)}>
+              <option value="">None yet, cannot deploy</option>
               {isoAssets.map((iso) => (
                 <option key={iso.id} value={iso.id}>{iso.filename}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">Disk layout</label>
-            <select required className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={diskLayoutId} onChange={(e) => setDiskLayoutId(e.target.value)}>
+            <Select required className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={diskLayoutId} onChange={(e) => setDiskLayoutId(e.target.value)}>
               <option value="">Select...</option>
               {diskLayouts.map((l) => (
                 <option key={l.id} value={l.id}>{l.name}</option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
 
@@ -251,8 +344,19 @@ function TemplateForm({
           onChange={(e) => setLocalAdminPassword(e.target.value)}
         />
 
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Windows features (comma-separated)</label>
-        <input placeholder="Web-Server, DNS, DHCP" className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={windowsFeatures} onChange={(e) => setWindowsFeatures(e.target.value)} />
+        <label className="mb-2 block text-xs font-medium text-neutral-600">Windows roles and features</label>
+        <div className="mb-3 grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-neutral-200 p-3">
+          {WINDOWS_FEATURES.map((f) => (
+            <label key={f.name} className="flex items-center gap-1.5 text-xs text-neutral-700">
+              <input
+                type="checkbox"
+                checked={windowsFeatures.includes(f.name)}
+                onChange={() => toggleFeature(f.name)}
+              />
+              {f.label}
+            </label>
+          ))}
+        </div>
 
         <label className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-600">
           <input type="checkbox" checked={domainJoinEnabled} onChange={(e) => setDomainJoinEnabled(e.target.checked)} />
@@ -275,7 +379,7 @@ function TemplateForm({
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
           <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
-          <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">{isEdit ? "Save" : "Create"}</button>
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">{isEdit ? "Save" : "Create"}</button>
         </div>
       </form>
     </div>

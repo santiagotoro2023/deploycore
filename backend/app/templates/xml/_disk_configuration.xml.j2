@@ -1,5 +1,7 @@
 {% set extra_volumes = disk_layout.layout_json.extra_volumes or [] %}
 {% set os_volume = disk_layout.layout_json.os_volume %}
+{% set recovery_size_mb = disk_layout.layout_json.recovery_size_mb %}
+{% set os_partition_number = 4 if recovery_size_mb else 3 %}
 <Disk wcm:action="add">
     <DiskID>0</DiskID>
     <WillWipeDisk>true</WillWipeDisk>
@@ -14,8 +16,15 @@
             <Type>MSR</Type>
             <Size>{{ disk_layout.layout_json.msr_size_mb }}</Size>
         </CreatePartition>
+{% if recovery_size_mb %}
         <CreatePartition wcm:action="add">
             <Order>3</Order>
+            <Type>Primary</Type>
+            <Size>{{ recovery_size_mb }}</Size>
+        </CreatePartition>
+{% endif %}
+        <CreatePartition wcm:action="add">
+            <Order>{{ os_partition_number }}</Order>
             <Type>Primary</Type>
 {% if os_volume == "remaining" %}
             <Extend>true</Extend>
@@ -25,7 +34,7 @@
         </CreatePartition>
 {% for volume in extra_volumes %}
         <CreatePartition wcm:action="add">
-            <Order>{{ loop.index + 3 }}</Order>
+            <Order>{{ os_partition_number + loop.index }}</Order>
             <Type>Primary</Type>
             <Size>{{ volume.size_mb }}</Size>
         </CreatePartition>
@@ -42,17 +51,26 @@
             <Order>2</Order>
             <PartitionID>2</PartitionID>
         </ModifyPartition>
+{% if recovery_size_mb %}
         <ModifyPartition wcm:action="add">
             <Order>3</Order>
             <PartitionID>3</PartitionID>
+            <Format>NTFS</Format>
+            <Label>Windows RE tools</Label>
+            <TypeID>DE94BBA4-06D1-4D40-A16A-BFD50179D6AC</TypeID>
+        </ModifyPartition>
+{% endif %}
+        <ModifyPartition wcm:action="add">
+            <Order>{{ os_partition_number }}</Order>
+            <PartitionID>{{ os_partition_number }}</PartitionID>
             <Format>NTFS</Format>
             <Label>Windows</Label>
             <Letter>C</Letter>
         </ModifyPartition>
 {% for volume in extra_volumes %}
         <ModifyPartition wcm:action="add">
-            <Order>{{ loop.index + 3 }}</Order>
-            <PartitionID>{{ loop.index + 3 }}</PartitionID>
+            <Order>{{ os_partition_number + loop.index }}</Order>
+            <PartitionID>{{ os_partition_number + loop.index }}</PartitionID>
             <Format>NTFS</Format>
             <Label>{{ volume.label }}</Label>
             <Letter>{{ volume.drive_letter }}</Letter>

@@ -11,11 +11,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import SessionLocal, get_db
 from app.hypervisors import get_driver
 from app.jobs import get_arq_pool
-from app.models.deployment import Deployment, DeploymentLogLine, DeploymentState, DeploymentStateTransition
+from app.models.deployment import (
+    Deployment,
+    DeploymentHealthCheck,
+    DeploymentLogLine,
+    DeploymentState,
+    DeploymentStateTransition,
+    IpMode,
+)
 from app.models.hypervisor import HypervisorHost
 from app.models.user import Role, User
 from app.schemas.deployment import (
+    BulkDeploymentCreate,
     DeploymentCreate,
+    DeploymentHealthCheckRead,
     DeploymentLogLineRead,
     DeploymentRead,
     DeploymentStateTransitionRead,
@@ -23,7 +32,7 @@ from app.schemas.deployment import (
     PowerStateRead,
 )
 from app.security.rbac import get_current_user, require_role
-from app.services import audit
+from app.services import audit, notifications, webhooks
 from app.services.deployment_service import InvalidTransition, log, retry_deployment
 
 router = APIRouter(tags=["deployments"])
@@ -36,11 +45,74 @@ EVENTS_POLL_INTERVAL_SECONDS = 1
     response_model=list[DeploymentRead],
     dependencies=[Depends(require_role(Role.READONLY))],
 )
-async def list_deployments(org_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[Deployment]:
-    result = await db.execute(
-        select(Deployment).where(Deployment.org_id == org_id).order_by(Deployment.created_at.desc())
-    )
+async def list_deployments(
+    org_id: uuid.UUID,
+    state: DeploymentState | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+) -> list[Deployment]:
+    stmt = select(Deployment).where(Deployment.org_id == org_id)
+    if state is not None:
+        stmt = stmt.where(Deployment.state == state)
+    if q:
+        stmt = stmt.where(Deployment.hostname.ilike(f"%{q}%"))
+    stmt = stmt.order_by(Deployment.created_at.desc()).limit(min(limit, 500)).offset(offset)
+    result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def _create_one(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    current_user: User,
+    *,
+    template_id: uuid.UUID,
+    hypervisor_host_id: uuid.UUID,
+    hostname: str,
+    ip_mode,
+    static_ip: str | None,
+    static_netmask: str | None,
+    static_gateway: str | None,
+    static_dns: list[str] | None,
+) -> Deployment:
+    """Adds a deployment (+ its audit/notification rows) to the session
+    without committing or enqueueing the arq job, callers do both exactly
+    once: the single-create route after one row, the bulk route after all
+    of them."""
+    deployment = Deployment(
+        org_id=org_id,
+        template_id=template_id,
+        hypervisor_host_id=hypervisor_host_id,
+        hostname=hostname,
+        ip_mode=ip_mode,
+        static_ip=static_ip,
+        static_netmask=static_netmask,
+        static_gateway=static_gateway,
+        static_dns=static_dns,
+        callback_token=secrets.token_urlsafe(32),
+        created_by_user_id=current_user.id,
+    )
+    db.add(deployment)
+    await db.flush()  # deployment.id must exist before the notification's FK references it
+
+    audit.record(
+        db,
+        action="deployment.create",
+        target_type="deployment",
+        org_id=org_id,
+        user_id=current_user.id,
+        target_id=deployment.id,
+        detail={"hostname": hostname},
+    )
+    notifications.notify(
+        db,
+        user_id=current_user.id,
+        deployment_id=deployment.id,
+        message=f"Deployment {hostname} started",
+    )
+    return deployment
 
 
 @router.post(
@@ -55,8 +127,10 @@ async def create_deployment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Deployment:
-    deployment = Deployment(
-        org_id=org_id,
+    deployment = await _create_one(
+        db,
+        org_id,
+        current_user,
         template_id=body.template_id,
         hypervisor_host_id=body.hypervisor_host_id,
         hostname=body.hostname,
@@ -65,25 +139,74 @@ async def create_deployment(
         static_netmask=body.static_netmask,
         static_gateway=body.static_gateway,
         static_dns=body.static_dns,
-        callback_token=secrets.token_urlsafe(32),
-        created_by_user_id=current_user.id,
     )
-    audit.record(
-        db,
-        action="deployment.create",
-        target_type="deployment",
-        org_id=org_id,
-        user_id=current_user.id,
-        target_id=deployment.id,
-        detail={"hostname": body.hostname},
-    )
-    db.add(deployment)
     await db.commit()
     await db.refresh(deployment)
 
     pool = await get_arq_pool()
+    await notifications.maybe_email(
+        db, pool, user_id=current_user.id, event_type="start",
+        subject=f"Deployment {deployment.hostname} started",
+        body=f"Deployment {deployment.hostname} has started provisioning.",
+    )
+    await webhooks.dispatch(
+        db, pool, org_id, "deployment.start",
+        {"deployment_id": str(deployment.id), "hostname": deployment.hostname, "state": deployment.state.value},
+    )
     await pool.enqueue_job("run_deployment", str(deployment.id))
     return deployment
+
+
+@router.post(
+    "/api/organizations/{org_id}/deployments/bulk",
+    response_model=list[DeploymentRead],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(Role.OPERATOR))],
+)
+async def create_bulk_deployments(
+    org_id: uuid.UUID,
+    body: BulkDeploymentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[Deployment]:
+    """DHCP only, deliberately: a static IP mode would need per-VM address
+    allocation and collision handling that bulk deployment doesn't attempt.
+    Create static-IP deployments individually instead."""
+    if body.count < 1 or body.count > 50:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "count must be between 1 and 50")
+
+    deployments = []
+    for i in range(1, body.count + 1):
+        deployment = await _create_one(
+            db,
+            org_id,
+            current_user,
+            template_id=body.template_id,
+            hypervisor_host_id=body.hypervisor_host_id,
+            hostname=f"{body.hostname_prefix}{i:02d}",
+            ip_mode=IpMode.DHCP,
+            static_ip=None,
+            static_netmask=None,
+            static_gateway=None,
+            static_dns=None,
+        )
+        deployments.append(deployment)
+    await db.commit()
+
+    pool = await get_arq_pool()
+    for deployment in deployments:
+        await db.refresh(deployment)
+        await notifications.maybe_email(
+            db, pool, user_id=current_user.id, event_type="start",
+            subject=f"Deployment {deployment.hostname} started",
+            body=f"Deployment {deployment.hostname} has started provisioning.",
+        )
+        await webhooks.dispatch(
+            db, pool, org_id, "deployment.start",
+            {"deployment_id": str(deployment.id), "hostname": deployment.hostname, "state": deployment.state.value},
+        )
+        await pool.enqueue_job("run_deployment", str(deployment.id))
+    return deployments
 
 
 async def _get_org_deployment(db: AsyncSession, org_id: uuid.UUID, deployment_id: uuid.UUID) -> Deployment:
@@ -139,6 +262,24 @@ async def get_deployment_logs(
     return list(result.scalars().all())
 
 
+@router.get(
+    "/api/organizations/{org_id}/deployments/{deployment_id}/health-history",
+    response_model=list[DeploymentHealthCheckRead],
+    dependencies=[Depends(require_role(Role.READONLY))],
+)
+async def get_deployment_health_history(
+    org_id: uuid.UUID, deployment_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[DeploymentHealthCheck]:
+    await _get_org_deployment(db, org_id, deployment_id)
+    result = await db.execute(
+        select(DeploymentHealthCheck)
+        .where(DeploymentHealthCheck.deployment_id == deployment_id)
+        .order_by(DeploymentHealthCheck.checked_at.desc())
+        .limit(200)
+    )
+    return list(result.scalars().all())
+
+
 @router.post(
     "/api/organizations/{org_id}/deployments/{deployment_id}/retry",
     response_model=DeploymentRead,
@@ -153,6 +294,10 @@ async def retry(
     except InvalidTransition as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
     pool = await get_arq_pool()
+    await webhooks.dispatch(
+        db, pool, org_id, "deployment.retry",
+        {"deployment_id": str(deployment.id), "hostname": deployment.hostname},
+    )
     await pool.enqueue_job("run_deployment", str(deployment.id))
     await db.refresh(deployment)
     return deployment
@@ -258,7 +403,7 @@ async def delete_vm(
 
 
 async def _event_stream(deployment_id: uuid.UUID, request: Request):
-    """Owns its own DB session rather than reusing the request's — a
+    """Owns its own DB session rather than reusing the request's, a
     `Depends(get_db)` session is torn down once the endpoint function
     returns, before a StreamingResponse body finishes sending."""
     last_log_ts = None

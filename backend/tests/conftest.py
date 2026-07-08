@@ -2,9 +2,11 @@ import uuid
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.db import engine, get_db
+from app.config import get_settings
+from app.db import get_db
 from app.main import app
 from app.models import (
     Base,
@@ -24,16 +26,36 @@ from app.models import (
 from app.security.auth import hash_password
 
 
+def _test_database_url() -> str:
+    """A dedicated `<dbname>_test` database, never the app's own
+    DATABASE_URL: this fixture module create/drops the whole schema per
+    test session, and running that against the same database the live app
+    (or an operator's `make dev`) is using would destroy real data."""
+    root, _, name = get_settings().database_url.rpartition("/")
+    return f"{root}/{name}_test"
+
+
+TEST_DATABASE_URL = _test_database_url()
+engine = create_async_engine(TEST_DATABASE_URL)
+
+
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def _schema():
-    # ponytail: runs against DATABASE_URL directly rather than standing up a
-    # separate test-database fixture; fine at this scale, split out a
-    # TEST_DATABASE_URL if the dev DB ever needs to stay untouched by tests.
+    admin_url = TEST_DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
+    db_name = TEST_DATABASE_URL.rsplit("/", 1)[-1]
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        exists = await conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": db_name})
+        if not exists:
+            await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -74,6 +96,7 @@ async def make_organization(db_session, **kwargs) -> Organization:
 
 async def make_user(db_session, *, global_role: Role = Role.NONE, org: Organization | None = None, org_role: Role | None = None) -> User:
     user = User(
+        username=f"user-{uuid.uuid4().hex[:8]}",
         email=f"{uuid.uuid4().hex[:8]}@example.com",
         password_hash=hash_password("Passw0rd!"),
         display_name="Test User",
@@ -170,7 +193,20 @@ async def make_deployment(
     return deployment
 
 
-def auth_headers(user: User) -> dict[str, str]:
-    from app.security.auth import create_access_token
+async def auth_headers(user: User) -> dict[str, str]:
+    from redis.asyncio import Redis
 
-    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+    from app.config import get_settings
+    from app.security.auth import create_access_token
+    from app.security.sessions import create_session
+
+    # A fresh connection per call rather than the app's process-wide
+    # get_redis() lru_cache: pytest-asyncio gives each test its own event
+    # loop, and a cached async client from a prior test's (closed) loop
+    # raises "Event loop is closed" here.
+    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    try:
+        session_id = await create_session(redis, user.id)
+    finally:
+        await redis.aclose()
+    return {"Authorization": f"Bearer {create_access_token(user.id, session_id)}"}

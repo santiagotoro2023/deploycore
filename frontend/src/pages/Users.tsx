@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import Badge from "../components/Badge";
 import DataTable from "../components/DataTable";
+import Select from "../components/Select";
 import { Role, User } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
@@ -34,7 +35,7 @@ export default function Users() {
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Users</h1>
         <button
-          className="flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
+          className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
           onClick={() => setShowCreate(true)}
         >
           <Plus size={15} strokeWidth={2} />
@@ -45,10 +46,11 @@ export default function Users() {
       <DataTable<User>
         rows={users}
         rowKey={(u) => u.id}
-        searchValue={(u) => u.email}
+        searchValue={(u) => u.username}
         columns={[
+          { key: "username", header: "Username", render: (u) => u.username, sortValue: (u) => u.username },
           { key: "display_name", header: "Name", render: (u) => u.display_name, sortValue: (u) => u.display_name },
-          { key: "email", header: "Email", render: (u) => u.email },
+          { key: "email", header: "Email", render: (u) => u.email ?? "(none)" },
           { key: "global_role", header: "Global role", render: (u) => <Badge value={u.global_role} /> },
           { key: "status", header: "Status", render: (u) => <Badge value={u.is_active ? "active" : "unknown"} /> },
           {
@@ -92,17 +94,17 @@ function AssignOrgRole({
 
   return (
     <div className="flex items-center gap-1">
-      <select className="rounded-md border border-neutral-300 px-1.5 py-1 text-xs" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+      <Select className="rounded-md border border-neutral-300 px-1.5 py-1 text-xs" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
         <option value="">Org...</option>
         {organizations.map((o) => (
           <option key={o.id} value={o.id}>{o.name}</option>
         ))}
-      </select>
-      <select className="rounded-md border border-neutral-300 px-1.5 py-1 text-xs" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+      </Select>
+      <Select className="rounded-md border border-neutral-300 px-1.5 py-1 text-xs" value={role} onChange={(e) => setRole(e.target.value as Role)}>
         <option value="readonly">Readonly</option>
         <option value="operator">Operator</option>
         <option value="admin">Admin</option>
-      </select>
+      </Select>
       <button className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50" onClick={assign}>
         Assign
       </button>
@@ -111,6 +113,7 @@ function AssignOrgRole({
 }
 
 function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -121,7 +124,13 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
     e.preventDefault();
     setError(null);
     try {
-      await api.post("/users", { email, display_name: displayName, password, global_role: globalRole });
+      await api.post("/users", {
+        username,
+        email: email || null,
+        display_name: displayName,
+        password,
+        global_role: globalRole,
+      });
       onCreated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create user.");
@@ -132,23 +141,25 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
       <form onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold">New user</h2>
+        <label className="mb-1 block text-xs font-medium text-neutral-600">Username</label>
+        <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={username} onChange={(e) => setUsername(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600">Display name</label>
         <input required className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Email</label>
-        <input required type="email" className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600">Email (optional, for future notifications)</label>
+        <input type="email" className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={email} onChange={(e) => setEmail(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600">Password</label>
         <input required type="password" className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={password} onChange={(e) => setPassword(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600">Global role</label>
-        <select className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={globalRole} onChange={(e) => setGlobalRole(e.target.value as Role)}>
+        <Select className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={globalRole} onChange={(e) => setGlobalRole(e.target.value as Role)}>
           <option value="none">None (org-scoped only)</option>
           <option value="readonly">Readonly</option>
           <option value="operator">Operator</option>
           <option value="admin">Admin</option>
-        </select>
+        </Select>
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
           <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
-          <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">Create</button>
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">Create</button>
         </div>
       </form>
     </div>

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/callback", tags=["callback"])
 @router.post("/{deployment_token}", status_code=status.HTTP_204_NO_CONTENT)
 async def deployment_callback(deployment_token: str, db: AsyncSession = Depends(get_db)) -> None:
     """Authenticated by the single-use per-deployment token itself, not by
-    a user session — the caller is the guest VM's FirstLogonCommands step,
+    a user session, the caller is the guest VM's FirstLogonCommands step,
     not an operator."""
     result = await db.execute(select(Deployment).where(Deployment.callback_token == deployment_token))
     deployment = result.scalar_one_or_none()

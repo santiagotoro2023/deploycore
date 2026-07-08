@@ -17,6 +17,12 @@ class FixedOsVolume(BaseModel):
 class DiskLayoutJson(BaseModel):
     efi_size_mb: int = 500
     msr_size_mb: int = 128
+    # optional Windows RE tools partition placed between MSR and the OS
+    # volume instead of at the end of the disk, so later expanding the OS
+    # volume in a hypervisor is not blocked by a trailing recovery
+    # partition. None omits it entirely (Windows Setup's own default
+    # end-of-disk placement applies).
+    recovery_size_mb: int | None = None
     os_volume: Literal["remaining"] | FixedOsVolume
     extra_volumes: list[ExtraVolume] = []
 

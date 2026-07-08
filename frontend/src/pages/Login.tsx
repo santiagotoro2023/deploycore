@@ -2,14 +2,16 @@ import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { useAuth } from "../state/auth";
-import { useInstanceName } from "../state/instance";
+import { useInstanceInfo } from "../state/instance";
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, loginTotp } = useAuth();
   const navigate = useNavigate();
-  const instanceName = useInstanceName();
-  const [email, setEmail] = useState("");
+  const { name: instanceName, hasLogo } = useInstanceInfo();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [ticket, setTicket] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -18,8 +20,12 @@ export default function Login() {
     setError(null);
     setSubmitting(true);
     try {
-      await login(email, password);
-      navigate("/");
+      const result = await login(username, password);
+      if (result.requiresTotp) {
+        setTicket(result.ticket ?? null);
+      } else {
+        navigate("/");
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Unable to sign in.");
     } finally {
@@ -27,33 +33,73 @@ export default function Login() {
     }
   }
 
+  async function onSubmitTotp(e: FormEvent) {
+    e.preventDefault();
+    if (!ticket) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await loginTotp(ticket, code);
+      navigate("/");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Invalid code.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-neutral-50">
-      <form onSubmit={onSubmit} className="w-80 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
-        <div className="mb-6 text-center text-base font-semibold tracking-tight">{instanceName}</div>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Email</label>
-        <input
-          type="email"
-          required
-          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <label className="mb-1 block text-xs font-medium text-neutral-600">Password</label>
-        <input
-          type="password"
-          required
-          className="mb-4 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+      <form
+        onSubmit={ticket ? onSubmitTotp : onSubmit}
+        className="w-80 rounded-lg border border-neutral-200 bg-white p-6 shadow-sm"
+      >
+        <div className="mb-6 flex flex-col items-center gap-2">
+          {hasLogo && <img src="/api/instance/logo" alt="" className="max-h-10 max-w-full object-contain" />}
+          <div className="text-center text-base font-semibold tracking-tight">{instanceName}</div>
+        </div>
+        {!ticket && (
+          <>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">Username</label>
+            <input
+              type="text"
+              required
+              autoFocus
+              className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <label className="mb-1 block text-xs font-medium text-neutral-600">Password</label>
+            <input
+              type="password"
+              required
+              className="mb-4 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </>
+        )}
+        {ticket && (
+          <>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">Authenticator code</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              required
+              autoFocus
+              className="mb-4 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </>
+        )}
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <button
           type="submit"
           disabled={submitting}
-          className="w-full rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
+          className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
-          {submitting ? "Signing in..." : "Sign in"}
+          {submitting ? "Signing in..." : ticket ? "Verify" : "Sign in"}
         </button>
       </form>
     </div>

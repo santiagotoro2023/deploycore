@@ -25,10 +25,10 @@ async def test_create_deployment_requires_operator(test_client, db_session):
     operator = await make_user(db_session, org=org, org_role=Role.OPERATOR)
     body = {"template_id": str(template.id), "hypervisor_host_id": str(host.id), "hostname": "WIN-TEST01"}
 
-    r = await test_client.post(f"/api/organizations/{org.id}/deployments", json=body, headers=auth_headers(readonly))
+    r = await test_client.post(f"/api/organizations/{org.id}/deployments", json=body, headers=await auth_headers(readonly))
     assert r.status_code == 403
 
-    r = await test_client.post(f"/api/organizations/{org.id}/deployments", json=body, headers=auth_headers(operator))
+    r = await test_client.post(f"/api/organizations/{org.id}/deployments", json=body, headers=await auth_headers(operator))
     assert r.status_code == 201
     data = r.json()
     assert data["hostname"] == "WIN-TEST01"
@@ -43,13 +43,13 @@ async def test_deployments_are_scoped_to_their_organization(test_client, db_sess
 
     body = {"template_id": str(template_a.id), "hypervisor_host_id": str(host_a.id), "hostname": "WIN-TEST02"}
     created = await test_client.post(
-        f"/api/organizations/{org_a.id}/deployments", json=body, headers=auth_headers(operator_a)
+        f"/api/organizations/{org_a.id}/deployments", json=body, headers=await auth_headers(operator_a)
     )
     deployment_id = created.json()["id"]
 
-    r = await test_client.get(f"/api/organizations/{org_a.id}/deployments/{deployment_id}", headers=auth_headers(operator_a))
+    r = await test_client.get(f"/api/organizations/{org_a.id}/deployments/{deployment_id}", headers=await auth_headers(operator_a))
     assert r.status_code == 200
 
     # readonly_b has no role in org_a, so this is rejected by RBAC before the org-scoped lookup even runs
-    r = await test_client.get(f"/api/organizations/{org_a.id}/deployments/{deployment_id}", headers=auth_headers(readonly_b))
+    r = await test_client.get(f"/api/organizations/{org_a.id}/deployments/{deployment_id}", headers=await auth_headers(readonly_b))
     assert r.status_code == 403

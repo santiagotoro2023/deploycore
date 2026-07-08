@@ -112,6 +112,25 @@ def test_disk_layout_fixed_os_volume_and_extra_volumes():
     assert modify_partitions[3].xpath("string(.//u:Letter)", namespaces=NS) == "D"
 
 
+def test_disk_layout_with_recovery_partition_mid_disk():
+    disk_layout = _basic_disk_layout(recovery_size_mb=1000)
+    root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), disk_layout).encode())
+
+    create_partitions = root.xpath("//u:CreatePartition", namespaces=NS)
+    assert len(create_partitions) == 4
+    assert create_partitions[2].xpath("string(.//u:Size)", namespaces=NS) == "1000"
+
+    modify_partitions = root.xpath("//u:ModifyPartition", namespaces=NS)
+    assert len(modify_partitions) == 4
+    recovery_partition = modify_partitions[2]
+    assert recovery_partition.xpath("string(.//u:Label)", namespaces=NS) == "Windows RE tools"
+    assert recovery_partition.xpath("string(.//u:TypeID)", namespaces=NS) == "DE94BBA4-06D1-4D40-A16A-BFD50179D6AC"
+    assert recovery_partition.xpath(".//u:Letter", namespaces=NS) == []
+
+    install_to = root.xpath("//u:InstallTo/u:PartitionID", namespaces=NS)
+    assert install_to[0].text == "4"
+
+
 def test_callback_url_and_token_in_first_logon_commands():
     deployment = _make_deployment()
     root = etree.fromstring(

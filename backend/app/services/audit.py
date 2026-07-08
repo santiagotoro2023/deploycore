@@ -15,7 +15,7 @@ def record(
     target_id: uuid.UUID | None = None,
     detail: dict | None = None,
 ) -> None:
-    """Adds to the session without committing — callers fold this into
+    """Adds to the session without committing, callers fold this into
     whatever transaction is already writing the mutation being audited."""
     db.add(
         AuditLog(

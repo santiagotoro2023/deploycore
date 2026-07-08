@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
+import Select from "../components/Select";
 import { Deployment, DeploymentTemplate, HypervisorHost, IpMode } from "../api/types";
 import { useOrg } from "../state/org";
 
@@ -21,6 +22,8 @@ export default function DeploymentWizard() {
   const [staticNetmask, setStaticNetmask] = useState("");
   const [staticGateway, setStaticGateway] = useState("");
   const [staticDns, setStaticDns] = useState("");
+  const [bulk, setBulk] = useState(false);
+  const [bulkCount, setBulkCount] = useState(2);
 
   const [previewXml, setPreviewXml] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -35,12 +38,12 @@ export default function DeploymentWizard() {
   if (!selectedOrgId) return <p className="text-sm text-neutral-500">Select an organization first.</p>;
 
   const networkFields = {
-    hostname,
-    ip_mode: ipMode,
-    static_ip: ipMode === "static" ? staticIp : null,
-    static_netmask: ipMode === "static" ? staticNetmask : null,
-    static_gateway: ipMode === "static" ? staticGateway : null,
-    static_dns: ipMode === "static" && staticDns ? staticDns.split(",").map((s) => s.trim()) : null,
+    hostname: bulk ? `${hostname}01` : hostname,
+    ip_mode: bulk ? "dhcp" : ipMode,
+    static_ip: !bulk && ipMode === "static" ? staticIp : null,
+    static_netmask: !bulk && ipMode === "static" ? staticNetmask : null,
+    static_gateway: !bulk && ipMode === "static" ? staticGateway : null,
+    static_dns: !bulk && ipMode === "static" && staticDns ? staticDns.split(",").map((s) => s.trim()) : null,
   };
 
   async function goToReview() {
@@ -61,12 +64,22 @@ export default function DeploymentWizard() {
     setSubmitting(true);
     setError(null);
     try {
-      const deployment = await api.post<Deployment>(`/organizations/${selectedOrgId}/deployments`, {
-        template_id: templateId,
-        hypervisor_host_id: hypervisorHostId,
-        ...networkFields,
-      });
-      navigate(`/deployments/${deployment.id}`);
+      if (bulk) {
+        await api.post<Deployment[]>(`/organizations/${selectedOrgId}/deployments/bulk`, {
+          template_id: templateId,
+          hypervisor_host_id: hypervisorHostId,
+          hostname_prefix: hostname,
+          count: bulkCount,
+        });
+        navigate("/deployments");
+      } else {
+        const deployment = await api.post<Deployment>(`/organizations/${selectedOrgId}/deployments`, {
+          template_id: templateId,
+          hypervisor_host_id: hypervisorHostId,
+          ...networkFields,
+        });
+        navigate(`/deployments/${deployment.id}`);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create deployment.");
       setSubmitting(false);
@@ -81,7 +94,7 @@ export default function DeploymentWizard() {
         {STEPS.map((s, i) => (
           <div
             key={s}
-            className={`rounded-full px-3 py-1 ${i === step ? "bg-neutral-900 text-white" : "bg-neutral-100 text-neutral-500"}`}
+            className={`rounded-full px-3 py-1 ${i === step ? "bg-blue-600 text-white" : "bg-neutral-100 text-neutral-500"}`}
           >
             {i + 1}. {s}
           </div>
@@ -94,7 +107,7 @@ export default function DeploymentWizard() {
         {step === 0 && (
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">Deployment template</label>
-            <select
+            <Select
               className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
@@ -105,14 +118,14 @@ export default function DeploymentWizard() {
                   {t.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
         )}
 
         {step === 1 && (
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">Hypervisor</label>
-            <select
+            <Select
               className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
               value={hypervisorHostId}
               onChange={(e) => setHypervisorHostId(e.target.value)}
@@ -123,32 +136,54 @@ export default function DeploymentWizard() {
                   {h.name} ({h.type})
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
         )}
 
         {step === 2 && (
           <div className="space-y-3">
+            <label className="flex items-center gap-2 text-xs font-medium text-neutral-600">
+              <input type="checkbox" checked={bulk} onChange={(e) => setBulk(e.target.checked)} />
+              Bulk deployment (creates multiple VMs from this template, DHCP only)
+            </label>
             <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Hostname</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">
+                {bulk ? "Hostname prefix" : "Hostname"}
+              </label>
               <input
                 className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                placeholder={bulk ? "e.g. WEB- (becomes WEB-01, WEB-02, ...)" : undefined}
                 value={hostname}
                 onChange={(e) => setHostname(e.target.value)}
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">IP configuration</label>
-              <select
-                className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-                value={ipMode}
-                onChange={(e) => setIpMode(e.target.value as IpMode)}
-              >
-                <option value="dhcp">DHCP</option>
-                <option value="static">Static</option>
-              </select>
-            </div>
-            {ipMode === "static" && (
+            {bulk && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600">Number of VMs</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  value={bulkCount}
+                  onChange={(e) => setBulkCount(Number(e.target.value))}
+                />
+              </div>
+            )}
+            {!bulk && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600">IP configuration</label>
+                <Select
+                  className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                  value={ipMode}
+                  onChange={(e) => setIpMode(e.target.value as IpMode)}
+                >
+                  <option value="dhcp">DHCP</option>
+                  <option value="static">Static</option>
+                </Select>
+              </div>
+            )}
+            {!bulk && ipMode === "static" && (
               <div className="grid grid-cols-2 gap-3">
                 <input
                   placeholder="IP address"
@@ -182,7 +217,7 @@ export default function DeploymentWizard() {
         {step === 3 && (
           <div>
             <p className="mb-2 text-xs text-neutral-500">
-              Rendered autounattend.xml — this is exactly what will be built into the answer-file ISO.
+              Rendered autounattend.xml, this is exactly what will be built into the answer-file ISO.
             </p>
             <pre className="max-h-96 overflow-auto rounded-md bg-neutral-950 p-3 text-xs text-neutral-200">
               {previewXml}
@@ -192,7 +227,22 @@ export default function DeploymentWizard() {
 
         {step === 4 && (
           <div className="text-sm text-neutral-600">
-            Ready to deploy <span className="font-medium">{hostname}</span> from template{" "}
+            {bulk ? (
+              <>
+                Ready to deploy <span className="font-medium">{bulkCount}</span> VMs (
+                <span className="font-medium">
+                  {hostname}01
+                  {"–"}
+                  {hostname}
+                  {String(bulkCount).padStart(2, "0")}
+                </span>
+                ) from template{" "}
+              </>
+            ) : (
+              <>
+                Ready to deploy <span className="font-medium">{hostname}</span> from template{" "}
+              </>
+            )}
             <span className="font-medium">{templates.find((t) => t.id === templateId)?.name}</span> onto{" "}
             <span className="font-medium">{hosts.find((h) => h.id === hypervisorHostId)?.name}</span>.
           </div>
@@ -209,7 +259,7 @@ export default function DeploymentWizard() {
         </button>
         {step < 2 && (
           <button
-            className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
             disabled={step === 0 ? !templateId : !hypervisorHostId}
             onClick={() => setStep(step + 1)}
           >
@@ -218,7 +268,7 @@ export default function DeploymentWizard() {
         )}
         {step === 2 && (
           <button
-            className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
             disabled={!hostname}
             onClick={goToReview}
           >
@@ -226,7 +276,7 @@ export default function DeploymentWizard() {
           </button>
         )}
         {step === 3 && (
-          <button className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white" onClick={() => setStep(4)}>
+          <button className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white" onClick={() => setStep(4)}>
             Continue
           </button>
         )}

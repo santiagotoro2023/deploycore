@@ -7,7 +7,7 @@ from app.config import get_settings
 
 # ponytail: sequential chunked upload (client sends chunks in order, server
 # appends) rather than a full resumable-upload protocol with per-chunk
-# offsets/retries — sufficient for an admin uploading a Windows ISO from the
+# offsets/retries, sufficient for an admin uploading a Windows ISO from the
 # UI. Add offset-addressed chunks if uploads ever need to resume mid-file.
 
 

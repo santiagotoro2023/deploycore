@@ -3,6 +3,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict
 
 from app.models.template import DomainJoinTiming
+from app.schemas.disk_layout import DiskLayoutJson
 
 
 class PostInstallScript(BaseModel):
@@ -79,3 +80,59 @@ class DeploymentTemplateRead(BaseModel):
     domain_join_timing: DomainJoinTiming
     windows_features: list[str]
     post_install_scripts: list[PostInstallScript]
+
+
+class TemplateExportDiskLayout(BaseModel):
+    name: str
+    layout: DiskLayoutJson
+
+
+class TemplateExportIsoHint(BaseModel):
+    filename: str
+    kind: str
+
+
+class DeploymentTemplateExport(BaseModel):
+    """Credentials are deliberately omitted, an import always starts with
+    a random placeholder password that must be replaced before the
+    template is deployable. iso_hint is informational only: the ISO
+    itself isn't portable, so import never sets iso_asset_id."""
+
+    name: str
+    disk_layout: TemplateExportDiskLayout
+    iso_hint: TemplateExportIsoHint | None
+    cpu_count: int
+    ram_mb: int
+    disk_size_gb: int
+    network_name: str
+    vlan_id: int | None
+    locale: str
+    timezone: str
+    keyboard_layout: str
+    domain_join_enabled: bool
+    domain_fqdn: str | None
+    domain_join_account: str | None
+    domain_target_ou: str | None
+    domain_join_timing: DomainJoinTiming
+    windows_features: list[str]
+    post_install_scripts: list[PostInstallScript]
+
+
+class DeploymentTemplateImport(BaseModel):
+    name: str
+    disk_layout: TemplateExportDiskLayout
+    cpu_count: int
+    ram_mb: int
+    disk_size_gb: int
+    network_name: str
+    vlan_id: int | None = None
+    locale: str = "en-US"
+    timezone: str = "UTC"
+    keyboard_layout: str = "en-US"
+    domain_join_enabled: bool = False
+    domain_fqdn: str | None = None
+    domain_join_account: str | None = None
+    domain_target_ou: str | None = None
+    domain_join_timing: DomainJoinTiming = DomainJoinTiming.ANSWER_FILE
+    windows_features: list[str] = []
+    post_install_scripts: list[PostInstallScript] = []

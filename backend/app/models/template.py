@@ -22,7 +22,7 @@ class DeploymentTemplate(UUIDPKMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     # nullable: a template can exist (e.g. seeded demo data) before an
-    # operator has uploaded the Windows ISO it deploys from — the
+    # operator has uploaded the Windows ISO it deploys from, the
     # provisioning pipeline itself refuses to run without one.
     iso_asset_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("iso_assets.id"), nullable=True

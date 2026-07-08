@@ -1,7 +1,10 @@
-import { Pencil, Plus, Trash2 } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
+import { Download, Pencil, Plus, Trash2, Upload } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
+import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable from "../components/DataTable";
+import Select from "../components/Select";
+import { downloadJson, readJsonFile } from "../lib/jsonFile";
 import { DiskLayout } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
@@ -18,6 +21,9 @@ export default function DiskLayouts() {
   const [layouts, setLayouts] = useState<DiskLayout[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<DiskLayout | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<DiskLayout | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     if (!selectedOrgId) return;
@@ -32,20 +38,61 @@ export default function DiskLayouts() {
   if (!selectedOrgId) return <p className="text-sm text-neutral-500">Select an organization first.</p>;
   const canManage = roleAtLeast(effectiveRole(selectedOrgId), "operator");
 
+  async function exportLayout(l: DiskLayout) {
+    const data = await api.get(`/organizations/${selectedOrgId}/disk-layouts/${l.id}/export`);
+    downloadJson(`disk-layout-${l.name.toLowerCase().replace(/\s+/g, "-")}.json`, data);
+  }
+
+  async function importLayout(file: File | undefined) {
+    if (!file || !selectedOrgId) return;
+    setImportError(null);
+    try {
+      const data = await readJsonFile(file);
+      await api.post(`/organizations/${selectedOrgId}/disk-layouts/import`, data);
+      await load();
+    } catch (err) {
+      setImportError(err instanceof ApiError ? err.message : "Import failed: invalid or incompatible file.");
+    }
+  }
+
+  async function deleteLayout() {
+    if (!confirmDelete) return;
+    await api.delete(`/organizations/${selectedOrgId}/disk-layouts/${confirmDelete.id}`);
+    setConfirmDelete(null);
+    await load();
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Disk Layouts</h1>
         {canManage && (
-          <button
-            className="flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
-            onClick={() => setShowCreate(true)}
-          >
-            <Plus size={15} strokeWidth={2} />
-            New disk layout
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+              onClick={() => importInputRef.current?.click()}
+            >
+              <Upload size={15} strokeWidth={1.75} />
+              Import
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(e) => importLayout(e.target.files?.[0])}
+            />
+            <button
+              className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+              onClick={() => setShowCreate(true)}
+            >
+              <Plus size={15} strokeWidth={2} />
+              New disk layout
+            </button>
+          </div>
         )}
       </div>
+      {importError && <div className="text-xs text-red-600">{importError}</div>}
 
       <DataTable<DiskLayout>
         rows={layouts}
@@ -59,20 +106,43 @@ export default function DiskLayouts() {
             header: "OS volume",
             render: (l) => (l.layout_json.os_volume === "remaining" ? "Remaining space" : `${l.layout_json.os_volume.size_mb} MB`),
           },
+          {
+            key: "recovery",
+            header: "Recovery partition",
+            render: (l) => (l.layout_json.recovery_size_mb ? `${l.layout_json.recovery_size_mb} MB, mid-disk` : "End of disk (default)"),
+          },
           { key: "extra_volumes", header: "Extra volumes", render: (l) => l.layout_json.extra_volumes.length },
           {
             key: "actions",
             header: "",
             render: (l) =>
-              canManage &&
-              l.org_id === selectedOrgId && (
-                <button
-                  className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
-                  onClick={() => setEditing(l)}
-                >
-                  <Pencil size={12} strokeWidth={1.75} />
-                  Edit
-                </button>
+              canManage && (
+                <div className="flex items-center gap-1.5">
+                  {l.org_id === selectedOrgId && (
+                    <button
+                      className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                      onClick={() => setEditing(l)}
+                    >
+                      <Pencil size={12} strokeWidth={1.75} />
+                      Edit
+                    </button>
+                  )}
+                  <button
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                    onClick={() => exportLayout(l)}
+                  >
+                    <Download size={12} strokeWidth={1.75} />
+                    Export
+                  </button>
+                  {l.org_id === selectedOrgId && (
+                    <button
+                      className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                      onClick={() => setConfirmDelete(l)}
+                    >
+                      <Trash2 size={12} strokeWidth={1.75} />
+                    </button>
+                  )}
+                </div>
               ),
           },
         ]}
@@ -99,6 +169,15 @@ export default function DiskLayouts() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete disk layout"
+        message={`Delete "${confirmDelete?.name}"? Templates already using it are unaffected, but it can no longer be selected for new templates. This cannot be undone.`}
+        confirmLabel="Delete"
+        onConfirm={deleteLayout}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }
@@ -125,6 +204,8 @@ function DiskLayoutForm({
     existing && existing.layout_json.os_volume !== "remaining" ? existing.layout_json.os_volume.size_mb : 102400,
   );
   const [extraVolumes, setExtraVolumes] = useState<ExtraVolumeForm[]>(existing?.layout_json.extra_volumes ?? []);
+  const [recoveryEnabled, setRecoveryEnabled] = useState(!!existing?.layout_json.recovery_size_mb);
+  const [recoverySizeMb, setRecoverySizeMb] = useState(existing?.layout_json.recovery_size_mb ?? 1000);
   const [error, setError] = useState<string | null>(null);
 
   function addVolume() {
@@ -147,6 +228,7 @@ function DiskLayoutForm({
       layout: {
         efi_size_mb: efiSizeMb,
         msr_size_mb: msrSizeMb,
+        recovery_size_mb: recoveryEnabled ? recoverySizeMb : null,
         os_volume: osVolumeMode === "remaining" ? "remaining" : { size_mb: osVolumeSizeMb },
         extra_volumes: extraVolumes,
       },
@@ -195,14 +277,14 @@ function DiskLayoutForm({
           </div>
         </div>
         <label className="mb-1 block text-xs font-medium text-neutral-600">OS volume</label>
-        <select
+        <Select
           className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
           value={osVolumeMode}
           onChange={(e) => setOsVolumeMode(e.target.value as "remaining" | "fixed")}
         >
           <option value="remaining">Remaining disk space</option>
           <option value="fixed">Fixed size</option>
-        </select>
+        </Select>
         {osVolumeMode === "fixed" && (
           <input
             type="number"
@@ -211,6 +293,30 @@ function DiskLayoutForm({
             value={osVolumeSizeMb}
             onChange={(e) => setOsVolumeSizeMb(Number(e.target.value))}
           />
+        )}
+
+        <label className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-600">
+          <input
+            type="checkbox"
+            checked={recoveryEnabled}
+            onChange={(e) => setRecoveryEnabled(e.target.checked)}
+          />
+          Recovery partition mid-disk, not at the end
+        </label>
+        {recoveryEnabled && (
+          <div className="mb-3">
+            <input
+              type="number"
+              placeholder="Recovery size (MB)"
+              className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              value={recoverySizeMb}
+              onChange={(e) => setRecoverySizeMb(Number(e.target.value))}
+            />
+            <p className="mt-1 text-xs text-neutral-500">
+              Places Windows RE tools before the OS volume instead of at the end of the disk, so a later
+              hypervisor-side disk expansion is not blocked by a trailing recovery partition.
+            </p>
+          </div>
         )}
 
         <div className="mb-3">
@@ -264,7 +370,7 @@ function DiskLayoutForm({
           <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">
             {isEdit ? "Save" : "Create"}
           </button>
         </div>

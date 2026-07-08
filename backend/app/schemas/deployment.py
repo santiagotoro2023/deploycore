@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models.deployment import DeploymentState, IpMode, LogLevel
+from app.models.deployment import DeploymentState, HealthStatus, IpMode, LogLevel
 
 
 class DeploymentCreate(BaseModel):
@@ -15,6 +15,13 @@ class DeploymentCreate(BaseModel):
     static_netmask: str | None = None
     static_gateway: str | None = None
     static_dns: list[str] | None = None
+
+
+class BulkDeploymentCreate(BaseModel):
+    template_id: uuid.UUID
+    hypervisor_host_id: uuid.UUID
+    hostname_prefix: str
+    count: int
 
 
 class DeploymentPreviewRequest(BaseModel):
@@ -44,6 +51,8 @@ class DeploymentRead(BaseModel):
     error_message: str | None
     retry_count: int
     created_by_user_id: uuid.UUID
+    last_health_status: HealthStatus
+    last_health_checked_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -55,6 +64,13 @@ class DeploymentStateTransitionRead(BaseModel):
     to_state: str
     occurred_at: datetime
     detail: str | None
+
+
+class DeploymentHealthCheckRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: HealthStatus
+    checked_at: datetime
 
 
 class DeploymentLogLineRead(BaseModel):

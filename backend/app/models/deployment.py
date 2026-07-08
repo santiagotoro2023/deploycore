@@ -31,6 +31,12 @@ class LogLevel(str, enum.Enum):
     ERROR = "error"
 
 
+class HealthStatus(str, enum.Enum):
+    UNKNOWN = "unknown"
+    HEALTHY = "healthy"
+    UNREACHABLE = "unreachable"
+
+
 class Deployment(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "deployments"
 
@@ -64,6 +70,13 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
 
+    # periodic post-deploy reachability check, completed deployments only;
+    # tracks only the latest result, not a history
+    last_health_status: Mapped[HealthStatus] = enum_column(
+        HealthStatus, "health_status", default=HealthStatus.UNKNOWN, nullable=False
+    )
+    last_health_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 class DeploymentStateTransition(UUIDPKMixin, Base):
     __tablename__ = "deployment_state_transitions"
@@ -87,3 +100,17 @@ class DeploymentLogLine(UUIDPKMixin, Base):
     stage: Mapped[str] = mapped_column(String(32), nullable=False)
     level: Mapped[LogLevel] = enum_column(LogLevel, "log_level", default=LogLevel.INFO, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class DeploymentHealthCheck(UUIDPKMixin, Base):
+    """Append-only history of check_deployment_health cron runs, unlike
+    Deployment.last_health_status/last_health_checked_at which only track
+    the latest result."""
+
+    __tablename__ = "deployment_health_checks"
+
+    deployment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("deployments.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[HealthStatus] = enum_column(HealthStatus, "health_status", nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

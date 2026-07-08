@@ -10,10 +10,12 @@ export interface Organization {
 
 export interface User {
   id: string;
-  email: string;
+  username: string;
+  email: string | null;
   display_name: string;
   global_role: Role;
   is_active: boolean;
+  totp_enabled: boolean;
 }
 
 export type HypervisorType = "esxi" | "proxmox";
@@ -37,6 +39,7 @@ export interface HypervisorHost {
 export interface DiskLayoutJson {
   efi_size_mb: number;
   msr_size_mb: number;
+  recovery_size_mb: number | null;
   os_volume: "remaining" | { size_mb: number };
   extra_volumes: { label: string; drive_letter: string; size_mb: number }[];
 }
@@ -101,6 +104,7 @@ export type DeploymentState =
   | "configuring"
   | "completed"
   | "failed";
+export type HealthStatus = "unknown" | "healthy" | "unreachable";
 
 export interface Deployment {
   id: string;
@@ -118,6 +122,8 @@ export interface Deployment {
   error_message: string | null;
   retry_count: number;
   created_by_user_id: string;
+  last_health_status: HealthStatus;
+  last_health_checked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -127,6 +133,36 @@ export interface DeploymentStateTransition {
   to_state: string;
   occurred_at: string;
   detail: string | null;
+}
+
+export interface DeploymentHealthCheck {
+  status: HealthStatus;
+  checked_at: string;
+}
+
+export const WEBHOOK_EVENT_TYPES = [
+  "deployment.start",
+  "deployment.complete",
+  "deployment.failed",
+  "deployment.retry",
+  "health.degraded",
+] as const;
+
+export interface Webhook {
+  id: string;
+  org_id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  events: string[];
+}
+
+export interface WebhookDelivery {
+  event_type: string;
+  status_code: number | null;
+  success: boolean;
+  response_snippet: string | null;
+  occurred_at: string;
 }
 
 export interface DeploymentLogLine {

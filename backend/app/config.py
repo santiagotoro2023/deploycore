@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_public_url: str = "http://localhost:8000"
     iso_storage_path: str = "/data/isos"
     iso_build_tmp: str = "/data/iso_build_tmp"
+    backup_dir: str = "/data/backups"
 
     access_token_expire_minutes: int = 12 * 60
 

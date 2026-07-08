@@ -40,6 +40,7 @@ services:
       - ./scripts:/app/scripts
       - iso_storage:/data/isos
       - iso_build_tmp:/data/iso_build_tmp
+      - db_backups:/data/backups
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -57,6 +58,7 @@ services:
       - ./worker:/app
       - iso_storage:/data/isos
       - iso_build_tmp:/data/iso_build_tmp
+      - db_backups:/data/backups
     command: arq worker.main.WorkerSettings
 
   frontend:
@@ -69,7 +71,20 @@ services:
       - /app/node_modules
     command: npm run dev -- --host 0.0.0.0
 
+  updater:
+    build: ./updater
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:${PROJECT_DIR:-/tmp/deploycore-project-dir-not-set}
+    environment:
+      - PROJECT_DIR=${PROJECT_DIR:-/tmp/deploycore-project-dir-not-set}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   iso_storage:
   iso_build_tmp:
+  db_backups:

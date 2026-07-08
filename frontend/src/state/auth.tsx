@@ -2,12 +2,19 @@ import { createContext, useContext, useEffect, useState, ReactNode } from "react
 import { api, getToken, setToken } from "../api/client";
 import { Role, User } from "../api/types";
 
+interface LoginResult {
+  requiresTotp: boolean;
+  ticket?: string;
+}
+
 interface AuthState {
   user: User | null;
   orgRoles: Record<string, Role>;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<LoginResult>;
+  loginTotp: (ticket: string, code: string) => Promise<void>;
   logout: () => void;
+  logoutEverywhere: () => Promise<void>;
   effectiveRole: (orgId: string | null) => Role;
 }
 
@@ -43,13 +50,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function login(email: string, password: string) {
-    const { access_token } = await api.post<{ access_token: string }>("/auth/login", { email, password });
+  async function login(username: string, password: string): Promise<LoginResult> {
+    const res = await api.post<{ access_token?: string; requires_totp?: boolean; ticket?: string }>(
+      "/auth/login",
+      { username, password },
+    );
+    if (res.requires_totp) {
+      return { requiresTotp: true, ticket: res.ticket };
+    }
+    setToken(res.access_token as string);
+    await refreshMe();
+    return { requiresTotp: false };
+  }
+
+  async function loginTotp(ticket: string, code: string) {
+    const { access_token } = await api.post<{ access_token: string }>("/auth/login/totp", { ticket, code });
     setToken(access_token);
     await refreshMe();
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await api.post("/auth/logout");
+    } catch {
+      // best effort, clear local state regardless
+    }
+    setToken(null);
+    setUser(null);
+    setOrgRoles({});
+  }
+
+  async function logoutEverywhere() {
+    await api.post("/auth/logout-all");
     setToken(null);
     setUser(null);
     setOrgRoles({});
@@ -63,7 +95,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, orgRoles, loading, login, logout, effectiveRole }}>
+    <AuthContext.Provider
+      value={{ user, orgRoles, loading, login, loginTotp, logout, logoutEverywhere, effectiveRole }}
+    >
       {children}
     </AuthContext.Provider>
   );

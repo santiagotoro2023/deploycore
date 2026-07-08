@@ -1,10 +1,11 @@
-import { Power, PowerOff, RotateCw, Trash2 } from "lucide-react";
+import { Download, Power, PowerOff, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, getToken } from "../api/client";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { Deployment, DeploymentLogLine, DeploymentStateTransition } from "../api/types";
+import { downloadText } from "../lib/jsonFile";
+import { Deployment, DeploymentHealthCheck, DeploymentLogLine, DeploymentStateTransition } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
 
@@ -17,6 +18,7 @@ export default function DeploymentDetail() {
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [history, setHistory] = useState<DeploymentStateTransition[]>([]);
   const [logs, setLogs] = useState<DeploymentLogLine[]>([]);
+  const [healthHistory, setHealthHistory] = useState<DeploymentHealthCheck[]>([]);
   const [confirmRetry, setConfirmRetry] = useState(false);
   const [confirmDeleteVm, setConfirmDeleteVm] = useState(false);
   const [powerState, setPowerState] = useState<string | null>(null);
@@ -41,6 +43,12 @@ export default function DeploymentDetail() {
     setHistory(hist);
     setLogs(logLines);
     if (dep.vm_moref) await loadPowerState(selectedOrgId, id);
+    if (dep.state === "completed") {
+      const checks = await api.get<DeploymentHealthCheck[]>(
+        `/organizations/${selectedOrgId}/deployments/${id}/health-history`,
+      );
+      setHealthHistory(checks);
+    }
   }
 
   useEffect(() => {
@@ -138,6 +146,25 @@ export default function DeploymentDetail() {
     await loadStatic();
   }
 
+  function downloadFullLog() {
+    if (!deployment) return;
+    const lines: string[] = [];
+    lines.push(`Deployment ${deployment.hostname} (${deployment.id})`);
+    lines.push(`State: ${deployment.state}`);
+    if (deployment.error_message) lines.push(`Error: ${deployment.error_message}`);
+    lines.push("");
+    lines.push("=== State history ===");
+    for (const t of history) {
+      lines.push(`${t.occurred_at}  ${t.from_state} -> ${t.to_state}${t.detail ? "  (" + t.detail + ")" : ""}`);
+    }
+    lines.push("");
+    lines.push("=== Log ===");
+    for (const line of logs) {
+      lines.push(`${line.ts}  [${line.stage}] [${line.level}]  ${line.message}`);
+    }
+    downloadText(`deployment-${deployment.hostname}-log.txt`, lines.join("\n"));
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -146,6 +173,15 @@ export default function DeploymentDetail() {
           <p className="text-xs text-neutral-500">{deployment.id}</p>
         </div>
         <div className="flex items-center gap-3">
+          {deployment.state === "completed" && (
+            <span className="flex items-center gap-1.5 text-xs text-neutral-500">
+              Health:
+              <Badge value={deployment.last_health_status} />
+              {deployment.last_health_checked_at && (
+                <span>checked {new Date(deployment.last_health_checked_at).toLocaleString()}</span>
+              )}
+            </span>
+          )}
           <Badge value={deployment.state} />
           {canRetry && (
             <button
@@ -158,6 +194,19 @@ export default function DeploymentDetail() {
           )}
         </div>
       </div>
+
+      {deployment.state === "completed" && healthHistory.length > 0 && (
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-neutral-700">Health history</h2>
+          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-neutral-200 bg-white p-4">
+            {[...healthHistory].reverse().map((check, i) => (
+              <span key={i} title={`${check.status} at ${new Date(check.checked_at).toLocaleString()}`}>
+                <Badge value={check.status} />
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {deployment.error_message && (
         <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -226,7 +275,7 @@ export default function DeploymentDetail() {
                     : i < currentStageIndex || deployment.state === "completed"
                       ? "bg-emerald-100 text-emerald-700"
                       : i === currentStageIndex
-                        ? "bg-neutral-900 text-white"
+                        ? "bg-blue-600 text-white"
                         : "bg-neutral-100 text-neutral-400"
                 }`}
               >
@@ -254,7 +303,16 @@ export default function DeploymentDetail() {
       </div>
 
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-neutral-700">Log</h2>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-neutral-700">Log</h2>
+          <button
+            className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900"
+            onClick={downloadFullLog}
+          >
+            <Download size={13} strokeWidth={1.75} />
+            Download full log
+          </button>
+        </div>
         <div className="max-h-96 overflow-y-auto rounded-lg border border-neutral-200 bg-neutral-950 p-4 font-mono text-xs text-neutral-200">
           {logs.length === 0 && <div className="text-neutral-500">No log output yet.</div>}
           {logs.map((line, i) => (

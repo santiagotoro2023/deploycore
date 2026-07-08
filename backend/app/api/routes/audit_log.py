@@ -18,8 +18,14 @@ router = APIRouter(tags=["audit-log"])
     response_model=list[AuditLogRead],
     dependencies=[Depends(require_role(Role.READONLY))],
 )
-async def list_audit_log(org_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[AuditLog]:
+async def list_audit_log(
+    org_id: uuid.UUID, limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)
+) -> list[AuditLog]:
     result = await db.execute(
-        select(AuditLog).where(AuditLog.org_id == org_id).order_by(AuditLog.occurred_at.desc()).limit(200)
+        select(AuditLog)
+        .where(AuditLog.org_id == org_id)
+        .order_by(AuditLog.occurred_at.desc())
+        .limit(min(limit, 500))
+        .offset(offset)
     )
     return list(result.scalars().all())

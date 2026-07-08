@@ -7,10 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.models.iso_asset import IsoAsset, UploadStatus
-from app.models.user import Role
+from app.models.user import Role, User
 from app.schemas.iso_asset import IsoAssetCreate, IsoAssetRead
-from app.security.rbac import require_role
-from app.services import iso_upload
+from app.security.rbac import get_current_user, require_role
+from app.services import audit, iso_upload
 
 router = APIRouter(tags=["iso-assets"])
 
@@ -32,12 +32,20 @@ async def list_iso_assets(org_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     dependencies=[Depends(require_role(Role.OPERATOR))],
 )
 async def create_iso_asset(
-    org_id: uuid.UUID, body: IsoAssetCreate, db: AsyncSession = Depends(get_db)
+    org_id: uuid.UUID,
+    body: IsoAssetCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> IsoAsset:
     """Registers the metadata row an upload will be assembled into. The
     actual bytes arrive via the chunk/finalize endpoints below."""
     iso = IsoAsset(org_id=org_id, kind=body.kind, filename=body.filename, storage_path="")
     db.add(iso)
+    await db.flush()
+    audit.record(
+        db, action="iso_asset.create", target_type="iso_asset", org_id=org_id,
+        user_id=current_user.id, target_id=iso.id, detail={"filename": iso.filename},
+    )
     await db.commit()
     await db.refresh(iso)
     return iso
@@ -72,7 +80,10 @@ async def upload_iso_chunk(
     dependencies=[Depends(require_role(Role.OPERATOR))],
 )
 async def finalize_iso_upload(
-    org_id: uuid.UUID, iso_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    org_id: uuid.UUID,
+    iso_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> IsoAsset:
     iso = await _get_org_owned_iso(db, org_id, iso_id)
     try:
@@ -83,6 +94,10 @@ async def finalize_iso_upload(
     iso.checksum_sha256 = checksum
     iso.size_bytes = size_bytes
     iso.upload_status = UploadStatus.COMPLETE
+    audit.record(
+        db, action="iso_asset.finalize", target_type="iso_asset", org_id=org_id,
+        user_id=current_user.id, target_id=iso.id, detail={"size_bytes": size_bytes},
+    )
     await db.commit()
     await db.refresh(iso)
     return iso
@@ -93,9 +108,18 @@ async def finalize_iso_upload(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_role(Role.OPERATOR))],
 )
-async def delete_iso_asset(org_id: uuid.UUID, iso_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
+async def delete_iso_asset(
+    org_id: uuid.UUID,
+    iso_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
     iso = await _get_org_owned_iso(db, org_id, iso_id)
     if iso.storage_path:
         Path(iso.storage_path).unlink(missing_ok=True)
+    audit.record(
+        db, action="iso_asset.delete", target_type="iso_asset", org_id=org_id,
+        user_id=current_user.id, target_id=iso.id, detail={"filename": iso.filename},
+    )
     await db.delete(iso)
     await db.commit()

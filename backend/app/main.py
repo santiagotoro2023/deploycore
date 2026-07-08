@@ -10,11 +10,13 @@ from app.api.routes import (
     disk_layouts,
     hypervisors,
     iso_assets,
+    notifications,
     orgs,
     settings,
     setup,
     templates,
     users,
+    webhooks,
 )
 
 app = FastAPI(title="DeployCore API")
@@ -40,6 +42,9 @@ app.include_router(callback.router)
 app.include_router(settings.router)
 app.include_router(audit_log.router)
 app.include_router(dashboard.router)
+app.include_router(notifications.router)
+app.include_router(notifications.prefs_router)
+app.include_router(webhooks.router)
 
 
 @app.get("/api/health")

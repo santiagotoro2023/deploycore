@@ -71,7 +71,7 @@ export default function DataTable<T>({
         <div className="relative mb-3 w-72">
           <Search size={15} strokeWidth={1.75} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
           <input
-            className="w-full rounded-md border border-neutral-300 py-1.5 pl-8 pr-3 text-sm"
+            className="w-full rounded-md border border-neutral-300 py-1.5 pl-8 pr-3 text-sm dark:border-neutral-700 dark:bg-neutral-900"
             placeholder={searchPlaceholder}
             value={query}
             onChange={(e) => {
@@ -81,10 +81,10 @@ export default function DataTable<T>({
           />
         </div>
       )}
-      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
         <table className="w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-neutral-200 text-neutral-500">
+            <tr className="border-b border-neutral-200 text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
               {columns.map((col) => (
                 <th
                   key={col.key}
@@ -101,7 +101,7 @@ export default function DataTable<T>({
                           className={sortDir === "desc" ? "rotate-180 transition-transform" : "transition-transform"}
                         />
                       ) : (
-                        <ChevronsUpDown size={13} strokeWidth={2} className="text-neutral-300" />
+                        <ChevronsUpDown size={13} strokeWidth={2} className="text-neutral-300 dark:text-neutral-600" />
                       ))}
                   </span>
                 </th>
@@ -117,7 +117,10 @@ export default function DataTable<T>({
               </tr>
             )}
             {pageRows.map((row) => (
-              <tr key={rowKey(row)} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+              <tr
+                key={rowKey(row)}
+                className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-800/50"
+              >
                 {columns.map((col) => (
                   <td key={col.key} className="px-4 py-2">
                     {col.render(row)}
@@ -131,7 +134,7 @@ export default function DataTable<T>({
       {totalPages > 1 && (
         <div className="mt-3 flex items-center gap-2 text-sm text-neutral-500">
           <button
-            className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 disabled:opacity-40"
+            className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 disabled:opacity-40 dark:border-neutral-700"
             disabled={clampedPage <= 1}
             onClick={() => setPage(clampedPage - 1)}
           >
@@ -142,7 +145,7 @@ export default function DataTable<T>({
             Page {clampedPage} of {totalPages}
           </span>
           <button
-            className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 disabled:opacity-40"
+            className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 disabled:opacity-40 dark:border-neutral-700"
             disabled={clampedPage >= totalPages}
             onClick={() => setPage(clampedPage + 1)}
           >

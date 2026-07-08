@@ -9,6 +9,7 @@ from app.models.org import Organization
 from app.models.user import Role, User, UserOrgRole
 from app.schemas.org import OrganizationCreate, OrganizationRead, OrganizationUpdate
 from app.security.rbac import get_current_user, require_role
+from app.services import audit
 
 router = APIRouter(prefix="/api/organizations", tags=["organizations"])
 
@@ -33,10 +34,15 @@ async def list_organizations(
 async def create_organization(
     body: OrganizationCreate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(Role.ADMIN, org_scoped=False)),
+    current_user: User = Depends(require_role(Role.ADMIN, org_scoped=False)),
 ) -> Organization:
     org = Organization(**body.model_dump())
     db.add(org)
+    await db.flush()
+    audit.record(
+        db, action="organization.create", target_type="organization",
+        org_id=org.id, user_id=current_user.id, target_id=org.id, detail={"name": org.name},
+    )
     await db.commit()
     await db.refresh(org)
     return org
@@ -59,13 +65,18 @@ async def update_organization(
     org_id: uuid.UUID,
     body: OrganizationUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(Role.ADMIN)),
+    current_user: User = Depends(require_role(Role.ADMIN)),
 ) -> Organization:
     org = await db.get(Organization, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
-    for field, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
         setattr(org, field, value)
+    audit.record(
+        db, action="organization.update", target_type="organization", org_id=org_id,
+        user_id=current_user.id, target_id=org_id, detail={"fields": list(updates.keys())},
+    )
     await db.commit()
     await db.refresh(org)
     return org

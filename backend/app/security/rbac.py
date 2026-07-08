@@ -3,26 +3,41 @@ import uuid
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.models.user import ROLE_ORDER, Role, User, UserOrgRole
+from app.redis import get_redis
 from app.security.auth import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    db: AsyncSession = Depends(get_db),
-) -> User:
+def _decode_or_401(credentials: HTTPAuthorizationCredentials | None) -> dict:
     if credentials is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
     try:
-        payload = decode_access_token(credentials.credentials)
+        return decode_access_token(credentials.credentials)
     except jwt.PyJWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or expired token")
+
+
+async def get_current_session_id(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> str:
+    return _decode_or_401(credentials)["sid"]
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> User:
+    payload = _decode_or_401(credentials)
+    if not await redis.exists(f"session:{payload['sid']}"):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session revoked or expired")
     user = await db.get(User, uuid.UUID(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found or inactive")
@@ -31,7 +46,7 @@ async def get_current_user(
 
 def get_current_org(request: Request) -> uuid.UUID | None:
     """Org scope comes from the `org_id` path or query parameter every
-    org-scoped route declares — there is no implicit "current org" state."""
+    org-scoped route declares, there is no implicit "current org" state."""
     org_id = request.path_params.get("org_id") or request.query_params.get("org_id")
     return uuid.UUID(org_id) if org_id else None
 

@@ -21,7 +21,7 @@ def netmask_to_prefix(netmask: str) -> int:
 
 
 class WinRMClient:
-    """Thin sync wrapper over pywinrm. Every method is blocking — worker
+    """Thin sync wrapper over pywinrm. Every method is blocking, worker
     tasks call these via asyncio.to_thread, same pattern as the ESXi
     driver's pyvmomi calls."""
 

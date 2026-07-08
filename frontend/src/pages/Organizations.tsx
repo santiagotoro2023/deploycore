@@ -20,7 +20,7 @@ export default function Organizations() {
         <h1 className="text-lg font-semibold">Organizations</h1>
         {canCreate && (
           <button
-            className="flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
+            className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
             onClick={() => setShowCreate(true)}
           >
             <Plus size={15} strokeWidth={2} />
@@ -36,7 +36,7 @@ export default function Organizations() {
         columns={[
           { key: "name", header: "Name", render: (o) => o.name, sortValue: (o) => o.name },
           { key: "slug", header: "Slug", render: (o) => o.slug },
-          { key: "description", header: "Description", render: (o) => o.description ?? "—" },
+          { key: "description", header: "Description", render: (o) => o.description ?? "(none)" },
           { key: "status", header: "Status", render: (o) => <Badge value={o.is_active ? "active" : "unknown"} /> },
         ]}
       />
@@ -100,7 +100,7 @@ function CreateOrgForm({ onClose, onCreated }: { onClose: () => void; onCreated:
           <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">
+          <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">
             Create
           </button>
         </div>

@@ -1,7 +1,9 @@
 import { FormEvent, useEffect, useState } from "react";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, getToken } from "../api/client";
+import ConfirmDialog from "../components/ConfirmDialog";
+import FileDropzone from "../components/FileDropzone";
 import { useAuth, roleAtLeast } from "../state/auth";
-import { useInstanceName } from "../state/instance";
+import { useInstanceInfo } from "../state/instance";
 import { useOrg } from "../state/org";
 
 interface SettingRow {
@@ -18,18 +20,26 @@ export default function SettingsPage() {
     <div className="space-y-8">
       <h1 className="text-lg font-semibold">Settings</h1>
       {isGlobalAdmin && <MspOrganizationPanel />}
+      {isGlobalAdmin && <UpdatesPanel />}
+      {isGlobalAdmin && <M365Panel />}
+      {isGlobalAdmin && <BackupsPanel />}
       <OrgSettingsPanel />
     </div>
   );
 }
 
 function MspOrganizationPanel() {
-  const currentName = useInstanceName();
+  const { name: currentName, hasLogo } = useInstanceInfo();
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [logoExists, setLogoExists] = useState(hasLogo);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [confirmRemoveLogo, setConfirmRemoveLogo] = useState(false);
 
   useEffect(() => setName(currentName), [currentName]);
+  useEffect(() => setLogoExists(hasLogo), [hasLogo]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -43,41 +53,425 @@ function MspOrganizationPanel() {
     }
   }
 
+  async function uploadLogo(file: File | null) {
+    if (!file) return;
+    setLogoError(null);
+    setUploadingLogo(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/settings/global/logo", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body: formData,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || "Upload failed.");
+      setLogoExists(true);
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploadingLogo(false);
+    }
+  }
+
+  async function removeLogo() {
+    await api.delete("/settings/global/logo");
+    setLogoExists(false);
+    setConfirmRemoveLogo(false);
+  }
+
+  return (
+    <div className="max-w-md space-y-4">
+      <form onSubmit={onSubmit} className="rounded-lg border border-neutral-200 bg-white p-5">
+        <h2 className="mb-1 text-sm font-semibold">MSP Organization</h2>
+        <p className="mb-3 text-xs text-neutral-500">
+          Your own organization's name, set once during initial setup, shown in the sidebar and sign-in screen.
+        </p>
+        <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
+        <input
+          required
+          className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
+        {saved && <div className="mb-3 text-xs text-emerald-600">Saved.</div>}
+        <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">
+          Save
+        </button>
+      </form>
+
+      <div className="rounded-lg border border-neutral-200 bg-white p-5">
+        <h2 className="mb-1 text-sm font-semibold">Logo</h2>
+        <p className="mb-3 text-xs text-neutral-500">
+          Shown alongside the instance name in the sidebar and sign-in screen. PNG, JPEG, or SVG, under 5 MB.
+        </p>
+        {logoExists && (
+          <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-200 p-3">
+            <img src="/api/instance/logo" alt="Current logo" className="max-h-10" />
+            <button className="text-xs text-red-600 hover:underline" onClick={() => setConfirmRemoveLogo(true)}>
+              Remove
+            </button>
+          </div>
+        )}
+        <FileDropzone
+          accept=".png,.jpg,.jpeg,.svg"
+          hint={uploadingLogo ? "Uploading..." : "PNG, JPEG, or SVG"}
+          onSelect={uploadLogo}
+        />
+        {logoError && <div className="mt-3 text-xs text-red-600">{logoError}</div>}
+      </div>
+
+      <ConfirmDialog
+        open={confirmRemoveLogo}
+        title="Remove logo"
+        message="Removes the logo from the sidebar and sign-in screen. The instance name still shows on its own."
+        confirmLabel="Remove"
+        onConfirm={removeLogo}
+        onCancel={() => setConfirmRemoveLogo(false)}
+      />
+    </div>
+  );
+}
+
+interface UpdateStatus {
+  git_available: boolean;
+  current_commit: string | null;
+  latest_commit: string | null;
+  commits_behind: number;
+  checked_at: string | null;
+  stage: string;
+  error: string | null;
+}
+
+const IN_PROGRESS_STAGES = new Set(["pulling", "building", "restarting", "finalizing"]);
+const STAGE_LABELS: Record<string, string> = {
+  pulling: "Pulling latest code...",
+  building: "Rebuilding images...",
+  restarting: "Restarting services...",
+  finalizing: "Waiting for the app to come back...",
+  done: "Up to date",
+  failed: "Update failed",
+  disabled: "Self-update unavailable",
+};
+
+function UpdatesPanel() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [confirmUpdate, setConfirmUpdate] = useState(false);
+  const [triggerError, setTriggerError] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      setStatus(await api.get<UpdateStatus>("/settings/global/update/status"));
+    } catch {
+      // transient: the api container may be mid-restart during an update
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const inProgress = status ? IN_PROGRESS_STAGES.has(status.stage) : false;
+    const interval = setInterval(load, inProgress ? 2000 : 60000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.stage]);
+
+  async function triggerUpdate() {
+    setConfirmUpdate(false);
+    setTriggerError(null);
+    try {
+      await api.post("/settings/global/update/run");
+      await load();
+    } catch (err) {
+      setTriggerError(err instanceof ApiError ? err.message : "Failed to start the update.");
+    }
+  }
+
+  if (!status) return null;
+
+  const inProgress = IN_PROGRESS_STAGES.has(status.stage);
+  const upToDate = status.commits_behind === 0;
+
+  return (
+    <div className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+      <h2 className="mb-1 text-sm font-semibold">Updates</h2>
+      {!status.git_available ? (
+        <p className="text-xs text-neutral-500">
+          Self-update is unavailable, this instance isn't running from a git checkout (or PROJECT_DIR isn't
+          set correctly in .env). Update manually: <code>git pull && docker compose up -d --build</code>.
+        </p>
+      ) : (
+        <>
+          <p className="mb-3 text-xs text-neutral-500">
+            Current version: <span className="font-mono">{status.current_commit ?? "unknown"}</span>
+            {upToDate ? (
+              <span className="ml-2 text-emerald-600">up to date</span>
+            ) : (
+              <span className="ml-2 text-amber-600">{status.commits_behind} commit(s) behind</span>
+            )}
+          </p>
+          {inProgress && (
+            <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700">
+              {STAGE_LABELS[status.stage] ?? status.stage}
+              {" "}(the app will be briefly unreachable while it restarts)
+            </div>
+          )}
+          {status.stage === "failed" && status.error && (
+            <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+              Last update failed: {status.error}
+            </div>
+          )}
+          {triggerError && <div className="mb-3 text-xs text-red-600">{triggerError}</div>}
+          <button
+            disabled={inProgress}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+            onClick={() => setConfirmUpdate(true)}
+          >
+            {inProgress ? "Updating..." : "Update now"}
+          </button>
+        </>
+      )}
+
+      <ConfirmDialog
+        open={confirmUpdate}
+        title="Update DeployCore"
+        message="Pulls the latest code, rebuilds, and restarts the app. It will be briefly unreachable (usually under a minute). Existing data is not affected."
+        confirmLabel="Update now"
+        onConfirm={triggerUpdate}
+        onCancel={() => setConfirmUpdate(false)}
+      />
+    </div>
+  );
+}
+
+interface BackupFile {
+  filename: string;
+  size_bytes: number;
+  created_at: number;
+}
+
+function BackupsPanel() {
+  const [backups, setBackups] = useState<BackupFile[]>([]);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setBackups(await api.get<BackupFile[]>("/settings/global/backups"));
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function runNow() {
+    setRunning(true);
+    setError(null);
+    try {
+      await api.post("/settings/global/backups/run");
+      await new Promise((r) => setTimeout(r, 2000));
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to start backup.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function downloadBackup(filename: string) {
+    const res = await fetch(`/api/settings/global/backups/${filename}`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Database backups</h2>
+          <p className="text-xs text-neutral-500">Daily automatic backup, plus manual runs. Newest 14 kept.</p>
+        </div>
+        <button
+          disabled={running}
+          className="rounded-md bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+          onClick={runNow}
+        >
+          {running ? "Running..." : "Run backup now"}
+        </button>
+      </div>
+      {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
+      <div className="divide-y divide-neutral-100 rounded-md border border-neutral-200 text-sm">
+        {backups.length === 0 && <div className="p-3 text-xs text-neutral-400">No backups yet.</div>}
+        {backups.map((b) => (
+          <div key={b.filename} className="flex items-center justify-between px-3 py-2">
+            <div>
+              <div className="text-xs">{b.filename}</div>
+              <div className="text-xs text-neutral-400">
+                {new Date(b.created_at * 1000).toLocaleString()} · {formatSize(b.size_bytes)}
+              </div>
+            </div>
+            <button className="text-xs text-blue-600 hover:underline" onClick={() => downloadBackup(b.filename)}>
+              Download
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface M365Config {
+  tenant_id: string;
+  client_id: string;
+  sender_upn: string;
+  enabled: boolean;
+  configured: boolean;
+}
+
+function M365Panel() {
+  const [tenantId, setTenantId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [senderUpn, setSenderUpn] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  async function load() {
+    const config = await api.get<M365Config>("/settings/global/m365");
+    setTenantId(config.tenant_id);
+    setClientId(config.client_id);
+    setSenderUpn(config.sender_upn);
+    setEnabled(config.enabled);
+    setConfigured(config.configured);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaved(false);
+    try {
+      await api.put("/settings/global/m365", {
+        tenant_id: tenantId,
+        client_id: clientId,
+        client_secret: clientSecret || null,
+        sender_upn: senderUpn,
+        enabled,
+      });
+      setClientSecret("");
+      setSaved(true);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to save M365 configuration.");
+    }
+  }
+
+  async function sendTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.post<{ ok: boolean; message: string }>("/settings/global/m365/test");
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ ok: false, message: err instanceof ApiError ? err.message : "Test failed." });
+    } finally {
+      setTesting(false);
+    }
+  }
+
   return (
     <form onSubmit={onSubmit} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
-      <h2 className="mb-1 text-sm font-semibold">MSP Organization</h2>
+      <h2 className="mb-1 text-sm font-semibold">Email notifications (Microsoft 365)</h2>
       <p className="mb-3 text-xs text-neutral-500">
-        Your own organization's name — set once during initial setup, shown in the sidebar and sign-in screen.
+        Sends deployment notifications by email via Microsoft Graph, using an app-only Azure AD app
+        registration (Mail.Send application permission). Instance-wide, not per-organization.
       </p>
-      <label className="mb-1 block text-xs font-medium text-neutral-600">Name</label>
+      <label className="mb-1 block text-xs font-medium text-neutral-600">Tenant ID</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
+      <label className="mb-1 block text-xs font-medium text-neutral-600">Client ID</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+      <label className="mb-1 block text-xs font-medium text-neutral-600">
+        Client secret {configured && <span className="text-neutral-400">(leave blank to keep the current one)</span>}
+      </label>
       <input
-        required
+        type="password"
         className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
+        value={clientSecret}
+        onChange={(e) => setClientSecret(e.target.value)}
       />
+      <label className="mb-1 block text-xs font-medium text-neutral-600">Sender mailbox (UPN)</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={senderUpn} onChange={(e) => setSenderUpn(e.target.value)} />
+      <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        Enabled
+      </label>
       {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
       {saved && <div className="mb-3 text-xs text-emerald-600">Saved.</div>}
-      <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">
-        Save
-      </button>
+      <div className="flex items-center gap-2">
+        <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">
+          Save
+        </button>
+        {configured && (
+          <button
+            type="button"
+            disabled={testing}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+            onClick={sendTest}
+          >
+            {testing ? "Sending..." : "Send test email"}
+          </button>
+        )}
+      </div>
+      {testResult && (
+        <div className={`mt-3 rounded-md border p-2 text-xs ${testResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"}`}>
+          {testResult.message}
+        </div>
+      )}
     </form>
   );
 }
+
+const DEFAULT_TIMEOUT_MINUTES = 90;
 
 function OrgSettingsPanel() {
   const { selectedOrgId } = useOrg();
   const { effectiveRole } = useAuth();
   const [rows, setRows] = useState<SettingRow[]>([]);
-  const [key, setKey] = useState("os_install_timeout_minutes");
-  const [value, setValue] = useState("90");
+  const [timeoutMinutes, setTimeoutMinutes] = useState(DEFAULT_TIMEOUT_MINUTES);
+  const [timeoutSaved, setTimeoutSaved] = useState(false);
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [key, setKey] = useState("");
+  const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const canManage = roleAtLeast(effectiveRole(selectedOrgId), "admin");
 
   async function load() {
     if (!selectedOrgId) return;
-    setRows(await api.get<SettingRow[]>(`/organizations/${selectedOrgId}/settings`));
+    const data = await api.get<SettingRow[]>(`/organizations/${selectedOrgId}/settings`);
+    setRows(data);
+    const timeoutRow = data.find((r) => r.key === "os_install_timeout_minutes");
+    if (timeoutRow && typeof timeoutRow.value === "number") setTimeoutMinutes(timeoutRow.value);
   }
 
   useEffect(() => {
@@ -86,6 +480,19 @@ function OrgSettingsPanel() {
   }, [selectedOrgId]);
 
   if (!selectedOrgId) return null;
+
+  async function saveTimeout(e: FormEvent) {
+    e.preventDefault();
+    setTimeoutError(null);
+    setTimeoutSaved(false);
+    try {
+      await api.put(`/organizations/${selectedOrgId}/settings/os_install_timeout_minutes`, { value: timeoutMinutes });
+      setTimeoutSaved(true);
+      await load();
+    } catch (err) {
+      setTimeoutError(err instanceof ApiError ? err.message : "Failed to save.");
+    }
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -108,34 +515,64 @@ function OrgSettingsPanel() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-sm font-semibold text-neutral-700">Organization overrides</h2>
-        <p className="text-sm text-neutral-500">
-          Resolved order: deployment override → template override → organization → global. This view shows
-          organization and global values for the selected organization.
+        <h2 className="text-sm font-semibold text-neutral-700">Deployment settings</h2>
+        <p className="text-sm text-neutral-500">Applies to this organization only.</p>
+      </div>
+
+      <form onSubmit={saveTimeout} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+        <label className="mb-1 block text-xs font-medium text-neutral-600">Deployment timeout (minutes)</label>
+        <p className="mb-2 text-xs text-neutral-500">
+          A deployment stuck past this many minutes in any non-terminal stage is force-failed automatically.
         </p>
-      </div>
+        <input
+          type="number"
+          min={1}
+          disabled={!canManage}
+          className="mb-3 w-32 rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:bg-neutral-50"
+          value={timeoutMinutes}
+          onChange={(e) => setTimeoutMinutes(Number(e.target.value))}
+        />
+        {timeoutError && <div className="mb-3 text-xs text-red-600">{timeoutError}</div>}
+        {timeoutSaved && <div className="mb-3 text-xs text-emerald-600">Saved.</div>}
+        {canManage && (
+          <button type="submit" className="block rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">
+            Save
+          </button>
+        )}
+      </form>
 
-      <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white text-sm">
-        {rows.length === 0 && <div className="p-4 text-neutral-400">No settings overrides configured.</div>}
-        {rows.map((r) => (
-          <div key={`${r.scope}-${r.key}`} className="flex items-center justify-between px-4 py-2.5">
-            <span className="font-medium">{r.key}</span>
-            <span className="text-xs text-neutral-400">{r.scope}</span>
-            <span>{JSON.stringify(r.value)}</span>
+      <button
+        className="text-xs text-neutral-500 hover:text-neutral-900"
+        onClick={() => setShowAdvanced(!showAdvanced)}
+      >
+        {showAdvanced ? "Hide advanced" : "Advanced: view/set raw settings keys"}
+      </button>
+
+      {showAdvanced && (
+        <div className="space-y-4">
+          <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white text-sm">
+            {rows.length === 0 && <div className="p-4 text-neutral-400">No settings overrides configured.</div>}
+            {rows.map((r) => (
+              <div key={`${r.scope}-${r.key}`} className="flex items-center justify-between px-4 py-2.5">
+                <span className="font-medium">{r.key}</span>
+                <span className="text-xs text-neutral-400">{r.scope}</span>
+                <span>{JSON.stringify(r.value)}</span>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {canManage && (
-        <form onSubmit={onSubmit} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
-          <h2 className="mb-3 text-sm font-semibold">Set organization override</h2>
-          <label className="mb-1 block text-xs font-medium text-neutral-600">Key</label>
-          <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={key} onChange={(e) => setKey(e.target.value)} />
-          <label className="mb-1 block text-xs font-medium text-neutral-600">Value (JSON or plain text)</label>
-          <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={value} onChange={(e) => setValue(e.target.value)} />
-          {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
-          <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">Save</button>
-        </form>
+          {canManage && (
+            <form onSubmit={onSubmit} className="max-w-md rounded-lg border border-neutral-200 bg-white p-5">
+              <h2 className="mb-3 text-sm font-semibold">Set organization override</h2>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">Key</label>
+              <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={key} onChange={(e) => setKey(e.target.value)} />
+              <label className="mb-1 block text-xs font-medium text-neutral-600">Value (JSON or plain text)</label>
+              <input className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm" value={value} onChange={(e) => setValue(e.target.value)} />
+              {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
+              <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white">Save</button>
+            </form>
+          )}
+        </div>
       )}
     </div>
   );

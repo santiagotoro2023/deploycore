@@ -24,7 +24,7 @@
                     </InstallFrom>
                     <InstallTo>
                         <DiskID>0</DiskID>
-                        <PartitionID>3</PartitionID>
+                        <PartitionID>{{ 4 if disk_layout.layout_json.recovery_size_mb else 3 }}</PartitionID>
                     </InstallTo>
                 </OSImage>
             </ImageInstall>

@@ -18,9 +18,9 @@ from app.security.auth import hash_password
 DEMO_PASSWORD = "ChangeMe123!"
 
 DEMO_USERS = [
-    ("admin@example.com", "Demo Admin", Role.ADMIN),
-    ("operator@example.com", "Demo Operator", Role.OPERATOR),
-    ("readonly@example.com", "Demo Readonly", Role.READONLY),
+    ("admin", "admin@example.com", "Demo Admin", Role.ADMIN),
+    ("operator", "operator@example.com", "Demo Operator", Role.OPERATOR),
+    ("readonly", "readonly@example.com", "Demo Readonly", Role.READONLY),
 ]
 
 
@@ -28,15 +28,20 @@ async def seed() -> None:
     async with SessionLocal() as db:
         existing = await db.execute(select(Organization).where(Organization.slug == "acme-demo"))
         if existing.scalar_one_or_none() is not None:
-            print("Seed data already present (organization 'acme-demo' exists) — nothing to do.")
+            print("Seed data already present (organization 'acme-demo' exists), nothing to do.")
             return
 
         org = Organization(name="Acme MSP Demo", slug="acme-demo", description="Demo organization from scripts/seed.py")
         db.add(org)
         await db.flush()
 
-        for email, display_name, role in DEMO_USERS:
-            user = User(email=email, password_hash=hash_password(DEMO_PASSWORD), display_name=display_name)
+        for username, email, display_name, role in DEMO_USERS:
+            user = User(
+                username=username,
+                email=email,
+                password_hash=hash_password(DEMO_PASSWORD),
+                display_name=display_name,
+            )
             db.add(user)
             await db.flush()
             db.add(UserOrgRole(user_id=user.id, org_id=org.id, role=role))
@@ -70,12 +75,12 @@ async def seed() -> None:
     print("Seed complete.")
     print("  Organization: Acme MSP Demo (acme-demo)")
     print(f"  Users (password: {DEMO_PASSWORD}):")
-    for email, _, role in DEMO_USERS:
-        print(f"    {email}  [{role.value}]")
+    for username, _, _, role in DEMO_USERS:
+        print(f"    {username}  [{role.value}]")
     print("  Disk layout: Standard 100GB")
     print("  Template: Windows Server 2025 - Standard (workgroup, IIS role)")
     print()
-    print("Next steps (not automated — these need real binaries/credentials):")
+    print("Next steps (not automated, these need real binaries/credentials):")
     print("  1. Upload a Windows Server 2025 ISO via ISO Assets, then attach it to the template.")
     print("  2. Register a hypervisor host under Hypervisors and run Test Connection.")
 

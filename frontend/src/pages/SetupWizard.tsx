@@ -6,6 +6,7 @@ const STEPS = ["Instance", "Admin account"];
 export default function SetupWizard({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState(0);
   const [instanceName, setInstanceName] = useState("");
+  const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,8 +25,9 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     try {
       const { access_token } = await api.post<{ access_token: string }>("/setup", {
         instance_name: instanceName,
+        admin_username: username,
         admin_display_name: displayName,
-        admin_email: email,
+        admin_email: email || null,
         admin_password: password,
       });
       setToken(access_token);
@@ -49,7 +51,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             <div
               key={s}
               className={`flex-1 rounded-full px-2 py-1 text-center ${
-                i === step ? "bg-neutral-900 text-white" : i < step ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-500"
+                i === step ? "bg-blue-600 text-white" : i < step ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-500"
               }`}
             >
               {i + 1}. {s}
@@ -70,13 +72,13 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 onChange={(e) => setInstanceName(e.target.value)}
               />
               <p className="mb-4 text-xs text-neutral-500">
-                This is your own organization — it manages every customer organization you add afterward. It is
+                This is your own organization: it manages every customer organization you add afterward. It is
                 shown in the sidebar and on the sign-in screen.
               </p>
               <button
                 type="submit"
                 disabled={!instanceName}
-                className="w-full rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
+                className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 Continue
               </button>
@@ -93,9 +95,15 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
               />
-              <label className="mb-1 block text-xs font-medium text-neutral-600">Email</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">Username</label>
               <input
                 required
+                className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+              />
+              <label className="mb-1 block text-xs font-medium text-neutral-600">Email (optional, for future notifications)</label>
+              <input
                 type="email"
                 className="mb-3 w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
                 value={email}
@@ -129,7 +137,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="flex-1 rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
+                  className="flex-1 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 >
                   {submitting ? "Setting up..." : "Finish setup"}
                 </button>

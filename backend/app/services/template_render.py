@@ -18,7 +18,7 @@ _ENV = jinja2.Environment(
 def render_autounattend(
     deployment: Deployment, template: DeploymentTemplate, disk_layout: DiskLayout
 ) -> str:
-    """The single rendering entry point — both the wizard's preview step and
+    """The single rendering entry point, both the wizard's preview step and
     the actual ISO build call this, so what an operator reviews is
     byte-identical to what ships."""
     tmpl = _ENV.get_template("autounattend_base.xml.j2")

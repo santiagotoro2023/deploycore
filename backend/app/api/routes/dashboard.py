@@ -21,7 +21,7 @@ _RUNNING_STATES = [s for s in DeploymentState if s not in (DeploymentState.COMPL
     dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
 )
 async def dashboard_overview(db: AsyncSession = Depends(get_db)) -> list[OrgOverview]:
-    """Cross-org summary for MSP admins — a handful of count queries per
+    """Cross-org summary for MSP admins, a handful of count queries per
     org rather than one large join; simplest correct choice at the scale
     of an MSP's customer-organization count."""
     orgs = (await db.execute(select(Organization).order_by(Organization.name))).scalars().all()

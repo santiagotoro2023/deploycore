@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import { AuthProvider, useAuth } from "./state/auth";
 import { OrgProvider } from "./state/org";
 
+import AccountSettings from "./pages/AccountSettings";
 import AuditLog from "./pages/AuditLog";
 import Dashboard from "./pages/Dashboard";
 import DeploymentDetail from "./pages/DeploymentDetail";
@@ -19,6 +20,7 @@ import SettingsPage from "./pages/Settings";
 import SetupWizard from "./pages/SetupWizard";
 import Templates from "./pages/Templates";
 import Users from "./pages/Users";
+import Webhooks from "./pages/Webhooks";
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const { user, loading } = useAuth();
@@ -48,7 +50,9 @@ function AppRoutes() {
         <Route path="disk-layouts" element={<DiskLayouts />} />
         <Route path="hypervisors" element={<Hypervisors />} />
         <Route path="iso-assets" element={<IsoAssets />} />
+        <Route path="webhooks" element={<Webhooks />} />
         <Route path="users" element={<Users />} />
+        <Route path="account" element={<AccountSettings />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="audit-log" element={<AuditLog />} />
       </Route>
