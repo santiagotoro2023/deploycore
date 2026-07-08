@@ -17,7 +17,7 @@ const SPEED = 0.12;
  * prefers-reduced-motion (renders one still frame instead of animating) and
  * reads light/dark straight off <html class="dark">, same signal the rest
  * of the app's theme switching already uses. */
-export default function ConnectedDots() {
+export default function ConnectedDots({ opacity = 1 }: { opacity?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -77,8 +77,8 @@ export default function ConnectedDots() {
           const b = points[j];
           const dist = Math.hypot(a.x - b.x, a.y - b.y);
           if (dist > MAX_LINK_DISTANCE) continue;
-          const opacity = (1 - dist / MAX_LINK_DISTANCE) * 0.35;
-          ctx!.strokeStyle = `rgba(${lineColor}, ${opacity})`;
+          const lineOpacity = (1 - dist / MAX_LINK_DISTANCE) * 0.35 * opacity;
+          ctx!.strokeStyle = `rgba(${lineColor}, ${lineOpacity})`;
           ctx!.lineWidth = 1;
           ctx!.beginPath();
           ctx!.moveTo(a.x, a.y);
@@ -87,12 +87,14 @@ export default function ConnectedDots() {
         }
       }
 
+      ctx!.globalAlpha = opacity;
       for (const p of points) {
         ctx!.fillStyle = dotColor;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, 1.6, 0, Math.PI * 2);
         ctx!.fill();
       }
+      ctx!.globalAlpha = 1;
 
       if (!reduceMotion) animationFrame = requestAnimationFrame(step);
     }
@@ -104,6 +106,7 @@ export default function ConnectedDots() {
       window.removeEventListener("resize", resize);
       cancelAnimationFrame(animationFrame);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <canvas ref={canvasRef} className="absolute inset-0" aria-hidden="true" />;

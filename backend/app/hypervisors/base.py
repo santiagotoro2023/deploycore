@@ -69,8 +69,11 @@ class HypervisorDriver(ABC):
     async def delete_vm(self, vm_ref: str) -> None: ...
 
     @abstractmethod
-    async def upload_iso_to_datastore(self, local_path: str, remote_name: str) -> str:
-        """Returns the datastore-relative remote path."""
+    async def upload_iso_to_datastore(self, local_path: str, remote_name: str, skip_if_exists: bool = False) -> str:
+        """Returns the datastore-relative remote path. `skip_if_exists`
+        lets a caller re-attach content already uploaded for a previous
+        deployment (the shared Windows ISO, keyed by a stable name) without
+        re-uploading it."""
 
     @abstractmethod
     async def delete_iso_from_datastore(self, remote_path: str) -> None: ...

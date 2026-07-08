@@ -13,7 +13,7 @@ import { useOrg } from "../state/org";
 const CHUNK_SIZE = 8 * 1024 * 1024;
 
 export default function IsoAssets() {
-  const { selectedOrgId } = useOrg();
+  const { selectedOrgId, selectedOrg } = useOrg();
   const { user, effectiveRole } = useAuth();
   const [isos, setIsos] = useState<IsoAsset[]>([]);
   const [showUpload, setShowUpload] = useState(false);
@@ -67,7 +67,7 @@ export default function IsoAssets() {
         columns={[
           { key: "filename", header: "Filename", render: (i) => i.filename, sortValue: (i) => i.filename },
           { key: "kind", header: "Kind", render: (i) => (i.kind === "windows_iso" ? "Windows Server ISO" : "VirtIO driver ISO") },
-          { key: "scope", header: "Scope", render: (i) => (i.org_id ? "Organization" : "Global") },
+          { key: "scope", header: "Scope", render: (i) => (i.org_id ? selectedOrg?.name ?? "Organization" : "Global") },
           { key: "size", header: "Size", render: (i) => (i.size_bytes ? `${(i.size_bytes / 1e9).toFixed(2)} GB` : "(unknown)") },
           { key: "status", header: "Status", render: (i) => <Badge value={i.upload_status} />, shrink: true },
           {

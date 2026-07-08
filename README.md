@@ -100,9 +100,13 @@ already control the host, less so if you'd hand this instance to someone you
 don't fully trust. Nothing needs to be configured for it to find this repo
 on the host, either: it asks the Docker API for its own bind mount's source
 path and uses that, so it works out of the box on both a fresh install and
-an existing instance that's never touched this feature before. If you'd
-rather not run it at all, remove the `updater` service from
-`docker-compose.yml` and update by hand instead:
+an existing instance that's never touched this feature before. If that
+lookup can't work in your specific Docker setup (a socket proxy that blocks
+`docker inspect`, for example), the Settings page shows exactly why in its
+error message, and setting `PROJECT_DIR` in `.env` to this repo's absolute
+host path overrides the automatic lookup entirely. If you'd rather not run
+it at all, remove the `updater` service from `docker-compose.yml` and
+update by hand instead:
 
 ```bash
 git pull
@@ -564,6 +568,7 @@ fills in `APP_SECRET_KEY` for you.
 | `ISO_BUILD_TMP` | no | `/data/iso_build_tmp` | Scratch space for answer-file ISO builds and in-progress uploads |
 | `BACKUP_DIR` | no | `/data/backups` | Where database backups are written and served from |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | no | `deploycore` / `deploycore` / `deploycore` | Postgres container credentials |
+| `PROJECT_DIR` | no | auto-detected | Only needed if the `updater` container's automatic self-discovery of this repo's host path doesn't work in your Docker setup; overrides it with an absolute host path when set |
 
 ## Development
 

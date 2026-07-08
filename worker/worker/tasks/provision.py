@@ -2,6 +2,7 @@ import asyncio
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import or_, select
 
@@ -119,9 +120,16 @@ async def run_deployment(ctx, deployment_id: str) -> None:
             await db.commit()
 
             current_step = "uploading the Windows ISO to the datastore"
+            # Named by the ISO asset's own id, not its filename: stable across
+            # every deployment made from this same asset (so a second
+            # deployment can skip re-uploading a multi-gigabyte file that's
+            # already there), but never collides with a *different* asset
+            # that happens to share a filename after one was deleted and a
+            # new one uploaded in its place.
+            windows_iso_remote_name = f"{windows_iso.id}{Path(windows_iso.filename).suffix or '.iso'}"
             await log(db, deployment, "creating_vm", f"uploading {windows_iso.filename} to the datastore")
             windows_iso_remote_path = await driver.upload_iso_to_datastore(
-                windows_iso.storage_path, windows_iso.filename
+                windows_iso.storage_path, windows_iso_remote_name, skip_if_exists=True
             )
 
             current_step = "creating the VM"
@@ -150,8 +158,9 @@ async def run_deployment(ctx, deployment_id: str) -> None:
                 current_step = "attaching the VirtIO driver ISO"
                 virtio_iso = await _get_virtio_iso(db, host.org_id)
                 if virtio_iso is not None:
+                    virtio_remote_name = f"{virtio_iso.id}{Path(virtio_iso.filename).suffix or '.iso'}"
                     virtio_remote_path = await driver.upload_iso_to_datastore(
-                        virtio_iso.storage_path, virtio_iso.filename
+                        virtio_iso.storage_path, virtio_remote_name, skip_if_exists=True
                     )
                     await driver.attach_iso(vm_ref, virtio_remote_path, VIRTIO_ISO_UNIT)
 

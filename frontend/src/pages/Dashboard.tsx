@@ -2,6 +2,7 @@ import { Activity, CheckCircle2, Circle, Server, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import AmbientBackground from "../components/AmbientBackground";
 import Badge from "../components/Badge";
 import { Deployment, DeploymentTemplate, HypervisorHost, IsoAsset } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
@@ -25,14 +26,17 @@ export default function Dashboard() {
   const isGlobalAdmin = !!user && roleAtLeast(user.global_role, "admin");
 
   return (
-    <div className="space-y-8">
-      <h1 className="text-lg font-semibold">Dashboard</h1>
-      {isGlobalAdmin && <MspOverview />}
-      {selectedOrgId ? (
-        <OrgDashboard orgId={selectedOrgId} />
-      ) : (
-        !isGlobalAdmin && <p className="text-sm text-neutral-500">Select an organization to view its dashboard.</p>
-      )}
+    <div className="relative -m-8 overflow-hidden p-8">
+      <AmbientBackground subtle />
+      <div className="relative space-y-8">
+        <h1 className="text-lg font-semibold">Dashboard</h1>
+        {isGlobalAdmin && <MspOverview />}
+        {selectedOrgId ? (
+          <OrgDashboard orgId={selectedOrgId} />
+        ) : (
+          !isGlobalAdmin && <p className="text-sm text-neutral-500">Select an organization to view its dashboard.</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -70,7 +74,7 @@ function MspOverview() {
             {rows.map((r) => (
               <tr
                 key={r.org_id}
-                className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-800"
                 onClick={() => selectOrg(r.org_id)}
               >
                 <td className="px-4 py-2 font-medium">{r.org_name}</td>

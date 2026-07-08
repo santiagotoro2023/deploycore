@@ -207,10 +207,6 @@ function CreateHypervisorForm({
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Password</label>
         <input type="password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={credential} onChange={(e) => setCredential(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Default datastore</label>
-        <p className="mb-1 text-xs text-neutral-400">
-          Used when creating a VM if nothing more specific is set. The network/port group a VM's NIC
-          attaches to is defined per-template instead, not here.
-        </p>
         <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={defaultDatastore} onChange={(e) => setDefaultDatastore(e.target.value)} />
         <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
           <input type="checkbox" checked={tlsVerify} onChange={(e) => setTlsVerify(e.target.checked)} />

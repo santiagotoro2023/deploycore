@@ -29,12 +29,22 @@ POLL_INTERVAL=5
 CHECK_INTERVAL=300
 CONTAINER_REPO_DIR=/repo
 
+DISCOVERY_DEBUG=""
+
 discover_host_repo_dir() {
-  local container_id
+  local container_id inspect_out inspect_err inspect_status resolved
   container_id=$(cat /etc/hostname 2>/dev/null || hostname)
-  docker inspect "$container_id" \
+  inspect_err=$(mktemp)
+  inspect_out=$(docker inspect "$container_id" \
     --format '{{ range .Mounts }}{{ if eq .Destination "/repo" }}{{ .Source }}{{ end }}{{ end }}' \
-    2>/dev/null
+    2>"$inspect_err")
+  inspect_status=$?
+  resolved="$inspect_out"
+  if [ -z "$resolved" ]; then
+    DISCOVERY_DEBUG="container_id='$container_id' docker_inspect_exit=$inspect_status docker_inspect_stderr='$(tr '\n' ' ' < "$inspect_err")'"
+  fi
+  rm -f "$inspect_err"
+  printf '%s' "$resolved"
 }
 
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
@@ -80,11 +90,21 @@ if [ ! -d "$CONTAINER_REPO_DIR/.git" ]; then
   idle_forever
 fi
 
-HOST_REPO_DIR="$(discover_host_repo_dir)"
+# PROJECT_DIR is an optional manual override, checked first: set it in
+# .env only if the automatic discovery below can't work in your specific
+# Docker setup (a socket proxy that blocks `docker inspect`, for example).
+# Leave it unset otherwise, discovery just works without it.
+if [ -n "${PROJECT_DIR:-}" ]; then
+  HOST_REPO_DIR="$PROJECT_DIR"
+else
+  HOST_REPO_DIR="$(discover_host_repo_dir)"
+fi
+
 if [ -z "$HOST_REPO_DIR" ]; then
-  echo "Could not determine this repo's path on the host (docker inspect on our own bind mount came back empty), self-update disabled." >&2
+  echo "Could not determine this repo's path on the host, self-update disabled. Debug: $DISCOVERY_DEBUG" >&2
   upsert_setting git_available 'false'
-  upsert_setting update_status '{"stage": "disabled", "error": "could not resolve the repo'"'"'s host path via the Docker API", "commit": null}'
+  upsert_setting update_status "$(jq -nc --arg debug "$DISCOVERY_DEBUG" \
+    '{stage: "disabled", error: ("could not resolve the repo'"'"'s host path via the Docker API (set PROJECT_DIR in .env to override). " + $debug), commit: null}')"
   idle_forever
 fi
 

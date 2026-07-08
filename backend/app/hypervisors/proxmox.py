@@ -38,7 +38,7 @@ class ProxmoxDriver(HypervisorDriver):
     async def delete_vm(self, vm_ref: str) -> None:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
-    async def upload_iso_to_datastore(self, local_path: str, remote_name: str) -> str:
+    async def upload_iso_to_datastore(self, local_path: str, remote_name: str, skip_if_exists: bool = False) -> str:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def delete_iso_from_datastore(self, remote_path: str) -> None:

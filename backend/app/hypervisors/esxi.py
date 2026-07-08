@@ -264,7 +264,7 @@ class ESXiDriver(HypervisorDriver):
     async def delete_vm(self, vm_ref: str) -> None:
         await asyncio.to_thread(self._delete_vm_sync, vm_ref)
 
-    def _upload_iso_sync(self, local_path: str, remote_name: str) -> str:
+    def _upload_iso_sync(self, local_path: str, remote_name: str, skip_if_exists: bool) -> str:
         service_instance = self._connect_sync()
         try:
             content = service_instance.RetrieveContent()
@@ -274,14 +274,27 @@ class ESXiDriver(HypervisorDriver):
             url = f"https://{self.host.api_endpoint}{remote_path}"
             cookie = service_instance._stub.cookie
             headers = {"Cookie": cookie}
+            if skip_if_exists:
+                # Callers use this for content keyed by a stable id (the
+                # Windows ISO shared by every deployment made from the same
+                # ISO asset), not the per-deployment answer-file ISO: if a
+                # previous deployment already put the exact same file at
+                # this path, re-uploading a multi-gigabyte file again on
+                # every single deployment would be needlessly slow.
+                existing = httpx.head(url, headers=headers, verify=self.host.tls_verify)
+                if existing.status_code == 200:
+                    return remote_name
             with open(local_path, "rb") as fh:
-                httpx.put(url, content=fh.read(), headers=headers, verify=self.host.tls_verify)
+                # Passing the open file directly (not fh.read()) lets httpx
+                # stream it in chunks instead of loading the whole ISO into
+                # memory first.
+                httpx.put(url, content=fh, headers=headers, verify=self.host.tls_verify)
             return remote_name
         finally:
             connect.Disconnect(service_instance)
 
-    async def upload_iso_to_datastore(self, local_path: str, remote_name: str) -> str:
-        return await asyncio.to_thread(self._upload_iso_sync, local_path, remote_name)
+    async def upload_iso_to_datastore(self, local_path: str, remote_name: str, skip_if_exists: bool = False) -> str:
+        return await asyncio.to_thread(self._upload_iso_sync, local_path, remote_name, skip_if_exists)
 
     def _delete_iso_sync(self, remote_path: str) -> None:
         service_instance = self._connect_sync()

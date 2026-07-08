@@ -9,12 +9,14 @@ import { useAuth } from "../state/auth";
 
 export default function AccountSettings() {
   return (
-    <div className="max-w-md space-y-4">
+    <div className="space-y-4">
       <h1 className="text-lg font-semibold">Account</h1>
-      <ProfilePicturePanel />
-      <TwoFactorPanel />
-      <SessionsPanel />
-      <NotificationPreferencesPanel />
+      <div className="columns-1 gap-4 xl:columns-2 [&>*]:mb-4 [&>*]:break-inside-avoid">
+        <ProfilePicturePanel />
+        <TwoFactorPanel />
+        <SessionsPanel />
+        <NotificationPreferencesPanel />
+      </div>
     </div>
   );
 }

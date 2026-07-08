@@ -51,6 +51,12 @@ export default function Users() {
     await load();
   }
 
+  async function removeGlobalRole(userId: string) {
+    await api.patch(`/users/${userId}`, { global_role: "none" });
+    setToast("Global role removed.");
+    await load();
+  }
+
   async function forceLogout() {
     if (!confirmLogout) return;
     await api.post(`/users/${confirmLogout.id}/force-logout`);
@@ -99,10 +105,18 @@ export default function Users() {
           { key: "status", header: "Status", render: (u) => <Badge value={u.is_active ? "active" : "unknown"} />, shrink: true },
           {
             key: "org_roles",
-            header: "Organization roles",
+            header: "Access",
             render: (u) => (
               <div className="flex flex-wrap items-center gap-1">
-                {Object.entries(u.org_roles).length === 0 && (
+                {u.global_role !== "none" && (
+                  <span className="flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-400">
+                    Global: {u.global_role}
+                    <button className="text-blue-400 hover:text-red-600" onClick={() => removeGlobalRole(u.id)}>
+                      <X size={11} strokeWidth={2} />
+                    </button>
+                  </span>
+                )}
+                {u.global_role === "none" && Object.entries(u.org_roles).length === 0 && (
                   <span className="text-xs text-neutral-400">none</span>
                 )}
                 {Object.entries(u.org_roles).map(([orgId, role]) => (
@@ -116,7 +130,11 @@ export default function Users() {
                     </button>
                   </span>
                 ))}
-                <AssignOrgRole userId={u.id} organizations={organizations} onAssigned={() => { setToast("Organization role assigned."); load(); }} />
+                <AssignOrgRole
+                  userId={u.id}
+                  organizations={organizations}
+                  onAssigned={() => { setToast("Role assigned."); load(); }}
+                />
               </div>
             ),
           },
@@ -181,6 +199,8 @@ export default function Users() {
   );
 }
 
+const GLOBAL_SENTINEL = "__global__";
+
 function AssignOrgRole({
   userId,
   organizations,
@@ -195,7 +215,11 @@ function AssignOrgRole({
 
   async function assign() {
     if (!orgId) return;
-    await api.post(`/users/${userId}/org-roles`, { org_id: orgId, role });
+    if (orgId === GLOBAL_SENTINEL) {
+      await api.patch(`/users/${userId}`, { global_role: role });
+    } else {
+      await api.post(`/users/${userId}/org-roles`, { org_id: orgId, role });
+    }
     setOrgId("");
     onAssigned();
   }
@@ -203,7 +227,8 @@ function AssignOrgRole({
   return (
     <div className="flex items-center gap-1">
       <Select className="rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-1 text-xs" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
-        <option value="">Assign to organization...</option>
+        <option value="">Assign...</option>
+        <option value={GLOBAL_SENTINEL}>Global (all organizations)</option>
         {organizations.map((o) => (
           <option key={o.id} value={o.id}>{o.name}</option>
         ))}

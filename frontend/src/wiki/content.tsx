@@ -594,9 +594,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               brand-new install and on an instance that's been running since before this feature existed.
             </P>
             <P>
-              If this isn't a git checkout, the panel shows a clear "self-update unavailable" message
-              instead of failing silently, with the manual fallback (<Code>git pull &amp;&amp; docker
-              compose up -d --build</Code>) right there. There's no automatic rollback: if a migration or
+              If this isn't a git checkout, or that automatic lookup can't work in your particular Docker
+              setup (a socket proxy that blocks <Code>docker inspect</Code>, for example), the panel shows
+              a clear "self-update unavailable" message with the specific reason instead of failing
+              silently, alongside the manual fallback (<Code>git pull &amp;&amp; docker compose up -d
+              --build</Code>). Setting <Code>PROJECT_DIR</Code> in <Code>.env</Code> to this repo's
+              absolute path on the host overrides the automatic lookup entirely, for the rare setup where
+              it can't work. There's no automatic rollback: if a migration or
               restart fails partway through, whatever containers are already running keep running on what
               they had, check the panel's error message and container logs to recover.
             </P>
