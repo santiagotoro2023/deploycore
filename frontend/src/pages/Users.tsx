@@ -1,4 +1,4 @@
-import { LogOut, Pencil, Plus, X } from "lucide-react";
+import { LogOut, Pencil, Plus, Power, Trash2, X } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import Avatar from "../components/Avatar";
@@ -17,6 +17,8 @@ export default function Users() {
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
   const [confirmLogout, setConfirmLogout] = useState<User | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<User | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const isGlobalAdmin = !!currentUser && roleAtLeast(currentUser.global_role, "admin");
@@ -62,6 +64,25 @@ export default function Users() {
     await api.post(`/users/${confirmLogout.id}/force-logout`);
     setConfirmLogout(null);
     setToast(`Signed out ${confirmLogout.username} everywhere.`);
+  }
+
+  async function toggleActive(u: User) {
+    await api.patch(`/users/${u.id}`, { is_active: !u.is_active });
+    setToast(u.is_active ? `${u.username} deactivated.` : `${u.username} activated.`);
+    await load();
+  }
+
+  async function deleteUser() {
+    if (!confirmDelete) return;
+    setDeleteError(null);
+    try {
+      await api.delete(`/users/${confirmDelete.id}`);
+      setToast(`${confirmDelete.username} deleted.`);
+      setConfirmDelete(null);
+      await load();
+    } catch (err) {
+      setDeleteError(err instanceof ApiError ? err.message : "Failed to delete user.");
+    }
   }
 
   return (
@@ -152,12 +173,28 @@ export default function Users() {
                   Edit
                 </button>
                 <button
+                  className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  onClick={() => toggleActive(u)}
+                >
+                  <Power size={12} strokeWidth={1.75} />
+                  {u.is_active ? "Deactivate" : "Activate"}
+                </button>
+                <button
                   className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                   onClick={() => setConfirmLogout(u)}
                 >
                   <LogOut size={12} strokeWidth={1.75} />
                   Force logout
                 </button>
+                {u.id !== currentUser?.id && (
+                  <button
+                    className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                    onClick={() => setConfirmDelete(u)}
+                  >
+                    <Trash2 size={12} strokeWidth={1.75} />
+                    Delete
+                  </button>
+                )}
               </div>
             ),
           },
@@ -194,6 +231,27 @@ export default function Users() {
         confirmLabel="Sign out everywhere"
         onConfirm={forceLogout}
         onCancel={() => setConfirmLogout(null)}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete user"
+        message={
+          <>
+            <p>
+              Permanently deletes {confirmDelete?.username}'s account and every organization role
+              assignment. Deployments they created are kept, just no longer attributed to them. This
+              cannot be undone. To temporarily block sign-in instead, use Deactivate.
+            </p>
+            {deleteError && <p className="mt-2 text-red-600">{deleteError}</p>}
+          </>
+        }
+        confirmLabel="Delete"
+        onConfirm={deleteUser}
+        onCancel={() => {
+          setConfirmDelete(null);
+          setDeleteError(null);
+        }}
       />
     </div>
   );

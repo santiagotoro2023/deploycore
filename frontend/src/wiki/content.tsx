@@ -214,9 +214,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   deployments, power a deployment's VM on/off, and create/edit/delete disk layouts,
                   templates, and ISO assets, including clone/export/import.</>,
                 <><Code>admin</Code>: everything operator can, plus manage organizations, hypervisor
-                  hosts, and webhooks (including credentials), delete a deployment's VM, edit settings,
-                  and (global admin only) manage users and their org-role assignments, instance branding,
-                  M365 email, backups, and self-update.</>,
+                  hosts, and webhooks (including credentials), delete a deployment record, edit settings,
+                  and (global admin only) manage users (including deactivating/reactivating or
+                  permanently deleting one) and their org-role assignments, instance branding, M365
+                  email, backups, and self-update.</>,
               ]}
             />
             <P>
@@ -234,6 +235,15 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               Users sign in by <strong>username</strong>, not email. Email is entirely optional and only
               used for M365 notification delivery if you configure that (see "Email notifications").
+            </P>
+            <P>
+              <strong>Deactivate</strong> (global admin only) blocks sign-in immediately without deleting
+              anything, everything about the account, its role assignments, its history, is kept exactly
+              as-is; <strong>Activate</strong> reverses it, same account, nothing to redo. Use this for
+              someone leaving temporarily, or while you sort out whether they should keep access at all.{" "}
+              <strong>Delete</strong> is permanent: the account and its org-role assignments are gone for
+              good, though any deployment they created is kept, just no longer attributed to anyone. You
+              can't delete your own account this way, only another admin can.
             </P>
           </>
         ),

@@ -50,7 +50,7 @@ class DeploymentRead(BaseModel):
     vm_moref: str | None
     error_message: str | None
     retry_count: int
-    created_by_user_id: uuid.UUID
+    created_by_user_id: uuid.UUID | None
     last_health_status: HealthStatus
     last_health_checked_at: datetime | None
     created_at: datetime

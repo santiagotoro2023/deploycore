@@ -72,8 +72,11 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
     rendered_autounattend: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    # SET NULL, not RESTRICT: a user being deleted outright (Settings ->
+    # Users) shouldn't be blocked by, or take down, every deployment they
+    # ever created, those are real infrastructure history worth keeping.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     # periodic post-deploy reachability check, completed deployments only;

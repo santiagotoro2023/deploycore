@@ -127,7 +127,7 @@ export interface Deployment {
   vm_moref: string | null;
   error_message: string | null;
   retry_count: number;
-  created_by_user_id: string;
+  created_by_user_id: string | null;
   last_health_status: HealthStatus;
   last_health_checked_at: string | null;
   created_at: string;

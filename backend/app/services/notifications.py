@@ -11,13 +11,17 @@ from app.models.user import User
 def notify(
     db: AsyncSession,
     *,
-    user_id: uuid.UUID,
+    user_id: uuid.UUID | None,
     message: str,
     deployment_id: uuid.UUID | None = None,
 ) -> None:
     """Adds to the session without committing, same convention as
     services.audit.record: callers fold this into whatever transaction is
-    already writing the event being notified about."""
+    already writing the event being notified about. user_id is optional
+    because a deployment's creator (Deployment.created_by_user_id) can be
+    None if that user was since deleted, nothing to notify then."""
+    if user_id is None:
+        return
     db.add(Notification(user_id=user_id, deployment_id=deployment_id, message=message))
 
 
@@ -33,7 +37,7 @@ async def maybe_email(
     db: AsyncSession,
     pool,
     *,
-    user_id: uuid.UUID,
+    user_id: uuid.UUID | None,
     event_type: str,
     subject: str,
     body: str,
@@ -43,7 +47,10 @@ async def maybe_email(
     to _PREFERENCE_DEFAULTS when they've never visited Account settings),
     and M365 is configured and enabled. `pool` is anything with an
     `enqueue_job` coroutine method: app.jobs.get_arq_pool() in the API
-    process, or `ctx["redis"]` inside a worker task."""
+    process, or `ctx["redis"]` inside a worker task. user_id is optional,
+    see notify()'s docstring."""
+    if user_id is None:
+        return
     user = await db.get(User, user_id)
     if user is None or not user.email:
         return

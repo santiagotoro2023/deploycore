@@ -117,6 +117,29 @@ async def update_user(
     return _to_read(user, org_roles.get(user_id, {}))
 
 
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_admin_global])
+async def delete_user(
+    user_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> None:
+    """Permanent, unlike deactivating (is_active): org-role assignments and
+    the notification-preferences row cascade with the user (ON DELETE
+    CASCADE), audit log entries survive with user_id cleared (already
+    nullable, no FK enforcement on that column), and any deployment this
+    user created survives with created_by_user_id cleared too (see
+    migration 0020)."""
+    if user_id == current_user.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "you can't delete your own account")
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    audit.record(
+        db, action="user.delete", target_type="user", user_id=current_user.id, target_id=user_id,
+        detail={"username": user.username},
+    )
+    await db.delete(user)
+    await db.commit()
+
+
 @router.post("/{user_id}/org-roles", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_admin_global])
 async def assign_org_role(
     user_id: uuid.UUID,

@@ -186,7 +186,7 @@ no explicit role) grants no access anywhere.
 |---|---|
 | `readonly` | View everything in organizations they're scoped to |
 | `operator` | Everything `readonly` can, plus: create/retry/bulk-create deployments, power on/shut down/power off a deployment's VM, create/edit/delete disk layouts, templates, and ISO assets, clone/export/import templates and disk layouts |
-| `admin` | Everything `operator` can, plus: create/edit organizations, manage hypervisor hosts and webhooks (including credentials/secrets) and run their test buttons, delete a deployment record, edit organization/global settings, manage users and their global or org-role assignments (global-admin only), delete an organization outright (global-admin only), rename the instance and manage its logo (global-admin only), configure M365 email and trigger backups/updates (global-admin only), upload/switch the HTTPS certificate (global-admin only) |
+| `admin` | Everything `operator` can, plus: create/edit organizations, manage hypervisor hosts and webhooks (including credentials/secrets) and run their test buttons, delete a deployment record, edit organization/global settings, manage users, their global or org-role assignments, and deactivate/reactivate or permanently delete a user (global-admin only), delete an organization outright (global-admin only), rename the instance and manage its logo (global-admin only), configure M365 email and trigger backups/updates (global-admin only), upload/switch the HTTPS certificate (global-admin only) |
 
 RBAC is enforced server-side on every route (a dependency resolves the
 caller's effective role for the request's organization and returns `403`
@@ -570,7 +570,8 @@ minimum effective role for the request's organization unless marked
 | GET/PATCH | `/api/organizations/{org_id}` | readonly / admin | |
 | DELETE | `/api/organizations/{org_id}` | admin (global) | cascades to everything scoped to it, destructive |
 | GET/POST | `/api/users` | admin (global) | |
-| GET/PATCH | `/api/users/{user_id}` | admin (global) | |
+| GET/PATCH | `/api/users/{user_id}` | admin (global) | PATCH `is_active` deactivates/reactivates |
+| DELETE | `/api/users/{user_id}` | admin (global) | permanent; `400` for your own account; deployments they created are kept, unattributed |
 | POST/DELETE | `/api/users/{user_id}/org-roles[/{org_id}]` | admin (global) | |
 | POST | `/api/users/{user_id}/force-logout` | admin (global) | revokes every session for that user |
 | PUT/DELETE | `/api/users/me/avatar` | authenticated | multipart upload; PNG/JPEG, 2 MB max |
