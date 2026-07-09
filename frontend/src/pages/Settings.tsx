@@ -20,12 +20,16 @@ export default function SettingsPage() {
     <div className="space-y-8">
       <h1 className="text-lg font-semibold">Settings</h1>
       {isGlobalAdmin && (
-        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-          <MspOrganizationPanel />
-          <M365Panel />
-          <UpdatesPanel />
-          <TlsPanel />
-          <BackupsPanel />
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+          <div className="flex-1 space-y-4">
+            <MspOrganizationPanel />
+            <UpdatesPanel />
+            <BackupsPanel />
+          </div>
+          <div className="flex-1 space-y-4">
+            <M365Panel />
+            <TlsPanel />
+          </div>
         </div>
       )}
       <OrgSettingsPanel />
