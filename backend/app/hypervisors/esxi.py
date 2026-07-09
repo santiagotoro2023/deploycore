@@ -225,7 +225,23 @@ class ESXiDriver(HypervisorDriver):
                     )
                     boot_devices.append(vim.vm.BootOptions.BootableDiskDevice(deviceKey=disk.key))
             config = vim.vm.ConfigSpec(
-                bootOptions=vim.vm.BootOptions(bootOrder=boot_devices)
+                bootOptions=vim.vm.BootOptions(
+                    bootOrder=boot_devices,
+                    # A freshly attached CD-ROM's backing isn't always
+                    # fully connected the instant the VM powers on, so the
+                    # very first boot attempt can race it and report every
+                    # device (including a perfectly good ISO) as
+                    # unsuccessful. bootRetryEnabled defaults to false,
+                    # which per VMware's own docs means the VM then "waits
+                    # indefinitely for you to initiate boot retry", i.e.
+                    # it just sits there until someone manually reselects
+                    # a device, exactly what was happening. A short delay
+                    # plus automatic retry gives devices time to settle
+                    # and recovers on its own instead.
+                    bootDelay=5000,
+                    bootRetryEnabled=True,
+                    bootRetryDelay=10000,
+                )
             )
             WaitForTask(vm.ReconfigVM_Task(spec=config))
         finally:
