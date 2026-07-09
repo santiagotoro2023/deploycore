@@ -377,7 +377,7 @@ export default function DeploymentDetail() {
         title="Delete deployment"
         message={
           deployment.vm_moref
-            ? "This deployment still has a VM. Delete the VM first, then come back to delete the deployment."
+            ? "Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either. Its VM is not touched and keeps running on the hypervisor, DeployCore just stops tracking it here. This cannot be undone from here."
             : "Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either. This cannot be undone from here."
         }
         confirmLabel="Delete deployment"

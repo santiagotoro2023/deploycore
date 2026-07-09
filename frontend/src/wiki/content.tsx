@@ -524,13 +524,16 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               <strong>Delete deployment</strong> (admin only) is for cleaning up ones you don't need in
               the list anymore, a pile of old failed attempts, say. It only appears once the deployment
-              has reached a terminal state, and stays disabled if a VM still exists for it, delete that
-              first. It's a soft delete: the deployment disappears from the list and dashboard counts and
-              its own detail page stops resolving, but the row, its state history, and its log lines are
-              not actually erased, both the <Code>/history</Code> and <Code>/logs</Code> API endpoints
-              keep working for its id afterward. There's currently no UI to browse deleted deployments,
-              this is meant as a safety margin (and an audit trail via the <Code>deployment.delete</Code>{" "}
-              action), not an undo button.
+              has reached a terminal state. Deleting it doesn't touch the hypervisor at all: if a VM
+              still exists for it, that VM keeps running exactly as before, DeployCore just stops
+              tracking it, it's no longer reachable through this deployment. Use <strong>Delete
+              VM</strong> first (a separate, already-destructive action) if you want that gone too. It's
+              a soft delete: the deployment disappears from the list and dashboard counts and its own
+              detail page stops resolving, but the row, its state history, and its log lines are not
+              actually erased, both the <Code>/history</Code> and <Code>/logs</Code> API endpoints keep
+              working for its id afterward. There's currently no UI to browse deleted deployments, this
+              is meant as a safety margin (and an audit trail via the <Code>deployment.delete</Code>{" "}
+              action, which records whether a VM was left running), not an undo button.
             </P>
           </>
         ),

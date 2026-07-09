@@ -424,19 +424,24 @@ async def delete_deployment(
     """Soft delete: hides the deployment from lists, the dashboard, and its
     own detail page, but its row, log lines, state transitions, and health
     checks all stay in the database untouched, still reachable through
-    /history and /logs above by anyone who has the id. Blocked while a VM
-    still exists (delete that first, a separate, already-destructive step)
-    or while the deployment is still actively running."""
+    /history and /logs above by anyone who has the id. Blocked only while
+    the deployment is still actively running, not on a VM still existing:
+    this deliberately does not touch the hypervisor at all, if a VM exists
+    it's simply left running, untracked by DeployCore from here on. Use
+    "Delete VM" first (a separate, already-destructive action) if you want
+    it gone too."""
     deployment = await _get_org_deployment(db, org_id, deployment_id)
     if deployment.state not in TERMINAL_STATES:
         raise HTTPException(status.HTTP_409_CONFLICT, "deployment is still running, wait for it to finish or fail")
-    if deployment.vm_moref is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "delete the VM first")
     deployment.deleted_at = utcnow()
     audit.record(
         db, action="deployment.delete", target_type="deployment",
         org_id=org_id, user_id=current_user.id, target_id=deployment.id,
-        detail={"hostname": deployment.hostname, "state": deployment.state.value},
+        detail={
+            "hostname": deployment.hostname,
+            "state": deployment.state.value,
+            "vm_left_running": deployment.vm_moref is not None,
+        },
     )
     await db.commit()
 
