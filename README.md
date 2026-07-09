@@ -97,8 +97,10 @@ way to figure out what went wrong.
 ## Updating
 
 Settings → **Updates** shows your current version and, if you're behind,
-how many commits. Click **Update now** and DeployCore pulls the latest code
-from GitHub, rebuilds, runs any new database migrations, and restarts itself,
+how many commits, refreshed automatically in the background every 5
+minutes; **Check for update** forces that check right now instead of
+waiting. Click **Update now** and DeployCore pulls the latest code from
+GitHub, rebuilds, runs any new database migrations, and restarts itself,
 automatically. The page shows live progress (Pulling → Building →
 Restarting → Done) and the app is only unreachable for the last part of that,
 usually under a minute. Nothing in your database is touched by an update
@@ -622,6 +624,7 @@ minimum effective role for the request's organization unless marked
 | POST | `/api/settings/global/backups/run` | admin (global) | enqueues an immediate backup |
 | GET | `/api/settings/global/backups/{filename}` | admin (global) | downloads a backup file |
 | GET | `/api/settings/global/update/status` | admin (global) | current commit, commits behind, live stage if updating |
+| POST | `/api/settings/global/update/check` | admin (global) | forces an immediate check (`git fetch` + recompute commits behind), doesn't update |
 | POST | `/api/settings/global/update/run` | admin (global) | triggers a self-update; `400` if one is already running |
 | GET | `/api/settings/global/tls` | admin (global) | current mode plus uploaded certificate subject/expiry, if any |
 | PUT | `/api/settings/global/tls/certificate` | admin (global) | multipart upload (`cert_file`, `key_file`); validated pair, switches to it |

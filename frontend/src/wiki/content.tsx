@@ -760,6 +760,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
         deepDive: (
           <>
             <P>
+              The updater checks GitHub for new commits on its own every 5 minutes and that's what
+              "commit(s) behind" reflects; <strong>Check for update</strong> forces that check
+              immediately instead of waiting, useful right after you know something's been pushed.
+              It only looks, nothing is pulled or rebuilt until you click Update now separately.
+            </P>
+            <P>
               Clicking <strong>Update now</strong> pulls the latest code from GitHub, rebuilds, runs any
               new database migrations, and restarts, with a live staged progress indicator (Pulling →
               Building → Restarting → Done). The app is only unreachable for the last part of that,

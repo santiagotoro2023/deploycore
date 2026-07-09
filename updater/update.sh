@@ -229,6 +229,13 @@ while true; do
     upsert_setting update_requested 'false'
   fi
 
+  check_requested=$(get_setting_raw check_requested)
+  if [ "$check_requested" = "true" ]; then
+    refresh_commit_status
+    upsert_setting check_requested 'false'
+    last_check=$(date +%s)
+  fi
+
   now_ts=$(date +%s)
   if [ $((now_ts - last_check)) -ge $CHECK_INTERVAL ]; then
     refresh_commit_status

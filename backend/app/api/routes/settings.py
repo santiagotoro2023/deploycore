@@ -435,3 +435,21 @@ async def run_update(
         setting.value = True
     audit.record(db, action="settings.update_triggered", target_type="settings", user_id=current_user.id)
     await db.commit()
+
+
+@router.post(
+    "/api/settings/global/update/check",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def run_update_check(
+    db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> None:
+    """Same request/poll handoff as run_update above, just for a plain
+    `git fetch` + recomputing commits_behind, not an actual update: the
+    updater container otherwise only refreshes that on its own every 5
+    minutes (see updater/update.sh CHECK_INTERVAL), too slow for someone
+    sitting on this page wanting to know right now."""
+    await _set_global_setting_value(db, "check_requested", True)
+    audit.record(db, action="settings.update_check_triggered", target_type="settings", user_id=current_user.id)
+    await db.commit()

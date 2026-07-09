@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, ApiError, getToken } from "../api/client";
 import ConfirmDialog from "../components/ConfirmDialog";
 import FileDropzone from "../components/FileDropzone";
@@ -280,14 +280,25 @@ const STAGE_LABELS: Record<string, string> = {
   disabled: "Self-update unavailable",
 };
 
+const CHECK_TIMEOUT_MS = 20000;
+
 function UpdatesPanel() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState(false);
   const [triggerError, setTriggerError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const checkBaselineRef = useRef<string | null>(null);
+  const checkTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function load() {
     try {
-      setStatus(await api.get<UpdateStatus>("/settings/global/update/status"));
+      const next = await api.get<UpdateStatus>("/settings/global/update/status");
+      setStatus(next);
+      if (checking && next.checked_at && next.checked_at !== checkBaselineRef.current) {
+        setChecking(false);
+        if (checkTimeoutRef.current) clearTimeout(checkTimeoutRef.current);
+      }
     } catch {
       // transient: the api container may be mid-restart during an update
     }
@@ -296,10 +307,10 @@ function UpdatesPanel() {
   useEffect(() => {
     load();
     const inProgress = status ? IN_PROGRESS_STAGES.has(status.stage) : false;
-    const interval = setInterval(load, inProgress ? 2000 : 60000);
+    const interval = setInterval(load, inProgress || checking ? 2000 : 60000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status?.stage]);
+  }, [status?.stage, checking]);
 
   async function triggerUpdate() {
     setConfirmUpdate(false);
@@ -311,6 +322,26 @@ function UpdatesPanel() {
       setTriggerError(err instanceof ApiError ? err.message : "Failed to start the update.");
     }
   }
+
+  async function checkForUpdate() {
+    setCheckError(null);
+    checkBaselineRef.current = status?.checked_at ?? null;
+    setChecking(true);
+    try {
+      await api.post("/settings/global/update/check");
+      if (checkTimeoutRef.current) clearTimeout(checkTimeoutRef.current);
+      checkTimeoutRef.current = setTimeout(() => setChecking(false), CHECK_TIMEOUT_MS);
+    } catch (err) {
+      setChecking(false);
+      setCheckError(err instanceof ApiError ? err.message : "Failed to check for updates.");
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (checkTimeoutRef.current) clearTimeout(checkTimeoutRef.current);
+    };
+  }, []);
 
   if (!status) return null;
 
@@ -334,13 +365,16 @@ function UpdatesPanel() {
         </div>
       ) : (
         <>
-          <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+          <p className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
             Current version: <span className="font-mono">{status.current_commit ?? "unknown"}</span>
             {upToDate ? (
               <span className="ml-2 text-emerald-600 dark:text-emerald-400">up to date</span>
             ) : (
               <span className="ml-2 text-amber-600 dark:text-amber-400">{status.commits_behind} commit(s) behind</span>
             )}
+          </p>
+          <p className="mb-3 text-xs text-neutral-400 dark:text-neutral-500">
+            Last checked: {status.checked_at ? new Date(status.checked_at).toLocaleString() : "never"}
           </p>
           {inProgress && (
             <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-400">
@@ -354,13 +388,23 @@ function UpdatesPanel() {
             </div>
           )}
           {triggerError && <div className="mb-3 text-xs text-red-600">{triggerError}</div>}
-          <button
-            disabled={inProgress}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-            onClick={() => setConfirmUpdate(true)}
-          >
-            {inProgress ? "Updating..." : "Update now"}
-          </button>
+          {checkError && <div className="mb-3 text-xs text-red-600">{checkError}</div>}
+          <div className="flex items-center gap-2">
+            <button
+              disabled={inProgress || checking}
+              className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+              onClick={checkForUpdate}
+            >
+              {checking ? "Checking..." : "Check for update"}
+            </button>
+            <button
+              disabled={inProgress}
+              className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              onClick={() => setConfirmUpdate(true)}
+            >
+              {inProgress ? "Updating..." : "Update now"}
+            </button>
+          </div>
         </>
       )}
 
