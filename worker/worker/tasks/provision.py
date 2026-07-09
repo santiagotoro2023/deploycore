@@ -28,16 +28,29 @@ VIRTIO_ISO_UNIT = 1
 
 CALLBACK_POLL_INTERVAL_SECONDS = 15
 
-# Windows Setup's "Press any key to boot from CD or DVD..." prompt shows
-# up once, early (around when set_boot_order's own 5s bootDelay elapses,
-# plus a couple seconds for the loader itself to read from the CD), and
-# has a short timeout of its own; this window is sized to bracket that
-# with margin on both sides, NOT to keep going until Setup's GUI is up.
-# Once the GUI is interactive, further Enters land on whatever's
-# focused, with unpredictable results (confirmed: one opened the
-# "Support" link's error dialog), so erring short here is deliberate.
+# Phase 1: dismiss the "Press any key to boot from CD or DVD..." prompt,
+# which shows up once, early (around when set_boot_order's own 5s
+# bootDelay elapses, plus a couple seconds for the loader itself to read
+# from the CD), and has a short timeout of its own. Tight interval, short
+# window, sized to bracket that one moment, not to keep going until
+# Setup's GUI is up (confirmed: a version of this that ran too long once
+# landed on and activated the "Support" link's error dialog).
 BOOT_KEYPRESS_ATTEMPTS = 15
 BOOT_KEYPRESS_INTERVAL_SECONDS = 1
+
+# Phase 2: even with a correctly delivered and applied answer file
+# (confirmed: disk partitioning, install, specialize, and oobeSystem all
+# run fully unattended once past this), Windows Setup's very first
+# interactive screen, choose install language/time-currency
+# format/keyboard, is shown unconditionally regardless. Its values are
+# already correct (from the answer file, or the install media's own
+# single language), so one Enter just advances past it. Timing here
+# varies a lot more (however long WinPE takes to finish loading its
+# GUI), so this phase is sparser than phase 1, not to avoid missing it,
+# but to avoid repeated blind Enters landing on whatever real dialog
+# Setup has moved on to once this screen's already been dismissed.
+LANGUAGE_SCREEN_KEYPRESS_ATTEMPTS = 12
+LANGUAGE_SCREEN_KEYPRESS_INTERVAL_SECONDS = 8
 
 WINRM_REACHABILITY_POLL_INTERVAL_SECONDS = 10
 WINRM_REACHABILITY_MAX_ATTEMPTS = 60  # ~10 minutes
@@ -187,13 +200,11 @@ async def run_deployment(ctx, deployment_id: str) -> None:
             await _state_machine.transition(db, deployment, DeploymentState.BOOTING)
             await driver.power_on(vm_ref)
 
-            # Best-effort: Windows Setup boots from optical media only
-            # after a keypress nobody's there to give it, see
-            # send_enter_keypress's docstring and BOOT_KEYPRESS_ATTEMPTS
-            # above. If this window is somehow missed entirely (the VM's
-            # own boot-order retry kicks in 10s later, see
-            # esxi.py set_boot_order), the deployment timeout is what
-            # catches it, not worth failing the deployment over.
+            # Best-effort, two phases, see the constants' docstrings above.
+            # If either window is somehow missed entirely (the VM's own
+            # boot-order retry kicks in 10s later for phase 1, see esxi.py
+            # set_boot_order), the deployment timeout is what catches it,
+            # not worth failing the deployment over.
             for _ in range(BOOT_KEYPRESS_ATTEMPTS):
                 await asyncio.sleep(BOOT_KEYPRESS_INTERVAL_SECONDS)
                 try:
@@ -202,6 +213,13 @@ async def run_deployment(ctx, deployment_id: str) -> None:
                     pass
 
             await log(db, deployment, "booting", "VM powered on, awaiting guest OS install callback")
+
+            for _ in range(LANGUAGE_SCREEN_KEYPRESS_ATTEMPTS):
+                await asyncio.sleep(LANGUAGE_SCREEN_KEYPRESS_INTERVAL_SECONDS)
+                try:
+                    await driver.send_enter_keypress(vm_ref)
+                except Exception:  # noqa: BLE001 - best-effort
+                    pass
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator via the log/error_message
             await _fail(ctx, db, driver, deployment, f"failed while {current_step}: {exc}", traceback.format_exc())
             return

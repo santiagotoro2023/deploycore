@@ -511,12 +511,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   to a given hypervisor's datastore once per ISO asset, not once per deployment: a second
                   deployment from the same template (or a bulk deployment creating many at once) reuses
                   the copy already there instead of re-transferring a multi-gigabyte file every time.</>,
-                <>The answer file ships on a floppy image, not a second CD-ROM: Windows Setup's very
-                  first implicit answer-file check, the one deciding whether to show the interactive
-                  language/time/keyboard screen, runs before its driver stack is fully up and doesn't
-                  reliably see a second CD-ROM at that point, but a floppy is both checked earlier and
-                  higher-precedence (Microsoft's own documented search order), so the whole install stays
-                  unattended instead of stalling on that one screen.</>,
+                <>The answer file ships on a floppy image, not a second CD-ROM: a second CD-ROM works
+                  for most of the answer file (Windows Setup does find and apply it, disk partitioning,
+                  install, domain join, admin password, all unattended), but empirically not reliably for
+                  the very first implicit check, the one deciding whether to show the interactive
+                  language/time/keyboard screen, which runs before Setup's driver stack is fully up. A
+                  floppy is both checked earlier and higher-precedence there (Microsoft's own documented
+                  search order), which is more reliable for that one specific check.</>,
                 <>Windows Setup's own boot loader shows a "Press any key to boot from CD or DVD..."
                   prompt before it'll boot the Windows ISO itself, in both BIOS and EFI mode, with nobody
                   at the console to press it, so right after power-on DeployCore sends a synthetic Enter
@@ -525,6 +526,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   would start landing on it instead). The VM's boot order also auto-retries on its own
                   (ESXi's <Code>bootRetryEnabled</Code>) if the whole boot sequence fails, since a freshly
                   attached CD-ROM isn't always connected the instant the VM powers on.</>,
+                <>Even with a correctly delivered floppy, that language/time/keyboard screen still shows
+                  up unconditionally on some Windows builds, its values already correct, just needing a
+                  confirmation click. DeployCore handles this the same way as the boot prompt above: a
+                  second, sparser round of synthetic Enter keypresses (one every 8 seconds for about two
+                  minutes), timed for whenever Setup's GUI actually finishes loading, which varies a lot
+                  more than the boot prompt's own timing, so the whole install stays hands-off instead of
+                  stalling there.</>,
                 <>The guest calls back to DeployCore once Windows Setup finishes (a single-use token per
                   deployment), which is what advances the state from booting to installing_os.</>,
                 <>Post-install runs over WinRM once the guest reports an IP: apply static network config

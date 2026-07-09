@@ -382,17 +382,22 @@ pending → creating_vm → booting → installing_os → post_install → confi
   the answer file, builds a per-deployment answer-file floppy image,
   uploads the Windows ISO and the answer-file floppy to the hypervisor
   datastore, creates the VM (UEFI firmware, PVSCSI controller on ESXi),
-  attaches media (a floppy, not a second CD-ROM: Windows Setup's very
-  first implicit answer-file check, the one that decides whether to show
-  the interactive language/time/keyboard screen, runs before its driver
-  stack is fully up and doesn't reliably see a second CD-ROM at that
-  point, a floppy is both checked earlier and higher-precedence), sets
-  the boot order with a retry (ESXi's `bootRetryEnabled`, since a
-  freshly attached CD-ROM isn't always connected the instant the VM
-  powers on) and sends a synthetic Enter keypress for a few seconds
-  right after power-on (Windows Setup's boot loader waits for a keypress
-  before booting from optical media, in both BIOS and EFI mode, with
-  nobody at the console to give it one), then powers on. The guest's
+  attaches media (a floppy, not a second CD-ROM: a second CD-ROM does get
+  found and applied for most of the answer file, but empirically not
+  reliably for Setup's very first implicit check, the one deciding
+  whether to show the interactive language/time/keyboard screen, which
+  runs before its driver stack is fully up; a floppy is both checked
+  earlier and higher-precedence there per Microsoft's own documented
+  search order), sets the boot order with a retry (ESXi's
+  `bootRetryEnabled`, since a freshly attached CD-ROM isn't always
+  connected the instant the VM powers on), then powers on and sends two
+  rounds of synthetic Enter keypresses: a tight one right after power-on
+  (Windows Setup's boot loader waits for a keypress before booting from
+  optical media, in both BIOS and EFI mode, with nobody at the console to
+  give it one) and a sparser one over the next couple of minutes (that
+  language/time/keyboard screen shows up unconditionally on some Windows
+  builds even with a correctly delivered answer file, its values already
+  correct, just needing a confirmation click). The guest's
   `FirstLogonCommands` enable WinRM and call back to
   `/api/callback/{token}` (single-use per-deployment token) once Windows
   Setup finishes, which is what advances `booting → installing_os`
