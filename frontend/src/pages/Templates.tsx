@@ -240,6 +240,10 @@ function TemplateForm({
   const [diskProvisioning, setDiskProvisioning] = useState<DiskProvisioning>(existing?.disk_provisioning ?? "thin");
   const [networkName, setNetworkName] = useState(existing?.network_name ?? "");
   const [networkAdapterType, setNetworkAdapterType] = useState<NetworkAdapterType>(existing?.network_adapter_type ?? "vmxnet3");
+  const [vlanId, setVlanId] = useState(existing?.vlan_id?.toString() ?? "");
+  const [locale, setLocale] = useState(existing?.locale ?? "en-US");
+  const [timezone, setTimezone] = useState(existing?.timezone ?? "UTC");
+  const [keyboardLayout, setKeyboardLayout] = useState(existing?.keyboard_layout ?? "en-US");
   const [localAdminPassword, setLocalAdminPassword] = useState("");
   const [domainJoinEnabled, setDomainJoinEnabled] = useState(existing?.domain_join_enabled ?? false);
   const [domainFqdn, setDomainFqdn] = useState(existing?.domain_fqdn ?? "");
@@ -270,6 +274,10 @@ function TemplateForm({
       disk_provisioning: diskProvisioning,
       network_name: networkName,
       network_adapter_type: networkAdapterType,
+      vlan_id: vlanId ? Number(vlanId) : null,
+      locale,
+      timezone,
+      keyboard_layout: keyboardLayout,
       local_admin_password: localAdminPassword,
       domain_join_enabled: domainJoinEnabled,
       domain_fqdn: domainJoinEnabled ? domainFqdn : null,
@@ -359,13 +367,40 @@ function TemplateForm({
           The port group / vSwitch network name exactly as it appears in ESXi or vCenter networking, not a
           Windows network name, this is what the new VM's virtual NIC attaches to.
         </p>
-        <div className="mb-3 grid grid-cols-2 gap-3">
+        <div className="mb-3 grid grid-cols-3 gap-3">
           <input className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={networkName} onChange={(e) => setNetworkName(e.target.value)} />
           <Select className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={networkAdapterType} onChange={(e) => setNetworkAdapterType(e.target.value as NetworkAdapterType)}>
             <option value="vmxnet3">VMXNET3</option>
             <option value="e1000">E1000</option>
             <option value="e1000e">E1000E</option>
           </Select>
+          <input
+            type="number"
+            placeholder="VLAN ID (optional)"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+            value={vlanId}
+            onChange={(e) => setVlanId(e.target.value)}
+          />
+        </div>
+
+        <p className="mb-1 text-xs text-neutral-400">
+          Locale and keyboard layout are Windows identifiers (e.g. <code>de-DE</code>, <code>de-CH</code>),
+          not IETF/IANA ones. Timezone is a Windows time zone name (e.g.{" "}
+          <code>W. Europe Standard Time</code>), not an IANA one like "Europe/Zurich".
+        </p>
+        <div className="mb-3 grid grid-cols-3 gap-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Locale</label>
+            <input className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={locale} onChange={(e) => setLocale(e.target.value)} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Timezone</label>
+            <input className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Keyboard layout</label>
+            <input className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={keyboardLayout} onChange={(e) => setKeyboardLayout(e.target.value)} />
+          </div>
         </div>
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
