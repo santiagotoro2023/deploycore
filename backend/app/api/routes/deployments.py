@@ -34,7 +34,7 @@ from app.schemas.deployment import (
 )
 from app.security.rbac import get_current_user, require_role
 from app.services import audit, notifications, webhooks
-from app.services.deployment_service import TERMINAL_STATES, InvalidTransition, log, retry_deployment
+from app.services.deployment_service import InvalidTransition, log, retry_deployment
 
 router = APIRouter(tags=["deployments"])
 
@@ -424,15 +424,14 @@ async def delete_deployment(
     """Soft delete: hides the deployment from lists, the dashboard, and its
     own detail page, but its row, log lines, state transitions, and health
     checks all stay in the database untouched, still reachable through
-    /history and /logs above by anyone who has the id. Blocked only while
-    the deployment is still actively running, not on a VM still existing:
-    this deliberately does not touch the hypervisor at all, if a VM exists
-    it's simply left running, untracked by DeployCore from here on. Use
-    "Delete VM" first (a separate, already-destructive action) if you want
-    it gone too."""
+    /history and /logs above by anyone who has the id. Doesn't touch the
+    hypervisor at all, if a VM exists it's simply left running, untracked
+    by DeployCore from here on; use "Delete VM" first (a separate,
+    already-destructive action) if you want that gone too. Allowed at any
+    stage, not just terminal ones: if the pipeline is still actively
+    running, it keeps running in the background regardless (this doesn't
+    cancel it), just no longer visible anywhere in the UI."""
     deployment = await _get_org_deployment(db, org_id, deployment_id)
-    if deployment.state not in TERMINAL_STATES:
-        raise HTTPException(status.HTTP_409_CONFLICT, "deployment is still running, wait for it to finish or fail")
     deployment.deleted_at = utcnow()
     audit.record(
         db, action="deployment.delete", target_type="deployment",

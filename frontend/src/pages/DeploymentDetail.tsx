@@ -10,7 +10,6 @@ import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
 
 const STAGES = ["pending", "creating_vm", "booting", "installing_os", "post_install", "configuring", "completed"];
-const TERMINAL_STATES = new Set(["completed", "failed"]);
 
 export default function DeploymentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -106,7 +105,7 @@ export default function DeploymentDetail() {
   const canRetry = deployment.state === "failed" && roleAtLeast(effectiveRole(selectedOrgId), "operator");
   const canOperateVm = roleAtLeast(effectiveRole(selectedOrgId), "operator");
   const canDeleteVm = roleAtLeast(effectiveRole(selectedOrgId), "admin");
-  const canDeleteDeployment = canDeleteVm && TERMINAL_STATES.has(deployment.state);
+  const canDeleteDeployment = canDeleteVm;
   const currentStageIndex = STAGES.indexOf(deployment.state);
 
   async function retry() {
@@ -376,9 +375,16 @@ export default function DeploymentDetail() {
         open={confirmDeleteDeployment}
         title="Delete deployment"
         message={
-          deployment.vm_moref
-            ? "Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either. Its VM is not touched and keeps running on the hypervisor, DeployCore just stops tracking it here. This cannot be undone from here."
-            : "Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either. This cannot be undone from here."
+          [
+            "Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either.",
+            deployment.vm_moref &&
+              "Its VM is not touched and keeps running on the hypervisor, DeployCore just stops tracking it here.",
+            !["completed", "failed"].includes(deployment.state) &&
+              "It's still in progress, deleting it doesn't stop that, the pipeline keeps running in the background.",
+            "This cannot be undone from here.",
+          ]
+            .filter(Boolean)
+            .join(" ")
         }
         confirmLabel="Delete deployment"
         onConfirm={deleteDeployment}
