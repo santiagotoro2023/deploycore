@@ -225,6 +225,31 @@ class ESXiDriver(HypervisorDriver):
     async def attach_floppy(self, vm_ref: str, floppy_path: str, unit: int = 0) -> None:
         await asyncio.to_thread(self._attach_floppy_sync, vm_ref, floppy_path, unit)
 
+    def _detach_floppy_sync(self, vm_ref: str, unit: int) -> None:
+        service_instance = self._connect_sync()
+        try:
+            vm = self._find_vm_sync(service_instance, vm_ref)
+            existing = next(
+                (
+                    d
+                    for d in vm.config.hardware.device
+                    if isinstance(d, vim.vm.device.VirtualFloppy) and d.unitNumber == unit
+                ),
+                None,
+            )
+            if existing is None:
+                return
+            device_spec = vim.vm.device.VirtualDeviceSpec()
+            device_spec.device = existing
+            device_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+            config = vim.vm.ConfigSpec(deviceChange=[device_spec])
+            WaitForTask(vm.ReconfigVM_Task(spec=config))
+        finally:
+            connect.Disconnect(service_instance)
+
+    async def detach_floppy(self, vm_ref: str, unit: int = 0) -> None:
+        await asyncio.to_thread(self._detach_floppy_sync, vm_ref, unit)
+
     def _detach_iso_sync(self, vm_ref: str, unit: int) -> None:
         service_instance = self._connect_sync()
         try:

@@ -320,10 +320,19 @@ org-scoped copy.
   layouts and templates already are (`POST /api/iso-assets/global` and its
   own chunk/finalize/delete routes, global-admin only)
 - Chunked upload from the browser (8 MB chunks over sequential POSTs, then
-  a finalize call that assembles the file, computes its SHA-256, and marks
-  it `complete`), built for multi-gigabyte ISOs without loading the whole
-  file into memory client- or server-side
-- Delete removes both the database row and the file on disk
+  a finalize call that assembles the file, computes its SHA-256, patches
+  out the boot prompt for a `windows_iso` (see the deployment pipeline
+  section below), and marks it `complete`), built for multi-gigabyte ISOs
+  without loading the whole file into memory client- or server-side
+- Delete removes the database row and the file on disk. A template that
+  references the ISO doesn't block the delete: `deployment_templates
+  .iso_asset_id` is `ON DELETE SET NULL` (migration 0021), so the delete
+  commits first and the referencing template just has its ISO cleared and
+  can't deploy until a new one is attached, exactly what it says on the
+  confirm dialog. The delete route also unlinks the file from disk only
+  after that commit succeeds, not before, so a delete that fails for any
+  reason never leaves an orphaned file with a database row still pointing
+  at it
 
 ### Deployment Templates
 - Org-scoped or global (global templates are inherited read-only by every
@@ -333,7 +342,9 @@ org-scoped copy.
   disk layout, CPU count and cores per socket, RAM (MB), disk size (GB) and
   disk provisioning type (thin / thick lazily zeroed / thick eagerly
   zeroed), network name and network adapter type (VMXNET3, E1000, or
-  E1000E), VLAN ID, locale/timezone/keyboard layout, local administrator
+  E1000E), optional VLAN ID, locale/timezone/keyboard layout as Windows
+  identifiers not IETF/IANA ones (new templates default to `de-DE`/
+  `W. Europe Standard Time`/`de-CH`), local administrator
   password (write-only), optional domain join (FQDN, join account, join
   credential [write-only], target OU, and timing, `answer_file` bakes the
   join into the unattended install, `post_install` joins afterward over
@@ -407,7 +418,13 @@ pending → creating_vm → booting → installing_os → post_install → confi
   answer file (including the specialize-pass locale, see below) applies
   correctly. The guest's `FirstLogonCommands` enable WinRM and call back to
   `/api/callback/{token}` (single-use per-deployment token) once Windows
-  Setup finishes, which is what advances `booting → installing_os`
+  Setup finishes, which is what advances `booting → installing_os`. That
+  callback is also the first point DeployCore can be sure Setup is done
+  with the install media for good (post-install runs entirely over WinRM
+  from here on): `wait_for_callback` ejects the Windows/VirtIO ISOs
+  (drive kept, emptied), removes the floppy device outright, and deletes
+  the per-deployment answer-file floppy from the datastore, all
+  best-effort, never worth failing an otherwise-successful deployment over
 - Locale/keyboard are set in two places in the answer file:
   `Microsoft-Windows-International-Core-WinPE` (windowsPE pass, Setup's own
   UI only) and `Microsoft-Windows-International-Core` (specialize pass, the

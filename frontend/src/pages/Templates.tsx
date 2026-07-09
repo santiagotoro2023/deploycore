@@ -241,9 +241,9 @@ function TemplateForm({
   const [networkName, setNetworkName] = useState(existing?.network_name ?? "");
   const [networkAdapterType, setNetworkAdapterType] = useState<NetworkAdapterType>(existing?.network_adapter_type ?? "vmxnet3");
   const [vlanId, setVlanId] = useState(existing?.vlan_id?.toString() ?? "");
-  const [locale, setLocale] = useState(existing?.locale ?? "en-US");
-  const [timezone, setTimezone] = useState(existing?.timezone ?? "UTC");
-  const [keyboardLayout, setKeyboardLayout] = useState(existing?.keyboard_layout ?? "en-US");
+  const [locale, setLocale] = useState(existing?.locale ?? "de-DE");
+  const [timezone, setTimezone] = useState(existing?.timezone ?? "W. Europe Standard Time");
+  const [keyboardLayout, setKeyboardLayout] = useState(existing?.keyboard_layout ?? "de-CH");
   const [localAdminPassword, setLocalAdminPassword] = useState("");
   const [domainJoinEnabled, setDomainJoinEnabled] = useState(existing?.domain_join_enabled ?? false);
   const [domainFqdn, setDomainFqdn] = useState(existing?.domain_fqdn ?? "");
@@ -384,12 +384,9 @@ function TemplateForm({
         </div>
 
         <p className="mb-1 text-xs text-neutral-400">
-          Locale and keyboard layout are Windows identifiers (e.g. <code>de-DE</code>, <code>de-CH</code>),
-          not IETF/IANA ones. Timezone is a Windows time zone name (e.g.{" "}
-          <code>W. Europe Standard Time</code>), not an IANA one like "Europe/Zurich". For keyboard layout, a
-          bare locale tag is mapped to that locale's own named keyboard automatically (e.g. <code>de-CH</code>{" "}
-          selects the Swiss German layout, not plain German); for any other layout, enter an explicit{" "}
-          <code>LCID:KLID</code> pair instead (e.g. <code>0409:00020409</code> for US-International).
+          Windows identifiers, not IETF/IANA (e.g. <code>de-DE</code>, <code>W. Europe Standard Time</code>).
+          Keyboard layout auto-resolves to that locale's own named layout; for anything else use an explicit{" "}
+          <code>LCID:KLID</code> pair.
         </p>
         <div className="mb-3 grid grid-cols-3 gap-3">
           <div>

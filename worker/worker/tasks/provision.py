@@ -75,6 +75,32 @@ async def _cleanup_answer_floppy(driver: HypervisorDriver, deployment: Deploymen
         deployment.answer_iso_remote_path = None
 
 
+async def _eject_install_media(db, driver: HypervisorDriver, deployment: Deployment) -> None:
+    """Windows Setup and its FirstLogonCommands (which is what calls back)
+    are the only things that ever read the Windows/VirtIO ISOs or the
+    answer-file floppy; once the callback has landed, nothing needs any of
+    them again; the rest of post-install runs entirely over WinRM. Ejects
+    the CD-ROMs (kept as empty drives, matching detach_iso's existing
+    eject-not-remove behavior), removes the floppy device outright (it has
+    no purpose beyond delivering the answer file), and deletes the
+    per-deployment answer floppy image from the datastore, the same
+    cleanup _fail() already did on the failure path, now also on success.
+    Best-effort throughout: never worth failing an otherwise-successful
+    deployment over leftover media."""
+    if deployment.vm_moref:
+        for unit in (WINDOWS_ISO_UNIT, VIRTIO_ISO_UNIT):
+            try:
+                await driver.detach_iso(deployment.vm_moref, unit)
+            except Exception:  # noqa: BLE001 - best-effort
+                pass
+        try:
+            await driver.detach_floppy(deployment.vm_moref)
+        except Exception:  # noqa: BLE001 - best-effort
+            pass
+    await _cleanup_answer_floppy(driver, deployment)
+    await log(db, deployment, deployment.state.value, "install media unmounted and cleaned up")
+
+
 async def _fail(
     ctx, db, driver: HypervisorDriver, deployment: Deployment, message: str, traceback_text: str | None = None
 ) -> None:
@@ -233,13 +259,14 @@ async def wait_for_callback(ctx, deployment_id: str) -> None:
         if deployment is None or deployment.state in (DeploymentState.COMPLETED, DeploymentState.FAILED):
             return
 
+        host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
+        driver = get_driver(host)
+
         # If the guest's callback already landed (and flipped state past
-        # BOOTING) before this job even started, skip straight to
+        # BOOTING) before this job even started, skip straight to eject +
         # post-install instead of polling, the race is real since the
         # callback route and this job both react to the same VM boot.
         if deployment.state == DeploymentState.BOOTING:
-            host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
-            driver = get_driver(host)
             timeout_minutes = await settings_resolver.resolve(
                 db, "os_install_timeout_minutes", org_id=deployment.org_id, template_id=deployment.template_id
             )
@@ -253,6 +280,11 @@ async def wait_for_callback(ctx, deployment_id: str) -> None:
             else:
                 await _fail(ctx, db, driver, deployment, "timed out waiting for the guest OS install callback")
                 return
+
+        # The callback only ever fires from FirstLogonCommands, i.e. Setup
+        # is fully done and the guest has booted its installed OS, the one
+        # point we can be sure the install media is safe to unmount.
+        await _eject_install_media(db, driver, deployment)
 
     await run_post_install(ctx, deployment_id)
 

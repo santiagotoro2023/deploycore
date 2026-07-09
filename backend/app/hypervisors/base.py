@@ -57,6 +57,13 @@ class HypervisorDriver(ABC):
         second CD-ROM."""
 
     @abstractmethod
+    async def detach_floppy(self, vm_ref: str, unit: int = 0) -> None:
+        """Removes the floppy device entirely (unlike detach_iso, which
+        ejects but keeps the CD-ROM device for potential reuse): the
+        answer-file floppy has exactly one job, delivering autounattend.xml
+        during Setup, and no purpose once the guest has called back."""
+
+    @abstractmethod
     async def set_boot_order(self, vm_ref: str, device_order: list[str]) -> None: ...
 
     @abstractmethod

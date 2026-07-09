@@ -372,10 +372,17 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
           <>
             <P>
               Uploads happen from the browser in 8&nbsp;MB chunks over sequential requests, then a
-              finalize call assembles the file and computes its SHA-256 checksum. This is deliberate:
-              multi-gigabyte ISOs upload reliably without ever holding the whole file in memory on either
-              end, and a flaky connection just means a slower upload, not a failed one. Deleting an ISO
-              asset removes both the database record and the file on disk immediately.
+              finalize call assembles the file, checksums it, and (for a Windows ISO) patches out the
+              install media's own "Press any key to boot from CD or DVD..." prompt, see "Unattended
+              Windows Setup, in depth" for exactly how. Chunking is deliberate: multi-gigabyte ISOs upload
+              reliably without ever holding the whole file in memory on either end, and a flaky connection
+              just means a slower upload, not a failed one.
+            </P>
+            <P>
+              Deleting an ISO asset removes the file from disk and the database record. If any template
+              still references it, that template's ISO is cleared rather than the delete being blocked,
+              the template survives but can't deploy until a new ISO is attached, same as a brand new
+              template that's never had one set.
             </P>
             <P>
               A global admin uploading an ISO gets an extra "Available to" choice in the upload dialog:
@@ -448,8 +455,11 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   name, it's what the new VM's virtual NIC attaches to. Also its{" "}
                   <strong>adapter type</strong> (VMXNET3, the paravirtualized default with the best
                   performance and the one to use unless you have a specific reason not to; E1000/E1000E
-                  emulate real Intel NICs, only needed for guest OS or driver compatibility). Also VLAN ID,
-                  locale, timezone, and keyboard layout.</>,
+                  emulate real Intel NICs, only needed for guest OS or driver compatibility). Also an
+                  optional VLAN ID, and locale/timezone/keyboard layout as Windows identifiers, not
+                  IETF/IANA ones (new templates default to <Code>de-DE</Code>/<Code>W. Europe Standard
+                  Time</Code>/<Code>de-CH</Code>; see "Unattended Windows Setup, in depth" for how keyboard
+                  layout resolves to an exact physical layout rather than just a language).</>,
                 "Local administrator password (write-only, never shown again after saving)",
                 <>Optional domain join: FQDN, join account, join credential (write-only), target OU, and
                   timing, either <Code>answer_file</Code> (baked into the unattended install) or{" "}
@@ -511,54 +521,18 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   to a given hypervisor's datastore once per ISO asset, not once per deployment: a second
                   deployment from the same template (or a bulk deployment creating many at once) reuses
                   the copy already there instead of re-transferring a multi-gigabyte file every time.</>,
-                <>A Windows install ISO is also rewritten once, the moment it finishes uploading into
-                  DeployCore (not per deployment), to remove its "Press any key to boot from CD or
-                  DVD..." prompt: every stock Windows ISO ships two UEFI boot images, the normal one that
-                  prints that prompt and waits forever for a keystroke, and a second, silent one
-                  (<Code>efisys_noprompt.bin</Code>) built by Microsoft for exactly this kind of
-                  unattended deployment. DeployCore finds both inside the ISO and swaps the silent one
-                  into the slot the boot catalog actually points at (via <Code>xorriso</Code>, rewriting
-                  only that one boot image and nothing else), so every VM built from that ISO from then on
-                  just boots straight into Setup with nobody watching. If a particular ISO turns out not
-                  to have that second boot image (non-standard media), the swap is skipped and the ISO is
-                  left untouched rather than failing the upload.</>,
-                <>The answer file ships on a floppy image, not a second CD-ROM: a second CD-ROM works
-                  for most of the answer file (Windows Setup does find and apply it, disk partitioning,
-                  install, domain join, admin password, all unattended), but empirically not reliably for
-                  the very first implicit check, the one deciding whether to show the interactive
-                  language/time/keyboard screen, which runs before Setup's driver stack is fully up. A
-                  floppy is both checked earlier and higher-precedence there (Microsoft's own documented
-                  search order), which is more reliable for that one specific check.</>,
-                <>With the boot-prompt swap above in place, most deployments never need it, but DeployCore
-                  still sends a synthetic Enter keypress to the VM every second for about 15 seconds right
-                  after power-on as a safety net (for an ISO the swap skipped, or any other firmware
-                  prompt), long enough to bracket when a "press any key" prompt would appear, short enough
-                  to stop before Setup's GUI is up and blind Enters would start landing on it instead. The
-                  VM's boot order also auto-retries on its own (ESXi's <Code>bootRetryEnabled</Code>) if
-                  the whole boot sequence fails, since a freshly attached CD-ROM isn't always connected the
-                  instant the VM powers on.</>,
-                <>The answer file sets locale/keyboard in two separate, differently-scoped places:
-                  <Code>Microsoft-Windows-International-Core-WinPE</Code> in the windowsPE pass (covers
-                  only Setup's own UI while it's running) and <Code>Microsoft-Windows-International-Core</Code>{" "}
-                  in the specialize pass (covers the actually-installed OS, the built-in Administrator and
-                  every new user). Only the first one existed originally, which meant even a perfectly
-                  applied answer file could leave the deployed machine itself on a default keyboard;
-                  DeployCore now sets both. Keyboard layout is expressed as an explicit
-                  <Code>LCID:KLID</Code> hex pair rather than a bare locale tag (e.g. <Code>0807:00000807</Code>{" "}
-                  for German (Switzerland)) since a bare tag only picks *a* default keyboard for that
-                  locale, not necessarily the one named after it; DeployCore resolves this automatically
-                  from the locale you enter for every keyboard layout it knows about (see the Templates
-                  page's field hint for the full list, or supply an explicit pair yourself for anything
-                  else). Windows Setup's own windowsPE-stage screen has a long-standing, still-open
-                  upstream quirk (reported against multiple Windows versions) where a small set of locales
-                  don't get their <Code>InputLocale</Code> honored on that one specific screen even though
-                  every other part of the answer file, including the specialize-pass value above, applies
-                  correctly; DeployCore's second, sparser round of synthetic Enter keypresses (one every 8
-                  seconds for about two minutes after the boot prompt, timed for whenever Setup's GUI
-                  actually finishes loading) exists to get past that screen automatically if it shows up,
-                  without changing what either component sets.</>,
+                <>The whole point is zero interaction: no "press any key" prompt (patched out of the ISO
+                  itself at upload time), no interactive language/keyboard screen, no clicking through
+                  OOBE. See <strong>"Unattended Windows Setup, in depth"</strong> for exactly how the boot
+                  prompt, the answer-file delivery, and locale/keyboard get handled, and what the two
+                  remaining synthetic-keypress fallbacks are actually for.</>,
                 <>The guest calls back to DeployCore once Windows Setup finishes (a single-use token per
-                  deployment), which is what advances the state from booting to installing_os.</>,
+                  deployment), which is what advances the state from booting to installing_os. That
+                  callback is also the point DeployCore is sure Setup is done with the install media for
+                  good: it ejects the Windows/VirtIO ISOs, removes the floppy device, and deletes the
+                  per-deployment answer-file floppy from the datastore, all best-effort and never worth
+                  failing an otherwise-successful deployment over. Nothing from here on (post-install runs
+                  entirely over WinRM) needs any of it.</>,
                 <>Post-install runs over WinRM once the guest reports an IP: apply static network config
                   if requested, install each selected Windows role, run post-install scripts in order,
                   join the domain here if configured for that timing, reboot, verify it comes back
@@ -585,16 +559,125 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               the list anymore, a pile of old failed attempts, one that's stuck mid-pipeline, say.
               Available at any stage, not just terminal ones. Deleting it doesn't touch the hypervisor at
               all: if a VM still exists for it, that VM keeps running exactly as before, DeployCore just
-              stops tracking it, it's no longer reachable through this deployment (use <strong>Delete
-              VM</strong> first, a separate, already-destructive action, if you want that gone too), and
-              if the pipeline is still actively running in the background worker, deleting the deployment
-              doesn't cancel it, that keeps going too, just with nothing in the UI showing it anymore.
+              stops tracking it, it's no longer reachable through this deployment or this UI at all (remove
+              it directly on the hypervisor if you want it gone too), and if the pipeline is still actively
+              running in the background worker, deleting the deployment doesn't cancel it, that keeps going
+              too, just with nothing in the UI showing it anymore.
               It's a soft delete: the deployment disappears from the list and dashboard counts and its
               own detail page stops resolving, but the row, its state history, and its log lines are not
               actually erased, both the <Code>/history</Code> and <Code>/logs</Code> API endpoints keep
               working for its id afterward. There's currently no UI to browse deleted deployments, this
               is meant as a safety margin (and an audit trail via the <Code>deployment.delete</Code>{" "}
               action, which records whether a VM was left running), not an undo button.
+            </P>
+          </>
+        ),
+      },
+      {
+        id: "unattended-setup",
+        title: "Unattended Windows Setup, in depth",
+        overview: (
+          <>
+            <P>
+              Getting a Windows Server install to run with genuinely zero interaction, no "press any key,"
+              no language/keyboard screen to click through, no OOBE, took several rounds of real-world
+              testing against a physical host to get right. This article is the full account of how each
+              piece works, since the short version in the Deployments article doesn't have room for it.
+            </P>
+          </>
+        ),
+        deepDive: (
+          <>
+            <P>
+              <strong>The "Press any key to boot from CD or DVD..." prompt.</strong> This isn't part of
+              Windows Setup, it's the Windows install ISO's own UEFI boot loader, and Setup has no say over
+              it via <Code>autounattend.xml</Code>, there's no answer-file setting that suppresses it.
+              Every stock Windows install ISO ships two UEFI boot images in its El Torito boot catalog: the
+              normal one that prints the prompt and waits indefinitely for a keystroke, and a second,
+              silent one (<Code>efi/microsoft/boot/efisys_noprompt.bin</Code>) that Microsoft built for
+              exactly this scenario, unattended deployment tooling like WDS/MDT relies on it. DeployCore
+              patches this once, the moment a Windows ISO finishes uploading (not per deployment): it finds
+              both boot images inside the ISO and rewrites the boot catalog's actual UEFI entry to point at
+              the silent one's content instead, using <Code>xorriso</Code> in "modify, don't fully rebuild"
+              mode so nothing else about the ISO changes. If a particular ISO doesn't have that second boot
+              image (non-standard media), the swap is skipped and the ISO is left exactly as uploaded
+              rather than failing the upload over it.
+            </P>
+            <P>
+              <strong>Delivering the answer file.</strong> It ships on a floppy image, not a second
+              CD-ROM. A second CD-ROM does work for most of the answer file (Windows Setup finds and
+              applies it: disk partitioning, install, domain join, admin password, all unattended), but
+              empirically not reliably for the very first implicit check, the one deciding whether to show
+              the interactive language/time/keyboard screen at all, which runs before Setup's driver stack
+              is fully up. A floppy is both checked earlier and higher-precedence there, per Microsoft's
+              own documented implicit-search order for removable media, which is what makes it reliable
+              for that one specific check.
+            </P>
+            <P>
+              <strong>Locale, system locale, and keyboard layout.</strong> These get set in two separate,
+              differently-scoped places in the answer file, and DeployCore didn't originally set both:
+            </P>
+            <List
+              items={[
+                <><Code>Microsoft-Windows-International-Core-WinPE</Code> in the windowsPE pass covers only
+                  Windows Setup's own UI while it's running, it has zero effect on the OS once installed.</>,
+                <><Code>Microsoft-Windows-International-Core</Code> in the specialize pass covers the
+                  actually-installed OS, the built-in Administrator account and every new user profile. This
+                  is the one that was missing: even a perfectly applied answer file could leave the deployed
+                  machine itself on a default keyboard, since nothing had ever told the installed OS what to
+                  use. DeployCore sets both now.</>,
+              ]}
+            />
+            <P>
+              Keyboard layout is rendered as an explicit <Code>LCID:KLID</Code> hex pair (e.g.{" "}
+              <Code>0807:00000807</Code> for German (Switzerland)), not the bare locale tag you type into
+              the Templates form, because a bare tag only picks <em>a</em> default keyboard for that locale,
+              not necessarily the one named after it, a bare <Code>de-CH</Code> lands on the plain German
+              layout, not Swiss German. DeployCore resolves this automatically for every locale it has a
+              known keyboard mapping for (the German-, French-, and Italian-speaking European locales and
+              their neighbors, see the Templates page's field hint); type a value that already contains a{" "}
+              <Code>:</Code> and it's passed through untouched instead, for anything outside that table or
+              a non-default keyboard on a locale that is in it.
+            </P>
+            <P>
+              Windows Setup's own windowsPE-stage screen has a long-standing, still-open upstream quirk
+              (reported by others against multiple Windows versions, on locales other than the ones
+              DeployCore was tested against) where a small set of locales don't get their{" "}
+              <Code>InputLocale</Code> honored on that one specific screen, even though every other part of
+              the answer file, including the specialize-pass value above, applies correctly. Nobody in the
+              community has a clean, answer-file-only fix for it. This is what the second, sparser round of
+              synthetic Enter keypresses (below) exists to get past, if it shows up; it has nothing to do
+              with locale correctness, which is already handled by the time that screen would appear.
+            </P>
+            <P>
+              <strong>The two keypress fallbacks that remain.</strong> With the boot-prompt ISO patch in
+              place, most deployments never need either of these, they're safety nets, not the primary
+              mechanism:
+            </P>
+            <List
+              items={[
+                <>A tight round right after power-on, one synthetic Enter per second for about 15 seconds,
+                  for an ISO the boot-prompt patch was skipped on (or any other firmware prompt). Sized to
+                  bracket when a "press any key" prompt would appear and stop before Setup's GUI is up,
+                  where blind Enters would start landing on real dialogs instead. The VM's boot order also
+                  auto-retries on its own (ESXi's <Code>bootRetryEnabled</Code>) if the whole boot sequence
+                  fails, since a freshly attached CD-ROM isn't always connected the instant the VM powers
+                  on.</>,
+                <>A sparser round after that, one Enter every 8 seconds for about two minutes, timed for
+                  whenever Setup's GUI actually finishes loading (which varies far more than the boot
+                  prompt's own timing), for the windowsPE-stage language/keyboard screen quirk above.</>,
+              ]}
+            />
+            <P>
+              <strong>Cleaning up after Setup is done.</strong> The guest's <Code>FirstLogonCommands</Code>{" "}
+              call back to DeployCore only once Windows Setup has fully finished, OOBE included, and the
+              guest has booted into the installed OS for the first time, that's the one point it's safe to
+              say the install media is no longer needed by anything (post-install runs entirely over WinRM
+              afterward). That callback is what DeployCore waits for before it ejects the Windows and
+              VirtIO ISOs (drive kept, just emptied, matching how you'd eject a real disc), removes the
+              floppy device entirely (it only ever had one job), and deletes the per-deployment answer-file
+              floppy image from the datastore. All of this is best-effort: a failure here is logged but
+              never fails an otherwise-successful deployment.
             </P>
           </>
         ),

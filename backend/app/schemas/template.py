@@ -23,9 +23,9 @@ class DeploymentTemplateCreate(BaseModel):
     network_name: str
     network_adapter_type: NetworkAdapterType = NetworkAdapterType.VMXNET3
     vlan_id: int | None = None
-    locale: str = "en-US"
-    timezone: str = "UTC"
-    keyboard_layout: str = "en-US"
+    locale: str = "de-DE"
+    timezone: str = "W. Europe Standard Time"
+    keyboard_layout: str = "de-CH"
     local_admin_password: str
     domain_join_enabled: bool = False
     domain_fqdn: str | None = None
