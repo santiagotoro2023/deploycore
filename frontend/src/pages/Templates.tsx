@@ -386,7 +386,10 @@ function TemplateForm({
         <p className="mb-1 text-xs text-neutral-400">
           Locale and keyboard layout are Windows identifiers (e.g. <code>de-DE</code>, <code>de-CH</code>),
           not IETF/IANA ones. Timezone is a Windows time zone name (e.g.{" "}
-          <code>W. Europe Standard Time</code>), not an IANA one like "Europe/Zurich".
+          <code>W. Europe Standard Time</code>), not an IANA one like "Europe/Zurich". For keyboard layout, a
+          bare locale tag is mapped to that locale's own named keyboard automatically (e.g. <code>de-CH</code>{" "}
+          selects the Swiss German layout, not plain German); for any other layout, enter an explicit{" "}
+          <code>LCID:KLID</code> pair instead (e.g. <code>0409:00020409</code> for US-International).
         </p>
         <div className="mb-3 grid grid-cols-3 gap-3">
           <div>

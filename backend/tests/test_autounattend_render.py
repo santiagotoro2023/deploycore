@@ -173,3 +173,32 @@ def test_ui_language_has_a_fallback():
     )[0]
     assert winpe_intl.xpath("string(u:UILanguageFallback)", namespaces=NS) == "de-CH"
     assert winpe_intl.xpath("string(u:SetupUILanguage/u:UILanguage)", namespaces=NS) == "de-CH"
+
+
+def test_input_locale_resolves_bare_locale_tag_to_named_keyboard():
+    """A bare "de-CH" InputLocale picks *a* default keyboard for that
+    locale, not necessarily the Swiss German one, Setup silently landed on
+    the plain German layout instead. The documented fix is the explicit
+    "LCID:KLID" pair, which for a locale's namesake keyboard is always its
+    LCID hex with "0000" prefixed (e.g. "0807:00000807" for de-CH, per
+    Microsoft's own sample answer files and the MS-LCID reference)."""
+    template = _make_template(locale="de-CH", keyboard_layout="de-CH")
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+
+    winpe_intl = root.xpath(
+        "//u:component[@name='Microsoft-Windows-International-Core-WinPE']", namespaces=NS
+    )[0]
+    assert winpe_intl.xpath("string(u:InputLocale)", namespaces=NS) == "0807:00000807"
+
+
+def test_input_locale_passes_through_explicit_lcid_klid_pair():
+    """A value already in "LCID:KLID" form covers a locale outside our
+    known-name table, or a non-default keyboard on a supported one, and
+    must not be second-guessed."""
+    template = _make_template(keyboard_layout="0409:00020409")
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+
+    winpe_intl = root.xpath(
+        "//u:component[@name='Microsoft-Windows-International-Core-WinPE']", namespaces=NS
+    )[0]
+    assert winpe_intl.xpath("string(u:InputLocale)", namespaces=NS) == "0409:00020409"
