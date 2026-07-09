@@ -64,6 +64,12 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
     callback_token_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     vm_moref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     answer_iso_remote_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # The exact autounattend.xml this deployment actually shipped, stored
+    # once rendered (see provision.py), not re-derived on demand: the
+    # template/disk layout it came from can change afterward, and this
+    # should keep reflecting what actually ran, not what those would
+    # produce now.
+    rendered_autounattend: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(

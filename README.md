@@ -599,6 +599,7 @@ minimum effective role for the request's organization unless marked
 | GET | `.../deployments/{deployment_id}` | readonly | |
 | GET | `.../deployments/{deployment_id}/history` | readonly | state transitions |
 | GET | `.../deployments/{deployment_id}/logs` | readonly | |
+| GET | `.../deployments/{deployment_id}/answer-file` | readonly | the exact autounattend.xml this deployment shipped with; `404` if not rendered yet |
 | GET | `.../deployments/{deployment_id}/health-history` | readonly | last 200 health checks |
 | GET | `.../deployments/{deployment_id}/events` | readonly | SSE stream |
 | POST | `.../deployments/{deployment_id}/retry` | operator | only from `failed` |

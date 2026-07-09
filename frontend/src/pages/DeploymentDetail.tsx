@@ -23,6 +23,10 @@ export default function DeploymentDetail() {
   const [confirmRetry, setConfirmRetry] = useState(false);
   const [confirmDeleteDeployment, setConfirmDeleteDeployment] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [answerFile, setAnswerFile] = useState<string | null>(null);
+  const [showAnswerFile, setShowAnswerFile] = useState(false);
+  const [answerFileError, setAnswerFileError] = useState<string | null>(null);
+  const [loadingAnswerFile, setLoadingAnswerFile] = useState(false);
   const [powerState, setPowerState] = useState<string | null>(null);
   const [powerBusy, setPowerBusy] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
@@ -150,6 +154,36 @@ export default function DeploymentDetail() {
       setConfirmDeleteDeployment(false);
       setDeleteError(err instanceof ApiError ? err.message : "Failed to delete deployment.");
     }
+  }
+
+  async function toggleAnswerFile() {
+    if (showAnswerFile) {
+      setShowAnswerFile(false);
+      return;
+    }
+    setShowAnswerFile(true);
+    if (answerFile !== null || !selectedOrgId || !id) return;
+    setLoadingAnswerFile(true);
+    setAnswerFileError(null);
+    try {
+      const { xml } = await api.get<{ xml: string }>(`/organizations/${selectedOrgId}/deployments/${id}/answer-file`);
+      setAnswerFile(xml);
+    } catch (err) {
+      setAnswerFileError(
+        err instanceof ApiError && err.status === 404
+          ? "Not rendered yet, this deployment hasn't reached that stage."
+          : err instanceof ApiError
+            ? err.message
+            : "Failed to load the answer file.",
+      );
+    } finally {
+      setLoadingAnswerFile(false);
+    }
+  }
+
+  function downloadAnswerFile() {
+    if (!deployment || !answerFile) return;
+    downloadText(`deployment-${deployment.hostname}-autounattend.xml`, answerFile);
   }
 
   function downloadFullLog() {
@@ -334,6 +368,37 @@ export default function DeploymentDetail() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <button
+            className="text-sm font-semibold text-neutral-700 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100"
+            onClick={toggleAnswerFile}
+          >
+            {showAnswerFile ? "Hide answer file" : "View answer file (autounattend.xml)"}
+          </button>
+          {showAnswerFile && answerFile && (
+            <button
+              className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
+              onClick={downloadAnswerFile}
+            >
+              <Download size={13} strokeWidth={1.75} />
+              Download
+            </button>
+          )}
+        </div>
+        {showAnswerFile && (
+          <>
+            {loadingAnswerFile && <p className="text-sm text-neutral-500">Loading...</p>}
+            {answerFileError && <p className="text-sm text-red-600">{answerFileError}</p>}
+            {answerFile && (
+              <pre className="max-h-96 overflow-auto rounded-lg border border-neutral-200 bg-neutral-950 p-4 font-mono text-xs text-neutral-200">
+                {answerFile}
+              </pre>
+            )}
+          </>
+        )}
       </div>
 
       <ConfirmDialog

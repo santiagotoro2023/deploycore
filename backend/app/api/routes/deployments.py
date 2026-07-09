@@ -23,6 +23,7 @@ from app.models.deployment import (
 from app.models.hypervisor import HypervisorHost
 from app.models.user import Role, User
 from app.schemas.deployment import (
+    AutounattendPreview,
     BulkDeploymentCreate,
     DeploymentCreate,
     DeploymentHealthCheckRead,
@@ -268,6 +269,26 @@ async def get_deployment_logs(
         select(DeploymentLogLine).where(DeploymentLogLine.deployment_id == deployment_id).order_by(DeploymentLogLine.ts)
     )
     return list(result.scalars().all())
+
+
+@router.get(
+    "/api/organizations/{org_id}/deployments/{deployment_id}/answer-file",
+    response_model=AutounattendPreview,
+    dependencies=[Depends(require_role(Role.READONLY))],
+)
+async def get_deployment_answer_file(
+    org_id: uuid.UUID, deployment_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> AutounattendPreview:
+    """The exact autounattend.xml this deployment actually shipped with,
+    stored once at render time (see worker/tasks/provision.py), not
+    re-derived from the current template/disk layout, which may have
+    changed since. Unlike Templates' .../preview (a hypothetical render
+    for a hostname that may not even be deployed yet), this is only
+    populated once a deployment has reached that point in its pipeline."""
+    deployment = await _get_org_deployment(db, org_id, deployment_id, include_deleted=True)
+    if deployment.rendered_autounattend is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not rendered yet")
+    return AutounattendPreview(xml=deployment.rendered_autounattend)
 
 
 @router.get(

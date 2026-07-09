@@ -464,7 +464,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               (credentials excluded from export; import sets a random placeholder admin password you must
               replace before it can deploy). <strong>Preview</strong> renders the exact{" "}
               <Code>autounattend.xml</Code> that a given hostname/network configuration would produce,
-              without creating a deployment, byte-identical to what actually ships.
+              without creating a deployment, byte-identical to what actually ships. For a deployment that
+              already exists, its own detail page has a <strong>View answer file</strong> section instead,
+              the exact XML that one actually shipped with, stored once rendered rather than re-derived,
+              so it stays correct even if the template it came from is edited afterward.
             </P>
           </>
         ),

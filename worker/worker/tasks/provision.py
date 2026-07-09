@@ -124,6 +124,7 @@ async def run_deployment(ctx, deployment_id: str) -> None:
 
             current_step = "rendering autounattend.xml"
             rendered_xml = render_autounattend(deployment, template, disk_layout)
+            deployment.rendered_autounattend = rendered_xml
 
             current_step = "building and uploading the answer-file ISO"
             await log(db, deployment, "creating_vm", f"building answer-file ISO for {deployment.hostname}")
