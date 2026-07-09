@@ -582,8 +582,9 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               items={[
                 <>The pipeline runs in the background worker, not the request that created it: it renders
                   the answer file, builds a per-deployment answer-file floppy image, uploads the Windows
-                  ISO and the floppy to the hypervisor datastore, creates the VM (UEFI firmware, PVSCSI
-                  controller), attaches media, and powers on. The Windows ISO itself is only ever uploaded
+                  ISO and the floppy to the hypervisor datastore, creates the VM (UEFI firmware, LSI Logic
+                  SAS controller, not VMware's own PVSCSI, see "Unattended Windows Setup, in depth" for
+                  why), attaches media, and powers on. The Windows ISO itself is only ever uploaded
                   to a given hypervisor's datastore once per ISO asset, not once per deployment: a second
                   deployment from the same template (or a bulk deployment creating many at once) reuses
                   the copy already there instead of re-transferring a multi-gigabyte file every time.</>,
@@ -657,6 +658,24 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
         ),
         deepDive: (
           <>
+            <P>
+              <strong>Disk controller: LSI Logic SAS, not PVSCSI.</strong> This is the first thing that
+              can go wrong, before Setup even boots. VMware's own paravirtualized SCSI controller
+              (PVSCSI) has real performance advantages, but Windows has no in-box driver for it at all:
+              a disk attached to a PVSCSI controller can't be recognized during Setup, or on the guest's
+              own later boots, without the VMware Tools PVSCSI driver injected into the install media
+              first (<Code>PnpCustomizationsWinPE</Code>/<Code>DriverPaths</Code>, plus registering it as
+              a boot-critical driver), which this pipeline doesn't do, there's no injection step anywhere
+              in it. Depending on the exact Windows build and ESXi version, that can look like it's
+              working, WinPE can sometimes still read/write the disk well enough to partition it and copy
+              files, right up until the point Setup reboots to continue on the disk it just installed to
+              and the guest's own kernel can't find a driver for the controller it's booting from, which
+              surfaces as a generic "the computer was unexpectedly restarted" dialog with no useful detail
+              about the real cause. LSI Logic SAS has been a Windows in-box driver for every Server
+              version this tool targets for well over a decade, no injection needed, at the cost of
+              PVSCSI's IOPS/CPU-overhead edge, worth it for a pipeline that has to boot correctly with
+              nobody watching every single time.
+            </P>
             <P>
               <strong>The "Press any key to boot from CD or DVD..." prompt.</strong> This isn't part of
               Windows Setup, it's the Windows install ISO's own UEFI boot loader, and Setup has no say over

@@ -76,7 +76,16 @@ class ESXiDriver(HypervisorDriver):
             datastore_name = spec.datastore or self.host.default_datastore
             controller = vim.vm.device.VirtualDeviceSpec()
             controller.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
-            controller.device = vim.vm.device.ParaVirtualSCSIController()
+            # LSI Logic SAS, not VMware's own PVSCSI: Windows has no inbox
+            # driver for PVSCSI at all, a paravirtualized boot disk on it
+            # can't be recognized during Setup or on subsequent boots
+            # without injecting the VMware Tools PVSCSI driver into the
+            # install media first, which this pipeline never does. LSI
+            # Logic SAS needs no driver injection, every Windows Server
+            # version has it inbox, at the cost of PVSCSI's (mainly
+            # high-IOPS-workload) performance edge, worth it for a
+            # zero-touch pipeline that has to just work unattended.
+            controller.device = vim.vm.device.VirtualLsiLogicSASController()
             controller.device.key = 1000
             controller.device.busNumber = 0
             controller.device.sharedBus = vim.vm.device.VirtualSCSIController.Sharing.noSharing

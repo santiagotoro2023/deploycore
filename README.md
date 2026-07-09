@@ -439,7 +439,13 @@ pending → creating_vm → booting → installing_os → post_install → confi
 - Pipeline (runs in the background worker, not the request thread): renders
   the answer file, builds a per-deployment answer-file floppy image,
   uploads the Windows ISO and the answer-file floppy to the hypervisor
-  datastore, creates the VM (UEFI firmware, PVSCSI controller on ESXi),
+  datastore, creates the VM (UEFI firmware, LSI Logic SAS controller on
+  ESXi, not VMware's own PVSCSI: Windows has no inbox driver for PVSCSI,
+  a boot disk on it can't be recognized during Setup or on later boots
+  without injecting the VMware Tools PVSCSI driver first, which nothing
+  here does; LSI Logic SAS needs no driver injection on any Windows
+  Server version, at the cost of PVSCSI's performance edge on very
+  high-IOPS workloads),
   attaches media (a floppy, not a second CD-ROM: a second CD-ROM does get
   found and applied for most of the answer file, but empirically not
   reliably for Setup's very first implicit check, the one deciding
