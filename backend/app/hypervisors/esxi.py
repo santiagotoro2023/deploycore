@@ -216,7 +216,14 @@ class ESXiDriver(HypervisorDriver):
                 if device_type == "cdrom":
                     boot_devices.append(vim.vm.BootOptions.BootableCdromDevice())
                 elif device_type == "disk":
-                    boot_devices.append(vim.vm.BootOptions.BootableDiskDevice())
+                    # BootableDiskDevice.deviceKey is required, it has to
+                    # point at the actual disk device's key on this VM
+                    # (assigned by ESXi at creation time), an empty one
+                    # makes the whole bootOrder list invalid.
+                    disk = next(
+                        d for d in vm.config.hardware.device if isinstance(d, vim.vm.device.VirtualDisk)
+                    )
+                    boot_devices.append(vim.vm.BootOptions.BootableDiskDevice(deviceKey=disk.key))
             config = vim.vm.ConfigSpec(
                 bootOptions=vim.vm.BootOptions(bootOrder=boot_devices)
             )
