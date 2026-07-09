@@ -1,7 +1,7 @@
 import { Download, Power, PowerOff, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, getToken } from "../api/client";
+import { api, ApiError, getToken } from "../api/client";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { downloadText } from "../lib/jsonFile";
@@ -24,6 +24,7 @@ export default function DeploymentDetail() {
   const [confirmRetry, setConfirmRetry] = useState(false);
   const [confirmDeleteVm, setConfirmDeleteVm] = useState(false);
   const [confirmDeleteDeployment, setConfirmDeleteDeployment] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [powerState, setPowerState] = useState<string | null>(null);
   const [powerBusy, setPowerBusy] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
@@ -105,8 +106,7 @@ export default function DeploymentDetail() {
   const canRetry = deployment.state === "failed" && roleAtLeast(effectiveRole(selectedOrgId), "operator");
   const canOperateVm = roleAtLeast(effectiveRole(selectedOrgId), "operator");
   const canDeleteVm = roleAtLeast(effectiveRole(selectedOrgId), "admin");
-  const canDeleteDeployment =
-    canDeleteVm && TERMINAL_STATES.has(deployment.state) && !deployment.vm_moref;
+  const canDeleteDeployment = canDeleteVm && TERMINAL_STATES.has(deployment.state);
   const currentStageIndex = STAGES.indexOf(deployment.state);
 
   async function retry() {
@@ -153,8 +153,14 @@ export default function DeploymentDetail() {
 
   async function deleteDeployment() {
     if (!selectedOrgId || !id) return;
-    await api.delete(`/organizations/${selectedOrgId}/deployments/${id}`);
-    navigate("/deployments");
+    setDeleteError(null);
+    try {
+      await api.delete(`/organizations/${selectedOrgId}/deployments/${id}`);
+      navigate("/deployments");
+    } catch (err) {
+      setConfirmDeleteDeployment(false);
+      setDeleteError(err instanceof ApiError ? err.message : "Failed to delete deployment.");
+    }
   }
 
   function downloadFullLog() {
@@ -203,11 +209,9 @@ export default function DeploymentDetail() {
               Retry
             </button>
           )}
-          {canDeleteVm && TERMINAL_STATES.has(deployment.state) && (
+          {canDeleteDeployment && (
             <button
-              disabled={!canDeleteDeployment}
-              title={deployment.vm_moref ? "Delete the VM first" : undefined}
-              className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50 disabled:hover:bg-transparent dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+              className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
               onClick={() => setConfirmDeleteDeployment(true)}
             >
               <Trash2 size={14} strokeWidth={1.75} />
@@ -216,6 +220,12 @@ export default function DeploymentDetail() {
           )}
         </div>
       </div>
+
+      {deleteError && (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
+          {deleteError}
+        </div>
+      )}
 
       {deployment.state === "completed" && healthHistory.length > 0 && (
         <div>
@@ -365,7 +375,11 @@ export default function DeploymentDetail() {
       <ConfirmDialog
         open={confirmDeleteDeployment}
         title="Delete deployment"
-        message="Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either. This cannot be undone from here."
+        message={
+          deployment.vm_moref
+            ? "This deployment still has a VM. Delete the VM first, then come back to delete the deployment."
+            : "Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either. This cannot be undone from here."
+        }
         confirmLabel="Delete deployment"
         onConfirm={deleteDeployment}
         onCancel={() => setConfirmDeleteDeployment(false)}

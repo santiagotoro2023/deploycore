@@ -303,6 +303,10 @@ class ESXiDriver(HypervisorDriver):
             # gets reused here.
             cookie = service_instance._stub.cookie.split(";")[0].strip()
             headers = {"Cookie": cookie}
+            # ESXi's IsoBackingInfo.fileName needs the full bracketed
+            # datastore path, not just the bare file name, an unqualified
+            # name is rejected outright as an "Invalid datastore format".
+            datastore_path = f"[{datastore_name}] {remote_name}"
             if skip_if_exists:
                 # Callers use this for content keyed by a stable id (the
                 # Windows ISO shared by every deployment made from the same
@@ -310,15 +314,19 @@ class ESXiDriver(HypervisorDriver):
                 # previous deployment already put the exact same file at
                 # this path, re-uploading a multi-gigabyte file again on
                 # every single deployment would be needlessly slow.
-                existing = httpx.head(url, headers=headers, verify=self.host.tls_verify)
-                if existing.status_code == 200:
-                    return remote_name
+                # A GET is used rather than HEAD (the datastore HTTP
+                # endpoint doesn't reliably support HEAD on every ESXi
+                # version) but streamed, so the connection closes as soon
+                # as the status is known without downloading the file.
+                with httpx.stream("GET", url, headers=headers, verify=self.host.tls_verify) as existing:
+                    if existing.status_code == 200:
+                        return datastore_path
             with open(local_path, "rb") as fh:
                 # Passing the open file directly (not fh.read()) lets httpx
                 # stream it in chunks instead of loading the whole ISO into
                 # memory first.
                 httpx.put(url, content=fh, headers=headers, verify=self.host.tls_verify)
-            return remote_name
+            return datastore_path
         finally:
             connect.Disconnect(service_instance)
 
@@ -326,14 +334,14 @@ class ESXiDriver(HypervisorDriver):
         return await asyncio.to_thread(self._upload_iso_sync, local_path, remote_name, skip_if_exists)
 
     def _delete_iso_sync(self, remote_path: str) -> None:
+        """remote_path is already the full bracketed datastore path
+        (`[datastore] name.iso`), as returned by upload_iso_to_datastore,
+        not just a bare file name."""
         service_instance = self._connect_sync()
         try:
             content = service_instance.RetrieveContent()
             datacenter = content.rootFolder.childEntity[0]
-            datastore_name = self.host.default_datastore
-            task = content.fileManager.DeleteDatastoreFile_Task(
-                name=f"[{datastore_name}] {remote_path}", datacenter=datacenter
-            )
+            task = content.fileManager.DeleteDatastoreFile_Task(name=remote_path, datacenter=datacenter)
             WaitForTask(task)
         finally:
             connect.Disconnect(service_instance)

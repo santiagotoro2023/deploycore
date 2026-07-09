@@ -25,7 +25,9 @@ export default function SettingsPage() {
           <M365Panel />
           <UpdatesPanel />
           <TlsPanel />
-          <BackupsPanel />
+          <div className="xl:col-span-2">
+            <BackupsPanel />
+          </div>
         </div>
       )}
       <OrgSettingsPanel />
