@@ -865,6 +865,18 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                 <><strong>Fails immediately with "template has no Windows ISO configured"?</strong> The
                   template was created (or exported/imported) before an ISO was attached to it, attach one
                   on the Templates page.</>,
+                <><strong>The console shows "the computer was unexpectedly restarted, Windows
+                  installation cannot continue" after the VM reboots to continue installing?</strong> This
+                  is Windows Setup's own generic dialog for a specialize-pass answer-file failure, and
+                  DeployCore has no visibility into it at all, since it happens before the guest has ever
+                  reached a state where it could call back (nothing shows in the log stream, the
+                  deployment just eventually times out). The most common cause by far: the hostname is
+                  longer than 15 characters. <Code>ComputerName</Code> in the specialize pass is a NetBIOS
+                  name, hard capped at 15, and Windows doesn't truncate a longer value the way it does for
+                  some other name fields, it fails to process the whole answer file instead. DeployCore
+                  now blocks this at submission (both the wizard and the API reject a hostname/bulk prefix
+                  that doesn't fit), but a deployment created before that validation existed, or an
+                  answer file edited by hand, can still hit it.</>,
                 <><strong>It ran long, then force-failed on its own?</strong> That's the deployment timeout
                   (Settings → deployment timeout, default 90 minutes) doing its job, not a bug, something
                   legitimately took longer than expected. Raise the timeout for that organization if slow

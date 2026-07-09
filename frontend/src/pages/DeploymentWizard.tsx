@@ -7,6 +7,29 @@ import { useOrg } from "../state/org";
 
 const STEPS = ["Template", "Hypervisor", "Hostname & network", "Review", "Deploy"];
 
+// Windows Setup's specialize pass sets ComputerName as a NetBIOS name,
+// hard capped at 15 characters (not the 63-character DNS hostname limit):
+// go over it and Setup doesn't truncate, it fails to process the answer
+// file partway through installation with a generic, unhelpful error, well
+// after the VM's already been created. The backend enforces this too
+// (schemas/deployment.py), this is just for immediate feedback instead of
+// a round trip. Bulk mode appends a 2-digit suffix (01-50), so the prefix
+// itself only has 13 characters to work with.
+const COMPUTERNAME_MAX_LENGTH = 15;
+const COMPUTERNAME_INVALID_CHARS = new Set("{|}~[\\]^':;<=>? ".split(""));
+
+function computerNameError(value: string, label: string, maxLength: number): string | null {
+  if (!value.trim()) return null; // handled by the button's own disabled state, not worth a separate message
+  if (value.length > maxLength) {
+    return `${label} is ${value.length} characters, Windows computer names allow at most ${maxLength}${
+      maxLength < COMPUTERNAME_MAX_LENGTH ? " here (the 2-digit suffix takes the rest of the 15-character limit)" : ""
+    }.`;
+  }
+  const bad = [...new Set([...value].filter((c) => COMPUTERNAME_INVALID_CHARS.has(c)))];
+  if (bad.length > 0) return `${label} can't contain: ${bad.join(" ")}`;
+  return null;
+}
+
 export default function DeploymentWizard() {
   const { selectedOrgId } = useOrg();
   const navigate = useNavigate();
@@ -36,6 +59,10 @@ export default function DeploymentWizard() {
   }, [selectedOrgId]);
 
   if (!selectedOrgId) return <p className="text-sm text-neutral-500">Select an organization first.</p>;
+
+  const hostnameError = bulk
+    ? computerNameError(hostname, "Hostname prefix", COMPUTERNAME_MAX_LENGTH - 2)
+    : computerNameError(hostname, "Hostname", COMPUTERNAME_MAX_LENGTH);
 
   const networkFields = {
     hostname: bulk ? `${hostname}01` : hostname,
@@ -156,6 +183,7 @@ export default function DeploymentWizard() {
                 value={hostname}
                 onChange={(e) => setHostname(e.target.value)}
               />
+              {hostnameError && <p className="mt-1 text-xs text-red-600">{hostnameError}</p>}
             </div>
             {bulk && (
               <div>
@@ -269,7 +297,7 @@ export default function DeploymentWizard() {
         {step === 2 && (
           <button
             className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
-            disabled={!hostname}
+            disabled={!hostname || !!hostnameError}
             onClick={goToReview}
           >
             Preview

@@ -436,6 +436,19 @@ pending → creating_vm → booting → installing_os → post_install → confi
   with a prefix and a count (1-50): creates that many deployments in one
   go, hostnamed `PREFIX01`, `PREFIX02`, etc. DHCP only, bulk doesn't attempt
   per-VM static IP allocation
+- **Hostname is capped at 15 characters** (13 for a bulk prefix, the 2-digit
+  suffix takes the rest), enforced both client-side and by the API
+  (`schemas/deployment.py`). This is a hard Windows constraint, not a
+  DeployCore choice: `ComputerName` in the specialize pass is a NetBIOS
+  name, and Windows Setup doesn't truncate a longer value the way some
+  other Windows-name fields do, it fails to process the whole answer file
+  partway through installation instead, well after the VM's already been
+  created and Setup's copied every file. That failure shows up as a
+  generic "the computer was unexpectedly restarted, Windows installation
+  cannot continue" dialog on the console with nothing in DeployCore's own
+  log stream (it happens before OOBE, before the guest has ever reached
+  a state where it could call back), which is exactly what makes it worth
+  blocking at submission instead of discovering the hard way
 - Pipeline (runs in the background worker, not the request thread): renders
   the answer file, builds a per-deployment answer-file floppy image,
   uploads the Windows ISO and the answer-file floppy to the hypervisor
