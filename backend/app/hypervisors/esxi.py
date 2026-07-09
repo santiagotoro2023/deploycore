@@ -114,10 +114,19 @@ class ESXiDriver(HypervisorDriver):
             config.numCPUs = spec.cpu_count
             config.numCoresPerSocket = spec.cores_per_socket
             config.memoryMB = spec.ram_mb
-            # Newest guestId ESXi/vCenter's GuestOsDescriptor enum is likely to
-            # support at time of writing; confirm against the target host's
-            # actual API version and bump if it exposes a dedicated 2025 id.
-            config.guestId = "windows2019srv_64Guest"
+            # There's no per-template tracking of which Windows release an
+            # ISO actually installs, and the dedicated per-release ids
+            # (windows2019srv_64Guest, windows2019srvNext_64Guest for 2022,
+            # windows2022srvNext_64Guest for 2025, ...) each depend on the
+            # target host's specific API/hardware-version level supporting
+            # that exact string, an older or differently-configured host
+            # can reject one of those outright as an invalid guestId.
+            # windows9Server64Guest ("Windows Server 2016 or later, 64-bit")
+            # is the broadly-compatible catch-all VMware documents for
+            # exactly this, supported on effectively every ESXi version
+            # this app would ever target; it only affects vCenter's default
+            # icon/optimization hints, not the actual installation.
+            config.guestId = "windows9Server64Guest"
             config.firmware = "efi" if spec.firmware == "efi" else "bios"
             config.files = vim.vm.FileInfo(
                 vmPathName=f"[{datastore_name}] {spec.name}"
