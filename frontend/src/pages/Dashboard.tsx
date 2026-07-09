@@ -26,7 +26,7 @@ export default function Dashboard() {
   const isGlobalAdmin = !!user && roleAtLeast(user.global_role, "admin");
 
   return (
-    <div className="relative -m-8 overflow-hidden p-8">
+    <div className="relative -m-8 min-h-full overflow-hidden p-8">
       <AmbientBackground subtle />
       <div className="relative space-y-8">
         <h1 className="text-lg font-semibold">Dashboard</h1>

@@ -124,7 +124,7 @@ export default function Layout() {
           </button>
           <NotificationBell />
         </div>
-        <div className="p-8">
+        <div className="min-h-full p-8">
           <Outlet />
         </div>
       </main>
