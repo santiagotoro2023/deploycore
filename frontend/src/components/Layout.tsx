@@ -62,7 +62,7 @@ export default function Layout() {
             ) : (
               <BrandMark size={42} />
             )}
-            <div className="truncate text-sm font-semibold tracking-tight">{instanceName}</div>
+            <div className="truncate text-base font-semibold tracking-tight">{instanceName}</div>
           </div>
           <Select
             className="mt-2 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1.5 text-sm dark:bg-neutral-900"
