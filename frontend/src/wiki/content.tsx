@@ -594,8 +594,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               You're notified when a deployment <em>you</em> created starts, completes, or fails, not
               other people's deployments. The bell polls for an unread count every 20 seconds; opening it
               shows your recent notifications, and clicking one marks it read and takes you straight to
-              that deployment's detail page. This is always on and has no per-user settings, unlike email
-              delivery below, which is opt-in per event type.
+              that deployment's detail page. <strong>Mark all read</strong> clears the unread count
+              without removing anything; <strong>Clear all</strong> deletes every notification in the
+              list outright. This is always on and has no per-user settings, unlike email delivery below,
+              which is opt-in per event type.
             </P>
           </>
         ),

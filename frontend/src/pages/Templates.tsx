@@ -373,6 +373,7 @@ function TemplateForm({
         </label>
         <input
           type="password"
+          autoComplete="new-password"
           className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={localAdminPassword}
           onChange={(e) => setLocalAdminPassword(e.target.value)}
@@ -398,11 +399,12 @@ function TemplateForm({
         </label>
         {domainJoinEnabled && (
           <div className="mb-3 grid grid-cols-2 gap-3">
-            <input placeholder="Domain FQDN" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={domainFqdn} onChange={(e) => setDomainFqdn(e.target.value)} />
-            <input placeholder="Join account" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={domainJoinAccount} onChange={(e) => setDomainJoinAccount(e.target.value)} />
+            <input placeholder="Domain FQDN" autoComplete="off" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={domainFqdn} onChange={(e) => setDomainFqdn(e.target.value)} />
+            <input placeholder="Join account" autoComplete="off" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={domainJoinAccount} onChange={(e) => setDomainJoinAccount(e.target.value)} />
             <input
               placeholder={isEdit ? "Join password (leave blank to keep unchanged)" : "Join password"}
               type="password"
+              autoComplete="new-password"
               className="col-span-2 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={domainJoinCredential}
               onChange={(e) => setDomainJoinCredential(e.target.value)}

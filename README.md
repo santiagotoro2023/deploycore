@@ -615,6 +615,7 @@ minimum effective role for the request's organization unless marked
 | GET | `/api/notifications/unread-count` | authenticated | polled by the bell icon |
 | POST | `/api/notifications/{id}/read` | authenticated | |
 | POST | `/api/notifications/read-all` | authenticated | |
+| DELETE | `/api/notifications` | authenticated | deletes all of the caller's own notifications |
 | GET/PUT | `/api/notification-preferences` | authenticated | self only, lazily created with defaults |
 | GET/PUT | `/api/organizations/{org_id}/settings[/{key}]` | readonly / admin | |
 | GET/PUT | `/api/settings/global[/{key}]` | admin (global) | |

@@ -63,6 +63,12 @@ export default function NotificationBell() {
     setUnreadCount(0);
   }
 
+  async function clearAll() {
+    await api.delete("/notifications");
+    setNotifications([]);
+    setUnreadCount(0);
+  }
+
   return (
     <div className="relative" ref={containerRef}>
       <button
@@ -80,11 +86,21 @@ export default function NotificationBell() {
         <div className="absolute right-0 top-9 z-50 w-80 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 shadow-sm">
           <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2 dark:border-neutral-800">
             <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">Notifications</span>
-            {unreadCount > 0 && (
-              <button className="text-xs text-blue-600 hover:underline dark:text-blue-400" onClick={markAllRead}>
-                Mark all read
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {unreadCount > 0 && (
+                <button className="text-xs text-blue-600 hover:underline dark:text-blue-400" onClick={markAllRead}>
+                  Mark all read
+                </button>
+              )}
+              {notifications.length > 0 && (
+                <button
+                  className="text-xs text-neutral-500 hover:underline dark:text-neutral-400"
+                  onClick={clearAll}
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
           </div>
           <div className="max-h-80 overflow-y-auto">
             {notifications.length === 0 && (

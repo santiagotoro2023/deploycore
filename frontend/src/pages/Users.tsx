@@ -283,13 +283,13 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
       <form noValidate onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-4 text-sm font-semibold">New user</h2>
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Username</label>
-        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={username} onChange={(e) => setUsername(e.target.value)} />
+        <input autoComplete="off" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={username} onChange={(e) => setUsername(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Display name</label>
         <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Email (optional, for future notifications)</label>
-        <input type="email" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input type="email" autoComplete="off" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={email} onChange={(e) => setEmail(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Password</label>
-        <input type="password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input type="password" autoComplete="new-password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={password} onChange={(e) => setPassword(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Global role</label>
         <Select className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={globalRole} onChange={(e) => setGlobalRole(e.target.value as Role)}>
           <option value="none">None (org-scoped only)</option>
@@ -357,7 +357,7 @@ function EditUserForm({ user, onClose, onSaved }: { user: User; onClose: () => v
           Active (unchecking blocks sign-in)
         </label>
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">New password (leave blank to keep current)</label>
-        <input type="password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input type="password" autoComplete="new-password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={password} onChange={(e) => setPassword(e.target.value)} />
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
           <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>

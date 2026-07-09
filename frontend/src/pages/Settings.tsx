@@ -20,12 +20,12 @@ export default function SettingsPage() {
     <div className="space-y-8">
       <h1 className="text-lg font-semibold">Settings</h1>
       {isGlobalAdmin && (
-        <div className="columns-1 gap-4 xl:columns-2 [&>*]:mb-4 [&>*]:break-inside-avoid">
-          <UpdatesPanel />
+        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
           <MspOrganizationPanel />
+          <M365Panel />
+          <UpdatesPanel />
           <TlsPanel />
           <BackupsPanel />
-          <M365Panel />
         </div>
       )}
       <OrgSettingsPanel />
@@ -599,6 +599,7 @@ function M365Panel() {
       </label>
       <input
         type="password"
+        autoComplete="new-password"
         className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
         value={clientSecret}
         onChange={(e) => setClientSecret(e.target.value)}
