@@ -43,7 +43,15 @@ render_caddyfile() {
   if [ "$(current_mode)" = "uploaded" ] && [ -f "$CERT_DIR/uploaded-cert.pem" ] && [ -f "$CERT_DIR/uploaded-key.pem" ]; then
     cert_block="tls $CERT_DIR/uploaded-cert.pem $CERT_DIR/uploaded-key.pem"
   else
-    cert_block="tls internal"
+    # Plain `tls internal` on a hostless address only ever issues ONE
+    # static certificate, covering localhost/127.0.0.1, decided once at
+    # startup. Anything else, a LAN IP, a port-forwarded public IP, a
+    # hostname, gets no certificate at all and a fatal TLS alert
+    # (SSL_ERROR_INTERNAL_ERROR_ALERT in Firefox). `on_demand` is Caddy's
+    # documented fix for exactly this: it issues a locally-trusted
+    # certificate per incoming SNI, on the fly, so this works no matter
+    # what address/hostname is used to reach it, not just localhost.
+    cert_block=$(printf 'tls internal {\n\t\ton_demand\n\t}')
   fi
   cat > "$CADDYFILE" <<EOF
 :80 {

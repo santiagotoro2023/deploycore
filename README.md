@@ -147,6 +147,17 @@ by a CA your users' browsers already trust, e.g. one issued by Let's
 Encrypt or your internal CA. It's picked up within a few seconds, no
 restart required.
 
+The self-signed certificate works no matter how you reach the instance,
+`localhost`, a LAN IP, a port-forwarded public IP, a hostname, since it's
+issued on the fly per request (Caddy's `on_demand` internal TLS) instead
+of being generated once for a fixed name. The trade-off, spelled out in
+Caddy's own docs, is that anyone who can reach the port can make it mint a
+certificate for an arbitrary name; harmless for a self-hosted admin tool
+behind your own firewall/router, but worth knowing if this instance is
+wide open on the public internet, in which case uploading a real
+certificate (or restricting network access) is the better long-term move
+anyway.
+
 If you ever need to go back, e.g. to test something, or because the
 uploaded certificate expired, **Switch to self-signed temporarily** does
 exactly that without discarding the uploaded certificate, and **Use this

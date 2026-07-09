@@ -710,11 +710,16 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               A small <Code>proxy</Code> service (Caddy) sits in front of the rest of the stack: it
               terminates TLS on port 443 and redirects any plain HTTP request on port 80 to it, then
               forwards everything else to the frontend unchanged. Until you upload a certificate of
-              your own, it uses <Code>tls internal</Code>, Caddy's own zero-config self-signed
-              certificate backed by a locally generated CA, which is why browsers flag the connection
-              as untrusted, nothing vouches for a certificate you generated yourself. That default
-              starts immediately on boot and never depends on the database being reachable, only
-              switching to an uploaded certificate does.
+              your own, it uses <Code>tls internal</Code> with Caddy's <Code>on_demand</Code> option,
+              which issues a locally-trusted, self-signed certificate on the fly for whatever
+              hostname or IP the connection actually came in on (a plain <Code>tls internal</Code>{" "}
+              without that option only ever issues one static certificate for{" "}
+              <Code>localhost</Code>/<Code>127.0.0.1</Code>, so a LAN IP, a port-forwarded public IP,
+              or any other hostname would get no matching certificate and a hard TLS handshake
+              failure instead of a normal untrusted-certificate warning). Browsers still flag the
+              connection as untrusted either way, nothing vouches for a certificate you generated
+              yourself, that's expected. This default starts immediately on boot and never depends
+              on the database being reachable, only switching to an uploaded certificate does.
             </P>
             <P>
               To get rid of that warning, upload a certificate and its matching private key (PEM
