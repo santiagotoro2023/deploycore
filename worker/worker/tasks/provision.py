@@ -29,15 +29,16 @@ VIRTIO_ISO_UNIT = 2
 
 CALLBACK_POLL_INTERVAL_SECONDS = 15
 
-# Windows Setup's "Press any key to boot from CD or DVD..." prompt only
-# shows up once, early, and its own timeout is short; exactly when it
-# appears varies with boot delay/POST/CD read time, and the VM's boot
-# order (see esxi.py set_boot_order) retries every 10s if the whole
-# sequence fails, so this keeps sending Enter for a while rather than
-# guessing one exact moment, to reliably land on it whichever attempt it
-# shows up on.
-BOOT_KEYPRESS_ATTEMPTS = 30
-BOOT_KEYPRESS_INTERVAL_SECONDS = 2
+# Windows Setup's "Press any key to boot from CD or DVD..." prompt shows
+# up once, early (around when set_boot_order's own 5s bootDelay elapses,
+# plus a couple seconds for the loader itself to read from the CD), and
+# has a short timeout of its own; this window is sized to bracket that
+# with margin on both sides, NOT to keep going until Setup's GUI is up.
+# Once the GUI is interactive, further Enters land on whatever's
+# focused, with unpredictable results (confirmed: one opened the
+# "Support" link's error dialog), so erring short here is deliberate.
+BOOT_KEYPRESS_ATTEMPTS = 15
+BOOT_KEYPRESS_INTERVAL_SECONDS = 1
 
 WINRM_REACHABILITY_POLL_INTERVAL_SECONDS = 10
 WINRM_REACHABILITY_MAX_ATTEMPTS = 60  # ~10 minutes
@@ -188,11 +189,11 @@ async def run_deployment(ctx, deployment_id: str) -> None:
 
             # Best-effort: Windows Setup boots from optical media only
             # after a keypress nobody's there to give it, see
-            # send_enter_keypress's docstring. A miss here just means the
-            # boot-order retry (esxi.py) tries again and this catches it
-            # on a later iteration; it's not worth failing the deployment
-            # over, the deployment timeout is what catches a VM that
-            # truly never boots.
+            # send_enter_keypress's docstring and BOOT_KEYPRESS_ATTEMPTS
+            # above. If this window is somehow missed entirely (the VM's
+            # own boot-order retry kicks in 10s later, see
+            # esxi.py set_boot_order), the deployment timeout is what
+            # catches it, not worth failing the deployment over.
             for _ in range(BOOT_KEYPRESS_ATTEMPTS):
                 await asyncio.sleep(BOOT_KEYPRESS_INTERVAL_SECONDS)
                 try:
