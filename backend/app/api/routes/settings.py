@@ -16,7 +16,7 @@ from app.schemas.m365 import M365ConfigRead, M365ConfigUpdate
 from app.schemas.setting import SettingRead, SettingValue
 from app.schemas.update import UpdateStatusRead
 from app.security.rbac import get_current_user, require_role
-from app.services import audit, m365
+from app.services import audit, m365, tls_certs
 
 router = APIRouter(tags=["settings"])
 
@@ -39,9 +39,24 @@ def _branding_dir() -> Path:
     return path
 
 
+def _tls_dir() -> Path:
+    path = Path(get_settings().tls_certs_path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 async def _get_setting_value(db: AsyncSession, key: str):
     result = await db.execute(select(Setting.value).where(Setting.scope == SettingScope.GLOBAL, Setting.key == key))
     return result.scalar_one_or_none()
+
+
+async def _set_global_setting_value(db: AsyncSession, key: str, value) -> None:
+    result = await db.execute(select(Setting).where(Setting.scope == SettingScope.GLOBAL, Setting.key == key))
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        db.add(Setting(scope=SettingScope.GLOBAL, key=key, value=value))
+    else:
+        setting.value = value
 
 
 @router.get("/api/instance")
@@ -190,6 +205,73 @@ async def test_m365_config(
     except Exception as exc:  # noqa: BLE001 - surfaced to the admin testing the integration
         return {"ok": False, "message": str(exc)}
     return {"ok": True, "message": f"Test email sent to {current_user.email}"}
+
+
+def _tls_status(db_mode: str | None) -> dict:
+    uploaded = tls_certs.read_uploaded_info(_tls_dir())
+    return {
+        "mode": db_mode or "self_signed",
+        "has_uploaded_certificate": uploaded is not None,
+        "uploaded_subject": uploaded.subject if uploaded else None,
+        "uploaded_expires_at": uploaded.not_valid_after.isoformat() if uploaded else None,
+    }
+
+
+@router.get(
+    "/api/settings/global/tls",
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def get_tls_settings(db: AsyncSession = Depends(get_db)) -> dict:
+    """The proxy container (see proxy/entrypoint.sh) polls this same
+    `tls_mode` setting straight from Postgres to decide which certificate
+    to serve, this endpoint is only for the Settings page to show the
+    current state, it doesn't talk to the proxy directly."""
+    return _tls_status(await _get_setting_value(db, "tls_mode"))
+
+
+@router.put(
+    "/api/settings/global/tls/certificate",
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def upload_tls_certificate(
+    cert_file: UploadFile,
+    key_file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    cert_pem = await cert_file.read()
+    key_pem = await key_file.read()
+    try:
+        tls_certs.validate_pair(cert_pem, key_pem)
+    except tls_certs.InvalidCertificate as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    tls_certs.write_pair(_tls_dir(), cert_pem, key_pem)
+    await _set_global_setting_value(db, "tls_mode", "uploaded")
+    audit.record(db, action="settings.tls_certificate_uploaded", target_type="settings", user_id=current_user.id)
+    await db.commit()
+    return _tls_status("uploaded")
+
+
+@router.put(
+    "/api/settings/global/tls/mode",
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def set_tls_mode(
+    body: SettingValue, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> dict:
+    mode = body.value
+    if mode not in ("self_signed", "uploaded"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "mode must be 'self_signed' or 'uploaded'")
+    if mode == "uploaded" and tls_certs.read_uploaded_info(_tls_dir()) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no certificate has been uploaded yet")
+
+    await _set_global_setting_value(db, "tls_mode", mode)
+    audit.record(
+        db, action="settings.tls_mode_set", target_type="settings", user_id=current_user.id, detail={"mode": mode}
+    )
+    await db.commit()
+    return _tls_status(mode)
 
 
 @router.get(

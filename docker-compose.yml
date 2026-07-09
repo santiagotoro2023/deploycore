@@ -41,6 +41,7 @@ services:
       - iso_storage:/data/isos
       - iso_build_tmp:/data/iso_build_tmp
       - db_backups:/data/backups
+      - tls_certs:/data/tls
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -71,6 +72,22 @@ services:
       - /app/node_modules
     command: npm run dev -- --host 0.0.0.0
 
+  proxy:
+    build: ./proxy
+    env_file: .env
+    depends_on:
+      api:
+        condition: service_started
+      frontend:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - tls_certs:/data/tls
+      - caddy_data:/data
+    restart: unless-stopped
+
   updater:
     build: ./updater
     env_file: .env
@@ -86,3 +103,5 @@ volumes:
   iso_storage:
   iso_build_tmp:
   db_backups:
+  tls_certs:
+  caddy_data:

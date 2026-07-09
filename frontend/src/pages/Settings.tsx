@@ -23,6 +23,7 @@ export default function SettingsPage() {
         <div className="columns-1 gap-4 xl:columns-2 [&>*]:mb-4 [&>*]:break-inside-avoid">
           <UpdatesPanel />
           <MspOrganizationPanel />
+          <TlsPanel />
           <BackupsPanel />
           <M365Panel />
         </div>
@@ -138,6 +139,122 @@ function MspOrganizationPanel() {
         onConfirm={removeLogo}
         onCancel={() => setConfirmRemoveLogo(false)}
       />
+    </div>
+  );
+}
+
+interface TlsStatus {
+  mode: "self_signed" | "uploaded";
+  has_uploaded_certificate: boolean;
+  uploaded_subject: string | null;
+  uploaded_expires_at: string | null;
+}
+
+function TlsPanel() {
+  const [status, setStatus] = useState<TlsStatus | null>(null);
+  const [certFile, setCertFile] = useState<File | null>(null);
+  const [keyFile, setKeyFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setStatus(await api.get<TlsStatus>("/settings/global/tls"));
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function upload() {
+    if (!certFile || !keyFile) return;
+    setError(null);
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("cert_file", certFile);
+      formData.append("key_file", keyFile);
+      const res = await fetch("/api/settings/global/tls/certificate", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body: formData,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || "Upload failed.");
+      setCertFile(null);
+      setKeyFile(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function setMode(mode: "self_signed" | "uploaded") {
+    setError(null);
+    setSwitching(true);
+    try {
+      await api.put("/settings/global/tls/mode", { value: mode });
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to switch modes.");
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  if (!status) return null;
+
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
+      <h2 className="mb-1 text-sm font-semibold">HTTPS certificate</h2>
+      <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+        DeployCore is served over HTTPS by a built-in reverse proxy, HTTP requests are redirected
+        automatically. By default it uses a self-signed certificate it generates itself, so browsers
+        will show a warning until you upload one signed by a certificate authority they trust.
+      </p>
+
+      <div className="mb-3 flex items-center gap-2 text-xs">
+        <span className="text-neutral-500 dark:text-neutral-400">Currently serving:</span>
+        <span
+          className={`rounded-full px-2 py-0.5 font-medium ${
+            status.mode === "uploaded"
+              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+              : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+          }`}
+        >
+          {status.mode === "uploaded" ? "Uploaded certificate" : "Self-signed certificate"}
+        </span>
+      </div>
+
+      {status.has_uploaded_certificate && (
+        <div className="mb-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs dark:border-neutral-700 dark:bg-neutral-800/50">
+          <div className="text-neutral-700 dark:text-neutral-300">{status.uploaded_subject}</div>
+          <div className="text-neutral-500 dark:text-neutral-400">
+            Expires {status.uploaded_expires_at ? new Date(status.uploaded_expires_at).toLocaleDateString() : "unknown"}
+          </div>
+          <button
+            disabled={switching}
+            className="mt-2 text-xs text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400"
+            onClick={() => setMode(status.mode === "uploaded" ? "self_signed" : "uploaded")}
+          >
+            {status.mode === "uploaded" ? "Switch to self-signed temporarily" : "Use this certificate again"}
+          </button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <FileDropzone accept=".pem,.crt,.cer" fileName={certFile?.name} hint="Certificate (PEM)" onSelect={setCertFile} />
+        <FileDropzone accept=".pem,.key" fileName={keyFile?.name} hint="Private key (PEM)" onSelect={setKeyFile} />
+      </div>
+      {error && <div className="mt-3 text-xs text-red-600">{error}</div>}
+      <button
+        disabled={!certFile || !keyFile || uploading}
+        className="mt-3 rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+        onClick={upload}
+      >
+        {uploading ? "Uploading..." : "Upload certificate"}
+      </button>
     </div>
   );
 }

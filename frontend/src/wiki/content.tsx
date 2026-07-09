@@ -692,6 +692,56 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
         ),
       },
       {
+        id: "https-certificate",
+        title: "HTTPS certificate",
+        overview: (
+          <>
+            <P>
+              DeployCore is served over HTTPS by a built-in reverse proxy, with a self-signed
+              certificate generated automatically so it works out of the box. Settings → HTTPS
+              certificate lets a global admin upload a real one, or switch back to the self-signed
+              one at any time.
+            </P>
+          </>
+        ),
+        deepDive: (
+          <>
+            <P>
+              A small <Code>proxy</Code> service (Caddy) sits in front of the rest of the stack: it
+              terminates TLS on port 443 and redirects any plain HTTP request on port 80 to it, then
+              forwards everything else to the frontend unchanged. Until you upload a certificate of
+              your own, it uses <Code>tls internal</Code>, Caddy's own zero-config self-signed
+              certificate backed by a locally generated CA, which is why browsers flag the connection
+              as untrusted, nothing vouches for a certificate you generated yourself. That default
+              starts immediately on boot and never depends on the database being reachable, only
+              switching to an uploaded certificate does.
+            </P>
+            <P>
+              To get rid of that warning, upload a certificate and its matching private key (PEM
+              format, an unencrypted key, no passphrase) signed by a CA browsers already trust, e.g.
+              one from Let's Encrypt or an internal CA your organization's devices already trust. The
+              upload is validated before anything changes: the certificate and key have to actually
+              match, and the certificate can't already be expired. Once accepted, the proxy picks it
+              up within a few seconds on its own, no restart needed.
+            </P>
+            <P>
+              <strong>Switch to self-signed temporarily</strong> flips back to the generated
+              certificate without discarding the uploaded one, useful if the uploaded certificate
+              expired or you're troubleshooting something unrelated. <strong>Use this certificate
+              again</strong> switches back, no re-upload required. Uploading a new certificate always
+              switches to it immediately.
+            </P>
+            <P>
+              Mechanically, the switching (not the self-signed default itself) works the same way
+              self-update below does: the API writes a <Code>tls_mode</Code> setting straight to
+              Postgres, and the <Code>proxy</Code> container polls that same table on an interval and
+              reloads Caddy's config when it no longer matches what's currently serving. Neither
+              container talks to the other directly.
+            </P>
+          </>
+        ),
+      },
+      {
         id: "self-update",
         title: "Self-update",
         overview: (
@@ -752,9 +802,9 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               Each entry records the action, the target type/ID, the acting user, a timestamp, and a JSON
               detail blob. Coverage includes login/logout/2FA changes, force-logout, create/update/delete
               on users, organizations, hypervisors, disk layouts, templates, ISO assets, and webhooks,
-              template/disk-layout export/import, settings changes (including branding, M365 config, and
-              self-update triggers), and deployment create/retry/power actions. It's paginated and
-              exportable to CSV from the Audit Log page.
+              template/disk-layout export/import, settings changes (including branding, M365 config,
+              HTTPS certificate uploads/mode switches, and self-update triggers), and deployment
+              create/retry/power actions. It's paginated and exportable to CSV from the Audit Log page.
             </P>
             <P>
               For a detailed blow-by-blow of one specific deployment attempt (not who triggered it, but
@@ -772,8 +822,9 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
         overview: (
           <>
             <P>
-              Settings is split into instance-wide options (global admins only: branding, updates, email,
-              backups) and per-organization options (the deployment timeout, plus anything else you set).
+              Settings is split into instance-wide options (global admins only: branding, updates, HTTPS
+              certificate, email, backups) and per-organization options (the deployment timeout, plus
+              anything else you set).
             </P>
           </>
         ),

@@ -1,7 +1,8 @@
 <img src="docs/brand/deploycore-lockup.svg" alt="DeployCore" width="360" />
 
 **Contents:** [Quickstart](#quickstart) · [First run, step by step](#first-run-step-by-step) ·
-[Updating](#updating) · [Roles and multi-tenancy](#roles-and-multi-tenancy) ·
+[Updating](#updating) · [HTTPS certificate](#https-certificate) ·
+[Roles and multi-tenancy](#roles-and-multi-tenancy) ·
 [Capabilities](#capabilities) · [API reference](#api-reference) ·
 [Environment variables](#environment-variables) · [Development](#development) ·
 [Uninstalling](#uninstalling) · [Known limitations](#known-limitations)
@@ -30,11 +31,18 @@ cd deploycore
 ```
 
 That's it. The script copies `.env.example` to `.env`, generates a secret key
-for you, and builds and starts the whole stack. Open `http://localhost:5173`
+for you, and builds and starts the whole stack. Open `https://localhost`
 and you'll land on a two-step setup wizard: name your instance, then create
 your first administrator account. Everything else (database schema, etc.) is
 handled automatically, including on every future update (see "Updating"
 below).
+
+The stack is fronted by a small built-in reverse proxy that terminates
+HTTPS on port 443 and redirects any plain HTTP request (port 80) to it, so
+your browser will warn you about an untrusted certificate the first time,
+it's self-signed by default. See "HTTPS certificate" below for uploading a
+real one. `http://localhost:5173` (the frontend directly, no TLS) still
+works too, useful for local development.
 
 One setting worth checking before you provision real VMs:
 `APP_PUBLIC_URL` in `.env`. This is the address your ESXi guest VMs call back
@@ -125,6 +133,34 @@ Migrations always run automatically on `api` container startup regardless of
 which update path you use, so there is never a separate manual migration
 step.
 
+## HTTPS certificate
+
+Settings → **HTTPS certificate** (global admin only) shows whether the
+instance is currently serving a self-signed certificate or an uploaded one,
+and lets you switch between them.
+
+By default DeployCore generates and serves a self-signed certificate, no
+setup needed, but every browser will flag it as untrusted since no
+certificate authority vouches for it. To get rid of that warning, upload a
+certificate and matching private key (PEM format, unencrypted key) signed
+by a CA your users' browsers already trust, e.g. one issued by Let's
+Encrypt or your internal CA. It's picked up within a few seconds, no
+restart required.
+
+If you ever need to go back, e.g. to test something, or because the
+uploaded certificate expired, **Switch to self-signed temporarily** does
+exactly that without discarding the uploaded certificate, and **Use this
+certificate again** switches back to it, no re-upload needed.
+
+This is handled by a small `proxy` service (Caddy) in front of the rest of
+the stack: it terminates TLS on 443 and redirects 80 to it, forwarding
+everything else to the frontend unchanged. The self-signed default starts
+immediately and never depends on the database being reachable, only
+switching to an uploaded certificate does: it watches the same `tls_mode`
+setting the API writes to and reloads itself automatically when it
+changes, the same polling pattern the `updater` container uses for
+self-update (see above).
+
 ## Roles and multi-tenancy
 
 Three roles, ordered `admin > operator > readonly`. A user has a
@@ -137,7 +173,7 @@ no explicit role) grants no access anywhere.
 |---|---|
 | `readonly` | View everything in organizations they're scoped to |
 | `operator` | Everything `readonly` can, plus: create/retry/bulk-create deployments, power on/shut down/power off a deployment's VM, create/edit/delete disk layouts, templates, and ISO assets, clone/export/import templates and disk layouts |
-| `admin` | Everything `operator` can, plus: create/edit organizations, manage hypervisor hosts and webhooks (including credentials/secrets) and run their test buttons, delete a deployment's VM, edit organization/global settings, manage users and their global or org-role assignments (global-admin only), delete an organization outright (global-admin only), rename the instance and manage its logo (global-admin only), configure M365 email and trigger backups/updates (global-admin only) |
+| `admin` | Everything `operator` can, plus: create/edit organizations, manage hypervisor hosts and webhooks (including credentials/secrets) and run their test buttons, delete a deployment's VM, edit organization/global settings, manage users and their global or org-role assignments (global-admin only), delete an organization outright (global-admin only), rename the instance and manage its logo (global-admin only), configure M365 email and trigger backups/updates (global-admin only), upload/switch the HTTPS certificate (global-admin only) |
 
 RBAC is enforced server-side on every route (a dependency resolves the
 caller's effective role for the request's organization and returns `403`
@@ -576,6 +612,9 @@ minimum effective role for the request's organization unless marked
 | GET | `/api/settings/global/backups/{filename}` | admin (global) | downloads a backup file |
 | GET | `/api/settings/global/update/status` | admin (global) | current commit, commits behind, live stage if updating |
 | POST | `/api/settings/global/update/run` | admin (global) | triggers a self-update; `400` if one is already running |
+| GET | `/api/settings/global/tls` | admin (global) | current mode plus uploaded certificate subject/expiry, if any |
+| PUT | `/api/settings/global/tls/certificate` | admin (global) | multipart upload (`cert_file`, `key_file`); validated pair, switches to it |
+| PUT | `/api/settings/global/tls/mode` | admin (global) | `{value: "self_signed" \| "uploaded"}`; `400` for `"uploaded"` with nothing on file |
 | GET | `/api/organizations/{org_id}/audit-log` | readonly | paginated (`limit`/`offset`) |
 | GET | `/api/dashboard/overview` | admin (global) | |
 | GET | `/api/health` | none | `{status: "ok"}` |
@@ -594,6 +633,7 @@ fills in `APP_SECRET_KEY` for you.
 | `ISO_STORAGE_PATH` | no | `/data/isos` | Permanent ISO and logo storage inside the `api`/`worker` containers |
 | `ISO_BUILD_TMP` | no | `/data/iso_build_tmp` | Scratch space for answer-file ISO builds and in-progress uploads |
 | `BACKUP_DIR` | no | `/data/backups` | Where database backups are written and served from |
+| `TLS_CERTS_PATH` | no | `/data/tls` | Where an uploaded HTTPS certificate/key pair is stored, shared with the `proxy` container |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | no | `deploycore` / `deploycore` / `deploycore` | Postgres container credentials |
 | `PROJECT_DIR` | no | auto-detected | Only needed if the `updater` container's automatic self-discovery of this repo's host path doesn't work in your Docker setup; overrides it with an absolute host path when set |
 
@@ -610,9 +650,12 @@ fills in `APP_SECRET_KEY` for you.
 | `make down` | `docker compose down` (keeps volumes) |
 
 The `api` container runs with `--reload` and picks up backend code changes
-automatically. The `worker` and `updater` containers do not hot-reload, run
-`docker compose restart worker` (or `updater`) after changing anything they
-import.
+automatically. The `worker`, `updater`, and `proxy` containers do not
+hot-reload, run `docker compose restart worker` (or `updater`/`proxy`) after
+changing anything they import. `proxy` does pick up a `tls_mode` setting
+change (uploading a certificate, switching back to self-signed) on its own
+within a few seconds, without a restart, that's a routine runtime behavior,
+not a code change.
 
 Tests run against a dedicated `deploycore_test` database that the test suite
 creates and tears down itself (`backend/tests/conftest.py`), never against
@@ -625,8 +668,10 @@ disk layout variants including the recovery partition), deployment state
 machine (every legal/illegal transition, retry semantics), Fernet credential
 round-trip, ISO-builder temp-directory cleanup on both success and
 subprocess failure, deployment/hypervisor/audit-log org-scoping, global vs
-org-scoped ISO assets, and organization deletion (cascades correctly, audit
-log survives it, global-admin only).
+org-scoped ISO assets, organization deletion (cascades correctly, audit log
+survives it, global-admin only), and HTTPS certificate/key pair validation
+(matching key rejected if it doesn't, expired certificates rejected,
+garbage input rejected).
 
 ## Uninstalling
 
@@ -640,10 +685,11 @@ rm -rf deploycore
 
 - `docker compose down -v --rmi local` stops and removes every container in
   the stack, plus its named volumes (`postgres_data`, `iso_storage`,
-  `iso_build_tmp`, `db_backups`) and the images this repo builds locally
-  (`api`/`worker`/`frontend`/`updater`). This is what actually deletes the
-  database, so every organization, user, deployment record, uploaded ISO,
-  and backup goes with it, there is no undo once this runs.
+  `iso_build_tmp`, `db_backups`, `tls_certs`, `caddy_data`) and the images
+  this repo builds locally (`api`/`worker`/`frontend`/`proxy`/`updater`).
+  This is what actually deletes the database, so every organization, user,
+  deployment record, uploaded ISO, and backup goes with it, there is no
+  undo once this runs.
 - `rm -rf deploycore` (from the parent directory, adjust the path if you
   cloned it somewhere else or under a different name) removes the cloned
   repository itself, including your `.env` file and its `APP_SECRET_KEY`.

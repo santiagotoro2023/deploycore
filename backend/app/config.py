@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     iso_storage_path: str = "/data/isos"
     iso_build_tmp: str = "/data/iso_build_tmp"
     backup_dir: str = "/data/backups"
+    tls_certs_path: str = "/data/tls"
 
     access_token_expire_minutes: int = 12 * 60
 

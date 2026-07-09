@@ -7,8 +7,8 @@ interface Point {
   vy: number;
 }
 
-const DOT_SPACING_PX = 90; // roughly one dot per this many square px
-const MAX_LINK_DISTANCE = 130;
+const DOT_SPACING_PX = 75; // roughly one dot per this many square px
+const MAX_LINK_DISTANCE = 150;
 const SPEED = 0.12;
 
 /** A quiet, slowly-drifting network of dots behind the sign-in/setup-wizard
@@ -59,9 +59,10 @@ export default function ConnectedDots({ opacity = 1 }: { opacity?: number }) {
     function step() {
       ctx!.clearRect(0, 0, width, height);
       const dark = isDark();
-      const dotColor = dark ? "rgba(191, 219, 254, 0.9)" : "rgba(30, 58, 138, 1)";
-      const dotRadius = dark ? 2.2 : 2.6;
-      const lineColor = dark ? "147, 197, 253" : "37, 99, 235";
+      const dotColor = dark ? "rgba(224, 242, 254, 1)" : "rgba(23, 37, 84, 1)";
+      const dotRadius = dark ? 3 : 3.4;
+      const dotGlowColor = dark ? "rgba(125, 211, 252, 0.95)" : "rgba(37, 99, 235, 0.9)";
+      const lineColor = dark ? "165, 213, 253" : "29, 78, 216";
 
       for (const p of points) {
         if (!reduceMotion) {
@@ -78,9 +79,9 @@ export default function ConnectedDots({ opacity = 1 }: { opacity?: number }) {
           const b = points[j];
           const dist = Math.hypot(a.x - b.x, a.y - b.y);
           if (dist > MAX_LINK_DISTANCE) continue;
-          const lineOpacity = (1 - dist / MAX_LINK_DISTANCE) * (dark ? 0.6 : 0.75) * opacity;
+          const lineOpacity = (1 - dist / MAX_LINK_DISTANCE) * (dark ? 0.85 : 0.9) * opacity;
           ctx!.strokeStyle = `rgba(${lineColor}, ${lineOpacity})`;
-          ctx!.lineWidth = 1.4;
+          ctx!.lineWidth = 1.6;
           ctx!.beginPath();
           ctx!.moveTo(a.x, a.y);
           ctx!.lineTo(b.x, b.y);
@@ -89,12 +90,15 @@ export default function ConnectedDots({ opacity = 1 }: { opacity?: number }) {
       }
 
       ctx!.globalAlpha = opacity;
+      ctx!.shadowColor = dotGlowColor;
+      ctx!.shadowBlur = 6;
       for (const p of points) {
         ctx!.fillStyle = dotColor;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, dotRadius, 0, Math.PI * 2);
         ctx!.fill();
       }
+      ctx!.shadowBlur = 0;
       ctx!.globalAlpha = 1;
 
       if (!reduceMotion) animationFrame = requestAnimationFrame(step);

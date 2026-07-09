@@ -3,8 +3,9 @@
 # blank, then builds and starts the stack. Migrations run automatically on
 # api container startup (see backend/entrypoint.sh), so nothing else is
 # needed after this to reach a working setup wizard at
-# http://localhost:5173. Safe to re-run: only fills in blank/missing
-# values, never touches ones you've already set.
+# https://localhost (self-signed certificate until you upload a real one,
+# see README "HTTPS certificate"). Safe to re-run: only fills in
+# blank/missing values, never touches ones you've already set.
 set -e
 
 cd "$(dirname "$0")/.."
@@ -44,5 +45,6 @@ echo "Building and starting the stack..."
 docker compose up -d --build
 
 echo
-echo "Done. Open http://localhost:5173 to run the setup wizard."
+echo "Done. Open https://localhost to run the setup wizard."
+echo "Your browser will warn about the certificate at first, it's self-signed by default; Settings -> HTTPS certificate lets you upload a real one."
 echo "Edit APP_PUBLIC_URL in .env before deploying real VMs if this host isn't reachable at localhost from guest machines."
