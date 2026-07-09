@@ -21,7 +21,6 @@ export default function DeploymentDetail() {
   const [logs, setLogs] = useState<DeploymentLogLine[]>([]);
   const [healthHistory, setHealthHistory] = useState<DeploymentHealthCheck[]>([]);
   const [confirmRetry, setConfirmRetry] = useState(false);
-  const [confirmDeleteVm, setConfirmDeleteVm] = useState(false);
   const [confirmDeleteDeployment, setConfirmDeleteDeployment] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [powerState, setPowerState] = useState<string | null>(null);
@@ -104,8 +103,7 @@ export default function DeploymentDetail() {
 
   const canRetry = deployment.state === "failed" && roleAtLeast(effectiveRole(selectedOrgId), "operator");
   const canOperateVm = roleAtLeast(effectiveRole(selectedOrgId), "operator");
-  const canDeleteVm = roleAtLeast(effectiveRole(selectedOrgId), "admin");
-  const canDeleteDeployment = canDeleteVm;
+  const canDeleteDeployment = roleAtLeast(effectiveRole(selectedOrgId), "admin");
   const currentStageIndex = STAGES.indexOf(deployment.state);
 
   async function retry() {
@@ -140,14 +138,6 @@ export default function DeploymentDetail() {
     } finally {
       setPowerBusy(false);
     }
-  }
-
-  async function deleteVm() {
-    if (!selectedOrgId || !id) return;
-    await api.delete(`/organizations/${selectedOrgId}/deployments/${id}/vm`);
-    setConfirmDeleteVm(false);
-    setPowerState(null);
-    await loadStatic();
   }
 
   async function deleteDeployment() {
@@ -279,15 +269,6 @@ export default function DeploymentDetail() {
                   <PowerOff size={14} strokeWidth={1.75} />
                   Power off
                 </button>
-                {canDeleteVm && (
-                  <button
-                    className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
-                    onClick={() => setConfirmDeleteVm(true)}
-                  >
-                    <Trash2 size={14} strokeWidth={1.75} />
-                    Delete VM
-                  </button>
-                )}
               </div>
             )}
           </div>
@@ -362,14 +343,6 @@ export default function DeploymentDetail() {
         confirmLabel="Retry"
         onConfirm={retry}
         onCancel={() => setConfirmRetry(false)}
-      />
-      <ConfirmDialog
-        open={confirmDeleteVm}
-        title="Delete virtual machine"
-        message="This permanently deletes the VM from the hypervisor. The deployment record and its history are kept. This cannot be undone."
-        confirmLabel="Delete VM"
-        onConfirm={deleteVm}
-        onCancel={() => setConfirmDeleteVm(false)}
       />
       <ConfirmDialog
         open={confirmDeleteDeployment}

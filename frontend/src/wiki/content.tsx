@@ -514,12 +514,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             />
             <P>
               From the deployment's detail page you can retry a failed deployment from scratch (a fresh VM
-              is always created, nothing is reused, so this is always safe), power the VM on/shut it down
-              gracefully/power it off hard, or (admin only) delete the VM entirely while keeping the
-              deployment's record and full history for audit. The <strong>Download full log</strong>{" "}
-              button produces one plain-text file with the deployment's details, full state history, and
-              every log line, the fastest way to hand off a failure to someone else or attach to a support
-              ticket.
+              is always created, nothing is reused, so this is always safe), or power the VM on/shut it
+              down gracefully/power it off hard. There's no dedicated "delete just the VM" action, remove
+              it directly on the hypervisor if you want it gone without deleting the deployment record
+              too. The <strong>Download full log</strong> button produces one plain-text file with the
+              deployment's details, full state history, and every log line, the fastest way to hand off a
+              failure to someone else or attach to a support ticket.
             </P>
             <P>
               <strong>Delete deployment</strong> (admin only) is for cleaning up ones you don't need in
@@ -833,8 +833,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               on users, organizations, hypervisors, disk layouts, templates, ISO assets, and webhooks,
               template/disk-layout export/import, settings changes (including branding, M365 config,
               HTTPS certificate uploads/mode switches, and self-update triggers), and deployment
-              create/retry/power/VM-delete/delete actions. It's paginated and exportable to CSV from the
-              Audit Log page.
+              create/retry/power/delete actions. It's paginated and exportable to CSV from the Audit Log
+              page.
             </P>
             <P>
               For a detailed blow-by-blow of one specific deployment attempt (not who triggered it, but

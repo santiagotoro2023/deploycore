@@ -386,31 +386,6 @@ async def power_off(
 
 
 @router.delete(
-    "/api/organizations/{org_id}/deployments/{deployment_id}/vm",
-    status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(Role.ADMIN))],
-)
-async def delete_vm(
-    org_id: uuid.UUID,
-    deployment_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> None:
-    deployment = await _get_org_deployment(db, org_id, deployment_id)
-    if deployment.vm_moref is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "no VM exists for this deployment")
-    driver = await _driver_for(db, deployment)
-    await driver.delete_vm(deployment.vm_moref)
-    await log(db, deployment, "lifecycle", "VM deleted")
-    audit.record(
-        db, action="deployment.delete_vm", target_type="deployment",
-        org_id=org_id, user_id=current_user.id, target_id=deployment.id,
-    )
-    deployment.vm_moref = None
-    await db.commit()
-
-
-@router.delete(
     "/api/organizations/{org_id}/deployments/{deployment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_role(Role.ADMIN))],
@@ -425,12 +400,12 @@ async def delete_deployment(
     own detail page, but its row, log lines, state transitions, and health
     checks all stay in the database untouched, still reachable through
     /history and /logs above by anyone who has the id. Doesn't touch the
-    hypervisor at all, if a VM exists it's simply left running, untracked
-    by DeployCore from here on; use "Delete VM" first (a separate,
-    already-destructive action) if you want that gone too. Allowed at any
-    stage, not just terminal ones: if the pipeline is still actively
-    running, it keeps running in the background regardless (this doesn't
-    cancel it), just no longer visible anywhere in the UI."""
+    hypervisor at all: if a VM exists it's simply left running, untracked
+    by DeployCore from here on (there's no separate "delete just the VM"
+    action, remove it directly on the hypervisor if you want it gone too).
+    Allowed at any stage, not just terminal ones: if the pipeline is still
+    actively running, it keeps running in the background regardless (this
+    doesn't cancel it), just no longer visible anywhere in the UI."""
     deployment = await _get_org_deployment(db, org_id, deployment_id)
     deployment.deleted_at = utcnow()
     audit.record(

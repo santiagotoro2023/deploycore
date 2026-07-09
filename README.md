@@ -186,7 +186,7 @@ no explicit role) grants no access anywhere.
 |---|---|
 | `readonly` | View everything in organizations they're scoped to |
 | `operator` | Everything `readonly` can, plus: create/retry/bulk-create deployments, power on/shut down/power off a deployment's VM, create/edit/delete disk layouts, templates, and ISO assets, clone/export/import templates and disk layouts |
-| `admin` | Everything `operator` can, plus: create/edit organizations, manage hypervisor hosts and webhooks (including credentials/secrets) and run their test buttons, delete a deployment's VM, delete a deployment record, edit organization/global settings, manage users and their global or org-role assignments (global-admin only), delete an organization outright (global-admin only), rename the instance and manage its logo (global-admin only), configure M365 email and trigger backups/updates (global-admin only), upload/switch the HTTPS certificate (global-admin only) |
+| `admin` | Everything `operator` can, plus: create/edit organizations, manage hypervisor hosts and webhooks (including credentials/secrets) and run their test buttons, delete a deployment record, edit organization/global settings, manage users and their global or org-role assignments (global-admin only), delete an organization outright (global-admin only), rename the instance and manage its logo (global-admin only), configure M365 email and trigger backups/updates (global-admin only), upload/switch the HTTPS certificate (global-admin only) |
 
 RBAC is enforced server-side on every route (a dependency resolves the
 caller's effective role for the request's organization and returns `403`
@@ -605,7 +605,6 @@ minimum effective role for the request's organization unless marked
 | GET | `.../deployments/{deployment_id}/power` | readonly | live hypervisor query |
 | POST | `.../deployments/{deployment_id}/power/on` | operator | |
 | POST | `.../deployments/{deployment_id}/power/off` | operator | body `{hard: bool}` |
-| DELETE | `.../deployments/{deployment_id}/vm` | admin | destructive |
 | DELETE | `.../deployments/{deployment_id}` | admin | soft delete, any stage; doesn't touch a VM if one still exists, or cancel the pipeline if still running; `/history` and `/logs` above stay reachable afterward |
 | POST | `/api/callback/{deployment_token}` | single-use token | called by the guest VM, not a user |
 | GET/POST | `/api/organizations/{org_id}/webhooks` | admin | credential-bearing, admin only |
@@ -712,9 +711,8 @@ rm -rf deploycore
 - Nothing outside this repo's own containers/volumes/directory is touched:
   DeployCore never modifies your ESXi hosts, and deleting it does not
   delete any VM it already created there, those keep running exactly as
-  they are until you remove them yourself (from ESXi directly, or from
-  DeployCore's own "Delete VM" button before you uninstall, if you want
-  them gone too).
+  they are until you remove them yourself directly on ESXi, if you want
+  them gone too.
 - If you only want to reset the app back to a fresh setup wizard while
   keeping the rest of the host alone, `docker compose down -v` without
   `--rmi local` is enough, it drops all data but leaves the built images in
