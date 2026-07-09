@@ -1,6 +1,6 @@
 import { Download, Power, PowerOff, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { api, getToken } from "../api/client";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -10,9 +10,11 @@ import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
 
 const STAGES = ["pending", "creating_vm", "booting", "installing_os", "post_install", "configuring", "completed"];
+const TERMINAL_STATES = new Set(["completed", "failed"]);
 
 export default function DeploymentDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { selectedOrgId } = useOrg();
   const { effectiveRole } = useAuth();
   const [deployment, setDeployment] = useState<Deployment | null>(null);
@@ -21,6 +23,7 @@ export default function DeploymentDetail() {
   const [healthHistory, setHealthHistory] = useState<DeploymentHealthCheck[]>([]);
   const [confirmRetry, setConfirmRetry] = useState(false);
   const [confirmDeleteVm, setConfirmDeleteVm] = useState(false);
+  const [confirmDeleteDeployment, setConfirmDeleteDeployment] = useState(false);
   const [powerState, setPowerState] = useState<string | null>(null);
   const [powerBusy, setPowerBusy] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
@@ -102,6 +105,8 @@ export default function DeploymentDetail() {
   const canRetry = deployment.state === "failed" && roleAtLeast(effectiveRole(selectedOrgId), "operator");
   const canOperateVm = roleAtLeast(effectiveRole(selectedOrgId), "operator");
   const canDeleteVm = roleAtLeast(effectiveRole(selectedOrgId), "admin");
+  const canDeleteDeployment =
+    canDeleteVm && TERMINAL_STATES.has(deployment.state) && !deployment.vm_moref;
   const currentStageIndex = STAGES.indexOf(deployment.state);
 
   async function retry() {
@@ -144,6 +149,12 @@ export default function DeploymentDetail() {
     setConfirmDeleteVm(false);
     setPowerState(null);
     await loadStatic();
+  }
+
+  async function deleteDeployment() {
+    if (!selectedOrgId || !id) return;
+    await api.delete(`/organizations/${selectedOrgId}/deployments/${id}`);
+    navigate("/deployments");
   }
 
   function downloadFullLog() {
@@ -190,6 +201,17 @@ export default function DeploymentDetail() {
             >
               <RotateCw size={14} strokeWidth={1.75} />
               Retry
+            </button>
+          )}
+          {canDeleteVm && TERMINAL_STATES.has(deployment.state) && (
+            <button
+              disabled={!canDeleteDeployment}
+              title={deployment.vm_moref ? "Delete the VM first" : undefined}
+              className="flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50 disabled:hover:bg-transparent dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+              onClick={() => setConfirmDeleteDeployment(true)}
+            >
+              <Trash2 size={14} strokeWidth={1.75} />
+              Delete deployment
             </button>
           )}
         </div>
@@ -339,6 +361,14 @@ export default function DeploymentDetail() {
         confirmLabel="Delete VM"
         onConfirm={deleteVm}
         onCancel={() => setConfirmDeleteVm(false)}
+      />
+      <ConfirmDialog
+        open={confirmDeleteDeployment}
+        title="Delete deployment"
+        message="Removes this deployment from lists and the dashboard. Its log history is kept, not shown anywhere in the UI, but not erased either. This cannot be undone from here."
+        confirmLabel="Delete deployment"
+        onConfirm={deleteDeployment}
+        onCancel={() => setConfirmDeleteDeployment(false)}
       />
     </div>
   );

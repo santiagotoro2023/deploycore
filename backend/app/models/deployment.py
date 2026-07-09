@@ -77,6 +77,12 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
     )
     last_health_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Soft delete: hides the deployment from lists/dashboard/detail page
+    # without touching its log lines, state transitions, or health checks,
+    # those stay in place and reachable by the same endpoints as always,
+    # see DELETE .../deployments/{deployment_id} in api/routes/deployments.py.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 class DeploymentStateTransition(UUIDPKMixin, Base):
     __tablename__ = "deployment_state_transitions"

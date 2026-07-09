@@ -521,6 +521,17 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               every log line, the fastest way to hand off a failure to someone else or attach to a support
               ticket.
             </P>
+            <P>
+              <strong>Delete deployment</strong> (admin only) is for cleaning up ones you don't need in
+              the list anymore, a pile of old failed attempts, say. It only appears once the deployment
+              has reached a terminal state, and stays disabled if a VM still exists for it, delete that
+              first. It's a soft delete: the deployment disappears from the list and dashboard counts and
+              its own detail page stops resolving, but the row, its state history, and its log lines are
+              not actually erased, both the <Code>/history</Code> and <Code>/logs</Code> API endpoints
+              keep working for its id afterward. There's currently no UI to browse deleted deployments,
+              this is meant as a safety margin (and an audit trail via the <Code>deployment.delete</Code>{" "}
+              action), not an undo button.
+            </P>
           </>
         ),
       },
@@ -817,7 +828,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               on users, organizations, hypervisors, disk layouts, templates, ISO assets, and webhooks,
               template/disk-layout export/import, settings changes (including branding, M365 config,
               HTTPS certificate uploads/mode switches, and self-update triggers), and deployment
-              create/retry/power actions. It's paginated and exportable to CSV from the Audit Log page.
+              create/retry/power/VM-delete/delete actions. It's paginated and exportable to CSV from the
+              Audit Log page.
             </P>
             <P>
               For a detailed blow-by-blow of one specific deployment attempt (not who triggered it, but

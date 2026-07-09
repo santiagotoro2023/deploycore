@@ -29,17 +29,17 @@ async def dashboard_overview(db: AsyncSession = Depends(get_db)) -> list[OrgOver
     for org in orgs:
         running = await db.scalar(
             select(func.count()).select_from(Deployment).where(
-                Deployment.org_id == org.id, Deployment.state.in_(_RUNNING_STATES)
+                Deployment.org_id == org.id, Deployment.deleted_at.is_(None), Deployment.state.in_(_RUNNING_STATES)
             )
         )
         completed = await db.scalar(
             select(func.count()).select_from(Deployment).where(
-                Deployment.org_id == org.id, Deployment.state == DeploymentState.COMPLETED
+                Deployment.org_id == org.id, Deployment.deleted_at.is_(None), Deployment.state == DeploymentState.COMPLETED
             )
         )
         failed = await db.scalar(
             select(func.count()).select_from(Deployment).where(
-                Deployment.org_id == org.id, Deployment.state == DeploymentState.FAILED
+                Deployment.org_id == org.id, Deployment.deleted_at.is_(None), Deployment.state == DeploymentState.FAILED
             )
         )
         hypervisors_total = await db.scalar(

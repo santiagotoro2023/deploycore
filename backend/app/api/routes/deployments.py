@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import SessionLocal, get_db
 from app.hypervisors import get_driver
 from app.jobs import get_arq_pool
+from app.models.base import utcnow
 from app.models.deployment import (
     Deployment,
     DeploymentHealthCheck,
@@ -33,7 +34,7 @@ from app.schemas.deployment import (
 )
 from app.security.rbac import get_current_user, require_role
 from app.services import audit, notifications, webhooks
-from app.services.deployment_service import InvalidTransition, log, retry_deployment
+from app.services.deployment_service import TERMINAL_STATES, InvalidTransition, log, retry_deployment
 
 router = APIRouter(tags=["deployments"])
 
@@ -53,7 +54,7 @@ async def list_deployments(
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ) -> list[Deployment]:
-    stmt = select(Deployment).where(Deployment.org_id == org_id)
+    stmt = select(Deployment).where(Deployment.org_id == org_id, Deployment.deleted_at.is_(None))
     if state is not None:
         stmt = stmt.where(Deployment.state == state)
     if q:
@@ -209,10 +210,13 @@ async def create_bulk_deployments(
     return deployments
 
 
-async def _get_org_deployment(db: AsyncSession, org_id: uuid.UUID, deployment_id: uuid.UUID) -> Deployment:
-    result = await db.execute(
-        select(Deployment).where(Deployment.id == deployment_id, Deployment.org_id == org_id)
-    )
+async def _get_org_deployment(
+    db: AsyncSession, org_id: uuid.UUID, deployment_id: uuid.UUID, *, include_deleted: bool = False
+) -> Deployment:
+    stmt = select(Deployment).where(Deployment.id == deployment_id, Deployment.org_id == org_id)
+    if not include_deleted:
+        stmt = stmt.where(Deployment.deleted_at.is_(None))
+    result = await db.execute(stmt)
     deployment = result.scalar_one_or_none()
     if deployment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "deployment not found in this organization")
@@ -238,7 +242,11 @@ async def get_deployment(
 async def get_deployment_history(
     org_id: uuid.UUID, deployment_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 ) -> list[DeploymentStateTransition]:
-    await _get_org_deployment(db, org_id, deployment_id)
+    # include_deleted: the deployment itself disappears from lists/detail
+    # once deleted, but its history/logs stay fetchable directly by id
+    # (see DELETE .../deployments/{deployment_id} below), so this
+    # shouldn't 404 just because the deployment was deleted.
+    await _get_org_deployment(db, org_id, deployment_id, include_deleted=True)
     result = await db.execute(
         select(DeploymentStateTransition)
         .where(DeploymentStateTransition.deployment_id == deployment_id)
@@ -255,7 +263,7 @@ async def get_deployment_history(
 async def get_deployment_logs(
     org_id: uuid.UUID, deployment_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 ) -> list[DeploymentLogLine]:
-    await _get_org_deployment(db, org_id, deployment_id)
+    await _get_org_deployment(db, org_id, deployment_id, include_deleted=True)
     result = await db.execute(
         select(DeploymentLogLine).where(DeploymentLogLine.deployment_id == deployment_id).order_by(DeploymentLogLine.ts)
     )
@@ -399,6 +407,37 @@ async def delete_vm(
         org_id=org_id, user_id=current_user.id, target_id=deployment.id,
     )
     deployment.vm_moref = None
+    await db.commit()
+
+
+@router.delete(
+    "/api/organizations/{org_id}/deployments/{deployment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(Role.ADMIN))],
+)
+async def delete_deployment(
+    org_id: uuid.UUID,
+    deployment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Soft delete: hides the deployment from lists, the dashboard, and its
+    own detail page, but its row, log lines, state transitions, and health
+    checks all stay in the database untouched, still reachable through
+    /history and /logs above by anyone who has the id. Blocked while a VM
+    still exists (delete that first, a separate, already-destructive step)
+    or while the deployment is still actively running."""
+    deployment = await _get_org_deployment(db, org_id, deployment_id)
+    if deployment.state not in TERMINAL_STATES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "deployment is still running, wait for it to finish or fail")
+    if deployment.vm_moref is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "delete the VM first")
+    deployment.deleted_at = utcnow()
+    audit.record(
+        db, action="deployment.delete", target_type="deployment",
+        org_id=org_id, user_id=current_user.id, target_id=deployment.id,
+        detail={"hostname": deployment.hostname, "state": deployment.state.value},
+    )
     await db.commit()
 
 
