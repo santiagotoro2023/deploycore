@@ -446,9 +446,19 @@ pending → creating_vm → booting → installing_os → post_install → confi
   whether to show the interactive language/time/keyboard screen, which
   runs before its driver stack is fully up; a floppy is both checked
   earlier and higher-precedence there per Microsoft's own documented
-  search order), sets the boot order with a retry (ESXi's
-  `bootRetryEnabled`, since a freshly attached CD-ROM isn't always
-  connected the instant the VM powers on), then powers on
+  search order), sets the boot order to disk before CD-ROM, not the other
+  way around: on the very first boot the disk is blank and fails,
+  falling through to the CD-ROM within the same boot pass (ESXi's
+  `bootRetryEnabled`/`bootDelay` handle that fallthrough and the case
+  where a freshly attached CD-ROM isn't fully connected the instant the
+  VM powers on), but once Windows Setup has written a bootloader to the
+  disk partway through installation, every later boot (including the one
+  Setup itself triggers mid-install to continue on the disk) goes
+  straight to it instead of landing back in the CD's WinPE, which is
+  what CD-ROM-first did and is why it threw "the computer was
+  unexpectedly restarted" on the first post-file-copy reboot, a
+  documented Packer/vSphere-iso gotcha, not anything specific to this
+  setup, then powers on
 - A Windows install ISO is patched once, the moment it finishes uploading
   (not per deployment), to remove Setup's own "Press any key to boot from
   CD or DVD..." prompt: every stock ISO ships a second, silent UEFI boot

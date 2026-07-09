@@ -223,7 +223,21 @@ async def run_deployment(ctx, deployment_id: str) -> None:
                     await driver.attach_iso(vm_ref, virtio_remote_path, VIRTIO_ISO_UNIT)
 
             current_step = "setting the boot order"
-            await driver.set_boot_order(vm_ref, ["cdrom", "disk"])
+            # Disk first, not CD-ROM first: on the very first boot the disk
+            # is blank, so firmware fails it and falls through to the
+            # CD-ROM within the same boot pass (fast, well within the boot
+            # keypress window below), exactly what bootRetryEnabled/
+            # bootDelay are already tuned for. Windows Setup writes a
+            # bootloader to the disk partway through installation and
+            # reboots to continue; with CD-ROM first that reboot lands back
+            # in the CD's WinPE instead of continuing on the disk, and
+            # Setup throws "the computer was unexpectedly restarted" since
+            # it finds itself back in a fresh WinPE with no memory of the
+            # in-progress install. Disk-first sidesteps this entirely: once
+            # the disk has a bootloader, every later boot goes straight to
+            # it and the CD-ROM is never touched again. Documented
+            # Packer/vSphere-iso gotcha, not something specific to us.
+            await driver.set_boot_order(vm_ref, ["disk", "cdrom"])
             await log(db, deployment, "creating_vm", "VM created, media attached, powering on")
 
             current_step = "powering on the VM"

@@ -719,6 +719,22 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               with locale correctness, which is already handled by the time that screen would appear.
             </P>
             <P>
+              <strong>Boot order: disk before CD-ROM, not the other way around.</strong> This is a
+              documented Packer/vSphere-iso gotcha, not anything specific to this setup, but it's easy to
+              get backwards. On the very first boot the disk is blank, the firmware fails it and falls
+              through to the CD-ROM within the same boot pass, which is exactly what ESXi's{" "}
+              <Code>bootRetryEnabled</Code>/<Code>bootDelay</Code> are tuned for (they also cover a freshly
+              attached CD-ROM not being fully connected the instant the VM powers on). Windows Setup writes
+              a bootloader to the disk partway through installation and reboots to continue there; with
+              CD-ROM first in the boot order, that reboot lands back in the CD's own WinPE instead, and
+              Setup throws "the computer was unexpectedly restarted" since it finds itself back in a fresh
+              WinPE with no memory of the in-progress install, well before OOBE or any WinRM/callback
+              activity, which is also why this specific failure never shows up in the deployment's log
+              stream, DeployCore has no visibility into the guest yet at that point. Disk-first avoids it
+              entirely: once the disk has a bootloader, every later boot goes straight to it and the
+              CD-ROM is never touched again.
+            </P>
+            <P>
               <strong>The two keypress fallbacks that remain.</strong> With the boot-prompt ISO patch in
               place, most deployments never need either of these, they're safety nets, not the primary
               mechanism:
@@ -728,10 +744,7 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                 <>A tight round right after power-on, one synthetic Enter per second for about 15 seconds,
                   for an ISO the boot-prompt patch was skipped on (or any other firmware prompt). Sized to
                   bracket when a "press any key" prompt would appear and stop before Setup's GUI is up,
-                  where blind Enters would start landing on real dialogs instead. The VM's boot order also
-                  auto-retries on its own (ESXi's <Code>bootRetryEnabled</Code>) if the whole boot sequence
-                  fails, since a freshly attached CD-ROM isn't always connected the instant the VM powers
-                  on.</>,
+                  where blind Enters would start landing on real dialogs instead.</>,
                 <>A sparser round after that, one Enter every 8 seconds for about two minutes, timed for
                   whenever Setup's GUI actually finishes loading (which varies far more than the boot
                   prompt's own timing), for the windowsPE-stage language/keyboard screen quirk above.</>,
