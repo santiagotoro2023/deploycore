@@ -26,6 +26,9 @@ class ProxmoxDriver(HypervisorDriver):
     async def power_on(self, vm_ref: str) -> None:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
+    async def send_enter_keypress(self, vm_ref: str) -> None:
+        raise NotImplementedError(_NOT_IMPLEMENTED)
+
     async def power_off(self, vm_ref: str, hard: bool = False) -> None:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 

@@ -28,6 +28,17 @@ ANSWER_ISO_UNIT = 1
 VIRTIO_ISO_UNIT = 2
 
 CALLBACK_POLL_INTERVAL_SECONDS = 15
+
+# Windows Setup's "Press any key to boot from CD or DVD..." prompt only
+# shows up once, early, and its own timeout is short; exactly when it
+# appears varies with boot delay/POST/CD read time, and the VM's boot
+# order (see esxi.py set_boot_order) retries every 10s if the whole
+# sequence fails, so this keeps sending Enter for a while rather than
+# guessing one exact moment, to reliably land on it whichever attempt it
+# shows up on.
+BOOT_KEYPRESS_ATTEMPTS = 30
+BOOT_KEYPRESS_INTERVAL_SECONDS = 2
+
 WINRM_REACHABILITY_POLL_INTERVAL_SECONDS = 10
 WINRM_REACHABILITY_MAX_ATTEMPTS = 60  # ~10 minutes
 
@@ -174,6 +185,21 @@ async def run_deployment(ctx, deployment_id: str) -> None:
             current_step = "powering on the VM"
             await _state_machine.transition(db, deployment, DeploymentState.BOOTING)
             await driver.power_on(vm_ref)
+
+            # Best-effort: Windows Setup boots from optical media only
+            # after a keypress nobody's there to give it, see
+            # send_enter_keypress's docstring. A miss here just means the
+            # boot-order retry (esxi.py) tries again and this catches it
+            # on a later iteration; it's not worth failing the deployment
+            # over, the deployment timeout is what catches a VM that
+            # truly never boots.
+            for _ in range(BOOT_KEYPRESS_ATTEMPTS):
+                await asyncio.sleep(BOOT_KEYPRESS_INTERVAL_SECONDS)
+                try:
+                    await driver.send_enter_keypress(vm_ref)
+                except Exception:  # noqa: BLE001 - best-effort
+                    pass
+
             await log(db, deployment, "booting", "VM powered on, awaiting guest OS install callback")
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator via the log/error_message
             await _fail(ctx, db, driver, deployment, f"failed while {current_step}: {exc}", traceback.format_exc())

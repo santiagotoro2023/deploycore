@@ -498,6 +498,11 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   once per ISO asset, not once per deployment: a second deployment from the same template
                   (or a bulk deployment creating many at once) reuses the copy already there instead of
                   re-transferring a multi-gigabyte file every time.</>,
+                <>Windows Setup's own boot loader shows a "Press any key to boot from CD or DVD..."
+                  prompt for optical boot media, with nobody at the console to press it, so right after
+                  power-on DeployCore sends a synthetic Enter keypress to the VM every couple of seconds
+                  for about a minute (the exact timing varies with the host, and the VM's boot order also
+                  auto-retries on its own if the whole sequence fails) until it lands during that window.</>,
                 <>The guest calls back to DeployCore once Windows Setup finishes (a single-use token per
                   deployment), which is what advances the state from booting to installing_os.</>,
                 <>Post-install runs over WinRM once the guest reports an IP: apply static network config

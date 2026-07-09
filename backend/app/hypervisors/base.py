@@ -57,6 +57,15 @@ class HypervisorDriver(ABC):
     async def power_on(self, vm_ref: str) -> None: ...
 
     @abstractmethod
+    async def send_enter_keypress(self, vm_ref: str) -> None:
+        """Sends a single synthetic Enter keypress to the VM's virtual
+        keyboard, used to dismiss Windows Setup's "Press any key to boot
+        from CD or DVD..." prompt (shown for optical boot media
+        specifically, not USB/HDD) since there's nobody at the console to
+        press it. Best-effort from callers' point of view, sent as a
+        burst rather than once since the prompt's timing varies."""
+
+    @abstractmethod
     async def power_off(self, vm_ref: str, hard: bool = False) -> None: ...
 
     @abstractmethod

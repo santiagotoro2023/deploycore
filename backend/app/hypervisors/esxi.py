@@ -261,6 +261,31 @@ class ESXiDriver(HypervisorDriver):
     async def power_on(self, vm_ref: str) -> None:
         await asyncio.to_thread(self._power_on_sync, vm_ref)
 
+    def _send_enter_keypress_sync(self, vm_ref: str) -> None:
+        """Microsoft's own Windows Setup boot loader shows a "Press any
+        key to boot from CD or DVD..." prompt with a short timeout
+        whenever it's booting from optical media specifically (not from
+        USB or a hard disk), in both BIOS and EFI mode, so with nobody at
+        the console this VM would otherwise silently fall through to the
+        next (empty) boot device every single time. This sends one Enter
+        keypress via the vSphere USB HID scan-code API, the same
+        technique real-world unattended-install automation (e.g.
+        Packer's vSphere builder) uses for exactly this; callers send a
+        burst of these since the prompt's exact timing varies."""
+        service_instance = self._connect_sync()
+        try:
+            vm = self._find_vm_sync(service_instance, vm_ref)
+            key_event = vim.UsbScanCodeSpecKeyEvent()
+            key_event.usbHidCode = (0x28 << 16) | 0x07  # USB HID usage 0x28: Keyboard Return (ENTER)
+            spec = vim.UsbScanCodeSpec()
+            spec.keyEvents = [key_event]
+            vm.PutUsbScanCodes(spec)
+        finally:
+            connect.Disconnect(service_instance)
+
+    async def send_enter_keypress(self, vm_ref: str) -> None:
+        await asyncio.to_thread(self._send_enter_keypress_sync, vm_ref)
+
     def _power_off_sync(self, vm_ref: str, hard: bool) -> None:
         service_instance = self._connect_sync()
         try:
