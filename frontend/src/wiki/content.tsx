@@ -511,6 +511,17 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   to a given hypervisor's datastore once per ISO asset, not once per deployment: a second
                   deployment from the same template (or a bulk deployment creating many at once) reuses
                   the copy already there instead of re-transferring a multi-gigabyte file every time.</>,
+                <>A Windows install ISO is also rewritten once, the moment it finishes uploading into
+                  DeployCore (not per deployment), to remove its "Press any key to boot from CD or
+                  DVD..." prompt: every stock Windows ISO ships two UEFI boot images, the normal one that
+                  prints that prompt and waits forever for a keystroke, and a second, silent one
+                  (<Code>efisys_noprompt.bin</Code>) built by Microsoft for exactly this kind of
+                  unattended deployment. DeployCore finds both inside the ISO and swaps the silent one
+                  into the slot the boot catalog actually points at (via <Code>xorriso</Code>, rewriting
+                  only that one boot image and nothing else), so every VM built from that ISO from then on
+                  just boots straight into Setup with nobody watching. If a particular ISO turns out not
+                  to have that second boot image (non-standard media), the swap is skipped and the ISO is
+                  left untouched rather than failing the upload.</>,
                 <>The answer file ships on a floppy image, not a second CD-ROM: a second CD-ROM works
                   for most of the answer file (Windows Setup does find and apply it, disk partitioning,
                   install, domain join, admin password, all unattended), but empirically not reliably for
@@ -518,24 +529,34 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   language/time/keyboard screen, which runs before Setup's driver stack is fully up. A
                   floppy is both checked earlier and higher-precedence there (Microsoft's own documented
                   search order), which is more reliable for that one specific check.</>,
-                <>Windows Setup's own boot loader shows a "Press any key to boot from CD or DVD..."
-                  prompt before it'll boot the Windows ISO itself, in both BIOS and EFI mode, with nobody
-                  at the console to press it, so right after power-on DeployCore sends a synthetic Enter
-                  keypress to the VM every second for about 15 seconds (long enough to bracket when that
-                  prompt actually appears, short enough to stop before Setup's GUI is up and blind Enters
-                  would start landing on it instead). The VM's boot order also auto-retries on its own
-                  (ESXi's <Code>bootRetryEnabled</Code>) if the whole boot sequence fails, since a freshly
-                  attached CD-ROM isn't always connected the instant the VM powers on.</>,
-                <>Even with a correctly delivered floppy, that language/time/keyboard screen can still
-                  show up: without an explicit <Code>UILanguageFallback</Code>, Setup has nothing to fall
-                  back to if the requested locale isn't a valid Setup UI language on that specific media,
-                  and shows the interactive picker rather than guessing (every known-working real-world
-                  answer file sets this, DeployCore's does too now). As a second line of defense in case
-                  that screen still shows up for some other reason, DeployCore also sends a second,
-                  sparser round of synthetic Enter keypresses after the boot prompt above (one every 8
-                  seconds for about two minutes, timed for whenever Setup's GUI actually finishes loading,
-                  which varies a lot more than the boot prompt's own timing), so the install stays
-                  hands-off either way.</>,
+                <>With the boot-prompt swap above in place, most deployments never need it, but DeployCore
+                  still sends a synthetic Enter keypress to the VM every second for about 15 seconds right
+                  after power-on as a safety net (for an ISO the swap skipped, or any other firmware
+                  prompt), long enough to bracket when a "press any key" prompt would appear, short enough
+                  to stop before Setup's GUI is up and blind Enters would start landing on it instead. The
+                  VM's boot order also auto-retries on its own (ESXi's <Code>bootRetryEnabled</Code>) if
+                  the whole boot sequence fails, since a freshly attached CD-ROM isn't always connected the
+                  instant the VM powers on.</>,
+                <>The answer file sets locale/keyboard in two separate, differently-scoped places:
+                  <Code>Microsoft-Windows-International-Core-WinPE</Code> in the windowsPE pass (covers
+                  only Setup's own UI while it's running) and <Code>Microsoft-Windows-International-Core</Code>{" "}
+                  in the specialize pass (covers the actually-installed OS, the built-in Administrator and
+                  every new user). Only the first one existed originally, which meant even a perfectly
+                  applied answer file could leave the deployed machine itself on a default keyboard;
+                  DeployCore now sets both. Keyboard layout is expressed as an explicit
+                  <Code>LCID:KLID</Code> hex pair rather than a bare locale tag (e.g. <Code>0807:00000807</Code>{" "}
+                  for German (Switzerland)) since a bare tag only picks *a* default keyboard for that
+                  locale, not necessarily the one named after it; DeployCore resolves this automatically
+                  from the locale you enter for every keyboard layout it knows about (see the Templates
+                  page's field hint for the full list, or supply an explicit pair yourself for anything
+                  else). Windows Setup's own windowsPE-stage screen has a long-standing, still-open
+                  upstream quirk (reported against multiple Windows versions) where a small set of locales
+                  don't get their <Code>InputLocale</Code> honored on that one specific screen even though
+                  every other part of the answer file, including the specialize-pass value above, applies
+                  correctly; DeployCore's second, sparser round of synthetic Enter keypresses (one every 8
+                  seconds for about two minutes after the boot prompt, timed for whenever Setup's GUI
+                  actually finishes loading) exists to get past that screen automatically if it shows up,
+                  without changing what either component sets.</>,
                 <>The guest calls back to DeployCore once Windows Setup finishes (a single-use token per
                   deployment), which is what advances the state from booting to installing_os.</>,
                 <>Post-install runs over WinRM once the guest reports an IP: apply static network config

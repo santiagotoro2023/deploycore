@@ -191,6 +191,22 @@ def test_input_locale_resolves_bare_locale_tag_to_named_keyboard():
     assert winpe_intl.xpath("string(u:InputLocale)", namespaces=NS) == "0807:00000807"
 
 
+def test_installed_os_locale_set_in_specialize_pass():
+    """Microsoft-Windows-International-Core-WinPE (windowsPE pass) only
+    covers Setup's own UI while it runs; without the separate
+    Microsoft-Windows-International-Core component in specialize/
+    oobeSystem, the *installed* OS silently keeps whatever locale/keyboard
+    the base image defaults to."""
+    template = _make_template(locale="de-CH", keyboard_layout="de-CH")
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+
+    installed_intl = root.xpath("//u:component[@name='Microsoft-Windows-International-Core']", namespaces=NS)
+    assert len(installed_intl) == 1
+    assert installed_intl[0].xpath("string(u:InputLocale)", namespaces=NS) == "0807:00000807"
+    assert installed_intl[0].xpath("string(u:SystemLocale)", namespaces=NS) == "de-CH"
+    assert installed_intl[0].xpath("string(u:UserLocale)", namespaces=NS) == "de-CH"
+
+
 def test_input_locale_passes_through_explicit_lcid_klid_pair():
     """A value already in "LCID:KLID" form covers a locale outside our
     known-name table, or a non-default keyboard on a supported one, and

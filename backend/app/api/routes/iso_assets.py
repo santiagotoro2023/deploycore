@@ -89,7 +89,7 @@ async def finalize_iso_upload(
 ) -> IsoAsset:
     iso = await _get_org_owned_iso(db, org_id, iso_id)
     try:
-        storage_path, checksum, size_bytes = iso_upload.finalize(iso.id, iso.filename)
+        storage_path, checksum, size_bytes = iso_upload.finalize(iso.id, iso.filename, iso.kind)
     except FileNotFoundError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "no chunks were uploaded for this ISO asset")
     iso.storage_path = storage_path
@@ -183,7 +183,7 @@ async def finalize_global_iso_upload(
 ) -> IsoAsset:
     iso = await _get_global_iso(db, iso_id)
     try:
-        storage_path, checksum, size_bytes = iso_upload.finalize(iso.id, iso.filename)
+        storage_path, checksum, size_bytes = iso_upload.finalize(iso.id, iso.filename, iso.kind)
     except FileNotFoundError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "no chunks were uploaded for this ISO asset")
     iso.storage_path = storage_path

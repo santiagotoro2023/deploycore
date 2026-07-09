@@ -390,17 +390,33 @@ pending → creating_vm → booting → installing_os → post_install → confi
   earlier and higher-precedence there per Microsoft's own documented
   search order), sets the boot order with a retry (ESXi's
   `bootRetryEnabled`, since a freshly attached CD-ROM isn't always
-  connected the instant the VM powers on), then powers on and sends two
-  rounds of synthetic Enter keypresses: a tight one right after power-on
-  (Windows Setup's boot loader waits for a keypress before booting from
-  optical media, in both BIOS and EFI mode, with nobody at the console to
-  give it one) and a sparser one over the next couple of minutes (that
-  language/time/keyboard screen shows up unconditionally on some Windows
-  builds even with a correctly delivered answer file, its values already
-  correct, just needing a confirmation click). The guest's
-  `FirstLogonCommands` enable WinRM and call back to
+  connected the instant the VM powers on), then powers on
+- A Windows install ISO is patched once, the moment it finishes uploading
+  (not per deployment), to remove Setup's own "Press any key to boot from
+  CD or DVD..." prompt: every stock ISO ships a second, silent UEFI boot
+  image (`efisys_noprompt.bin`) alongside the normal one, built by
+  Microsoft for exactly this kind of unattended deployment; `iso_remaster.py`
+  finds it and swaps it into the boot catalog's actual slot via `xorriso`,
+  rewriting only that one boot image. Deployments still send a tight round
+  of synthetic Enter keypresses right after power-on as a safety net for
+  ISOs where the swap wasn't possible (media without that second boot
+  image), plus a second, sparser round over the next couple of minutes for
+  Windows Setup's own windowsPE-stage language/time/keyboard screen, which
+  has a long-standing upstream quirk on some locales where `InputLocale`
+  isn't honored on that one specific screen even though the rest of the
+  answer file (including the specialize-pass locale, see below) applies
+  correctly. The guest's `FirstLogonCommands` enable WinRM and call back to
   `/api/callback/{token}` (single-use per-deployment token) once Windows
   Setup finishes, which is what advances `booting → installing_os`
+- Locale/keyboard are set in two places in the answer file:
+  `Microsoft-Windows-International-Core-WinPE` (windowsPE pass, Setup's own
+  UI only) and `Microsoft-Windows-International-Core` (specialize pass, the
+  actually-installed OS). Keyboard layout renders as an explicit
+  `LCID:KLID` hex pair (e.g. `0807:00000807` for German (Switzerland))
+  rather than a bare locale tag, since a bare tag only picks *a* default
+  keyboard for that locale, not necessarily its own named one;
+  `template_render.py` resolves this automatically for the locales it
+  knows about, or passes through an already-hex value unchanged
 - Post-install phase (over WinRM once the guest reports an IP): apply
   static network config if requested, install each configured Windows
   feature, run each post-install script in order, join the domain here if

@@ -39,6 +39,19 @@
             <ComputerName>{{ deployment.hostname }}</ComputerName>
             <TimeZone>{{ template.timezone }}</TimeZone>
         </component>
+        <!-- Microsoft-Windows-International-Core-WinPE (windowsPE pass,
+             above) only governs Setup's own UI/keyboard while it's
+             running; it has no effect on the installed OS. This is the
+             separate, differently-named component that sets the actual
+             deployed system's default locale/keyboard for the built-in
+             Administrator and every new user, so the machine is right in
+             daily use even if Setup's own screen ever misbehaves. -->
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <InputLocale>{{ input_locale }}</InputLocale>
+            <SystemLocale>{{ template.locale }}</SystemLocale>
+            <UILanguage>{{ template.locale }}</UILanguage>
+            <UserLocale>{{ template.locale }}</UserLocale>
+        </component>
 {% if template.domain_join_enabled and template.domain_join_timing == "answer_file" %}
 {% include "_domain_join.xml.j2" %}
 {% endif %}
