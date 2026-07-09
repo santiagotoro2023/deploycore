@@ -282,7 +282,13 @@ class ESXiDriver(HypervisorDriver):
             datastore_name = self.host.default_datastore
             remote_path = f"/folder/{remote_name}?dcPath={datacenter.name}&dsName={datastore_name}"
             url = f"https://{self.host.api_endpoint}{remote_path}"
-            cookie = service_instance._stub.cookie
+            # pyvmomi's stub exposes the raw Set-Cookie header it received
+            # (`vmware_soap_session="..."; Path=/; HttpOnly; Secure; `), not
+            # a Cookie-header-ready value, those trailing attributes aren't
+            # legal in a request Cookie header. httpx validates that
+            # strictly and raises on it, so only the name=value pair itself
+            # gets reused here.
+            cookie = service_instance._stub.cookie.split(";")[0].strip()
             headers = {"Cookie": cookie}
             if skip_if_exists:
                 # Callers use this for content keyed by a stable id (the
