@@ -373,8 +373,10 @@ org-scoped copy.
   is attached; the pipeline refuses to deploy from it until one is set),
   disk layout, CPU count and cores per socket, RAM (MB), disk size (GB) and
   disk provisioning type (thin / thick lazily zeroed / thick eagerly
-  zeroed), network name and network adapter type (VMXNET3, E1000, or
-  E1000E), optional VLAN ID, locale/timezone/keyboard layout as Windows
+  zeroed), network name (an ESXi/vCenter port group, network segmentation
+  is expected to already be handled by picking the right port group, not
+  by a VLAN tag on the template) and network adapter type (VMXNET3, E1000,
+  or E1000E), locale/timezone/keyboard layout as Windows
   identifiers not IETF/IANA ones (new templates default to `de-DE`/
   `W. Europe Standard Time`/`de-CH`), a local administrator password
   (write-only), and an off-by-default **custom admin account** toggle:

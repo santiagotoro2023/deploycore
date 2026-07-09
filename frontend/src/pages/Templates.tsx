@@ -239,7 +239,7 @@ function TemplateForm({
   const isEdit = !!existing;
   const [name, setName] = useState(existing?.name ?? "");
   const [isoAssetId, setIsoAssetId] = useState(existing?.iso_asset_id ?? isoAssets[0]?.id ?? "");
-  const [diskLayoutId, setDiskLayoutId] = useState(existing?.disk_layout_id ?? "");
+  const [diskLayoutId, setDiskLayoutId] = useState(existing?.disk_layout_id ?? diskLayouts[0]?.id ?? "");
   const [cpuCount, setCpuCount] = useState(existing?.cpu_count ?? 2);
   const [coresPerSocket, setCoresPerSocket] = useState(existing?.cores_per_socket ?? 1);
   const [ramMb, setRamMb] = useState(existing?.ram_mb ?? 4096);
@@ -247,7 +247,6 @@ function TemplateForm({
   const [diskProvisioning, setDiskProvisioning] = useState<DiskProvisioning>(existing?.disk_provisioning ?? "thin");
   const [networkName, setNetworkName] = useState(existing?.network_name ?? "");
   const [networkAdapterType, setNetworkAdapterType] = useState<NetworkAdapterType>(existing?.network_adapter_type ?? "vmxnet3");
-  const [vlanId, setVlanId] = useState(existing?.vlan_id?.toString() ?? "");
   const [locale, setLocale] = useState(existing?.locale ?? "de-DE");
   const [timezone, setTimezone] = useState(existing?.timezone ?? "W. Europe Standard Time");
   const [keyboardLayout, setKeyboardLayout] = useState(existing?.keyboard_layout ?? "de-CH");
@@ -300,10 +299,14 @@ function TemplateForm({
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!name || !diskLayoutId || !networkName || (customAdminEnabled && !localAdminUsername) || (!isEdit && !localAdminPassword)) {
-      setError(
-        `Name, disk layout, network name, ${customAdminEnabled ? "a local admin username, " : ""}and a local administrator password are required.`
-      );
+    const missing: string[] = [];
+    if (!name) missing.push("Name");
+    if (!diskLayoutId) missing.push("Disk layout");
+    if (!networkName) missing.push("Network name");
+    if (customAdminEnabled && !localAdminUsername) missing.push("Local admin username");
+    if (!isEdit && !localAdminPassword) missing.push("Local administrator password");
+    if (missing.length > 0) {
+      setError(`Missing required field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}.`);
       return;
     }
     if (customAdminEnabled && localAdminUsername.trim().toLowerCase() === "administrator") {
@@ -321,7 +324,6 @@ function TemplateForm({
       disk_provisioning: diskProvisioning,
       network_name: networkName,
       network_adapter_type: networkAdapterType,
-      vlan_id: vlanId ? Number(vlanId) : null,
       locale,
       timezone,
       keyboard_layout: keyboardLayout,
@@ -349,8 +351,8 @@ function TemplateForm({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 py-8">
-      <form noValidate onSubmit={onSubmit} className="w-[32rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 py-8">
+      <form onSubmit={onSubmit} className="max-h-[85vh] w-[32rem] overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-1 text-sm font-semibold">{isEdit ? `Edit ${existing!.name}` : "New template"}</h2>
         {isEdit && (
           <p className="mb-4 text-xs text-neutral-500">
@@ -361,7 +363,7 @@ function TemplateForm({
         {!isEdit && <div className="mb-4" />}
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
-        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={name} onChange={(e) => setName(e.target.value)} />
+        <input required className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={name} onChange={(e) => setName(e.target.value)} />
 
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
@@ -412,39 +414,23 @@ function TemplateForm({
           </Select>
         </div>
 
-        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Network name</label>
-        <p className="mb-1 text-xs text-neutral-400">
-          The port group / vSwitch network name exactly as it appears in ESXi or vCenter networking, not a
-          Windows network name, this is what the new VM's virtual NIC attaches to.
-        </p>
-        <div className="mb-3 grid grid-cols-3 gap-3">
-          <input className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={networkName} onChange={(e) => setNetworkName(e.target.value)} />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Network name (ESXi/vCenter port group, not a Windows name)</label>
+        <div className="mb-3 grid grid-cols-2 gap-3">
+          <input required className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={networkName} onChange={(e) => setNetworkName(e.target.value)} />
           <Select className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={networkAdapterType} onChange={(e) => setNetworkAdapterType(e.target.value as NetworkAdapterType)}>
             <option value="vmxnet3">VMXNET3</option>
             <option value="e1000">E1000</option>
             <option value="e1000e">E1000E</option>
           </Select>
-          <input
-            type="number"
-            placeholder="VLAN ID (optional)"
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
-            value={vlanId}
-            onChange={(e) => setVlanId(e.target.value)}
-          />
         </div>
 
-        <p className="mb-1 text-xs text-neutral-400">
-          Windows identifiers, not IETF/IANA (e.g. <code>de-DE</code>, <code>W. Europe Standard Time</code>).
-          Keyboard layout auto-resolves to that locale's own named layout; for anything else use an explicit{" "}
-          <code>LCID:KLID</code> pair.
-        </p>
         <div className="mb-3 grid grid-cols-3 gap-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Locale</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Locale (Windows id, not IETF)</label>
             <input className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={locale} onChange={(e) => setLocale(e.target.value)} />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Timezone</label>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Timezone (Windows id, not IANA)</label>
             <input className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
           </div>
           <div>
@@ -457,16 +443,15 @@ function TemplateForm({
           <input type="checkbox" checked={customAdminEnabled} onChange={(e) => setCustomAdminEnabled(e.target.checked)} />
           Custom local administrator account
         </label>
-        <p className="mb-1 text-xs text-neutral-400">
-          {customAdminEnabled
-            ? "Created as a new local account and added to Administrators; the built-in Administrator account is disabled within seconds of first boot, so this is the account that's actually usable afterward."
-            : "Off (default): the built-in Administrator account is used as-is, just with the password below. Turn this on for a differently-named admin account instead, with the built-in Administrator disabled automatically."}
-        </p>
+        {customAdminEnabled && (
+          <p className="mb-1 text-xs text-neutral-400">Disables the built-in Administrator account.</p>
+        )}
         <div className={`mb-3 grid gap-3 ${customAdminEnabled ? "grid-cols-2" : "grid-cols-1"}`}>
           {customAdminEnabled && (
             <div>
               <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Local admin username</label>
               <input
+                required
                 className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
                 value={localAdminUsername}
                 onChange={(e) => setLocalAdminUsername(e.target.value)}
@@ -478,6 +463,7 @@ function TemplateForm({
               {customAdminEnabled ? "Local admin password" : "Administrator password"}{isEdit && " (leave blank to keep unchanged)"}
             </label>
             <input
+              required={!isEdit}
               type="password"
               autoComplete="new-password"
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
@@ -502,10 +488,6 @@ function TemplateForm({
         </div>
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Software to install</label>
-        <p className="mb-1 text-xs text-neutral-400">
-          Installed silently over WinRM after Windows features, before any post-install scripts. Upload
-          MSI/EXE installers on the App Assets page first.
-        </p>
         {appInstalls.length > 0 && (
           <div className="mb-2 space-y-1.5">
             {appInstalls.map((entry, index) => {

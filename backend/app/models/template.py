@@ -54,7 +54,6 @@ class DeploymentTemplate(UUIDPKMixin, TimestampMixin, Base):
     network_adapter_type: Mapped[NetworkAdapterType] = enum_column(
         NetworkAdapterType, "network_adapter_type", default=NetworkAdapterType.VMXNET3, nullable=False
     )
-    vlan_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     locale: Mapped[str] = mapped_column(String(20), default="en-US", nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)

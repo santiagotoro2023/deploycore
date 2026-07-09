@@ -506,11 +506,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   workloads want).</>,
                 <>Network name, this is the ESXi/vCenter <strong>port group or vSwitch name</strong> exactly
                   as it appears in your hypervisor's networking configuration, not a Windows-side network
-                  name, it's what the new VM's virtual NIC attaches to. Also its{" "}
+                  name, it's what the new VM's virtual NIC attaches to. There's no separate VLAN ID field:
+                  network segmentation is expected to already be handled by picking the right port group
+                  (one per VLAN, set up on the hypervisor side), not by tagging the VM itself. Also its{" "}
                   <strong>adapter type</strong> (VMXNET3, the paravirtualized default with the best
                   performance and the one to use unless you have a specific reason not to; E1000/E1000E
-                  emulate real Intel NICs, only needed for guest OS or driver compatibility). Also an
-                  optional VLAN ID, and locale/timezone/keyboard layout as Windows identifiers, not
+                  emulate real Intel NICs, only needed for guest OS or driver compatibility). Also
+                  locale/timezone/keyboard layout as Windows identifiers, not
                   IETF/IANA ones (new templates default to <Code>de-DE</Code>/<Code>W. Europe Standard
                   Time</Code>/<Code>de-CH</Code>; see "Unattended Windows Setup, in depth" for how keyboard
                   layout resolves to an exact physical layout rather than just a language).</>,

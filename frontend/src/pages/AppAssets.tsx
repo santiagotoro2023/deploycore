@@ -262,12 +262,6 @@ function UploadAppForm({
             />
           </div>
         </div>
-        <p className="mb-3 text-xs text-neutral-400">
-          A template can override these arguments per attachment; this is just the default. MSIs run through{" "}
-          <code>msiexec /i</code> with these args appended; EXEs run directly with these args passed straight
-          through, whatever that installer's own silent-install flag is (commonly <code>/S</code>,{" "}
-          <code>/silent</code>, <code>/verysilent</code>, or <code>/quiet</code>, check the vendor's docs).
-        </p>
         {uploading && (
           <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
             <div className="h-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />

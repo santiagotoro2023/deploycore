@@ -39,7 +39,6 @@ class DeploymentTemplateCreate(BaseModel):
     disk_provisioning: DiskProvisioning = DiskProvisioning.THIN
     network_name: str
     network_adapter_type: NetworkAdapterType = NetworkAdapterType.VMXNET3
-    vlan_id: int | None = None
     locale: str = "de-DE"
     timezone: str = "W. Europe Standard Time"
     keyboard_layout: str = "de-CH"
@@ -68,7 +67,6 @@ class DeploymentTemplateUpdate(BaseModel):
     disk_provisioning: DiskProvisioning | None = None
     network_name: str | None = None
     network_adapter_type: NetworkAdapterType | None = None
-    vlan_id: int | None = None
     locale: str | None = None
     timezone: str | None = None
     keyboard_layout: str | None = None
@@ -101,7 +99,6 @@ class DeploymentTemplateRead(BaseModel):
     disk_provisioning: DiskProvisioning
     network_name: str
     network_adapter_type: NetworkAdapterType
-    vlan_id: int | None
     locale: str
     timezone: str
     keyboard_layout: str
@@ -147,7 +144,6 @@ class DeploymentTemplateExport(BaseModel):
     disk_provisioning: DiskProvisioning
     network_name: str
     network_adapter_type: NetworkAdapterType
-    vlan_id: int | None
     locale: str
     timezone: str
     keyboard_layout: str
@@ -172,7 +168,6 @@ class DeploymentTemplateImport(BaseModel):
     disk_provisioning: DiskProvisioning = DiskProvisioning.THIN
     network_name: str
     network_adapter_type: NetworkAdapterType = NetworkAdapterType.VMXNET3
-    vlan_id: int | None = None
     locale: str = "de-DE"
     timezone: str = "W. Europe Standard Time"
     keyboard_layout: str = "de-CH"

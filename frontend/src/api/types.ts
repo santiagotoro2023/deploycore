@@ -106,7 +106,6 @@ export interface DeploymentTemplate {
   disk_provisioning: DiskProvisioning;
   network_name: string;
   network_adapter_type: NetworkAdapterType;
-  vlan_id: number | null;
   locale: string;
   timezone: string;
   keyboard_layout: string;
