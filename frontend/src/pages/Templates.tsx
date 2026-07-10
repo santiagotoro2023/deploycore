@@ -428,7 +428,7 @@ function TemplateForm({
                 >
                   {editions.map((ed) => (
                     <option key={ed.index} value={ed.index}>
-                      {ed.index} — {ed.description || ed.name} · {ed.has_gui ? "GUI" : "No GUI"}
+                      {ed.description || ed.name}
                     </option>
                   ))}
                 </Select>

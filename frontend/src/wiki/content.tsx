@@ -581,16 +581,17 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                 "Name, and the Windows ISO to use (a template can exist before an ISO is attached, but it can't deploy until one is set)",
                 <>The Windows <strong>edition</strong> to install from that ISO's <Code>install.wim</Code>. If
                   the ISO asset has detected editions (see "ISO assets"), this is a dropdown of the actual
-                  named choices, each one tagged with a short <Code>GUI</Code>/<Code>No GUI</Code> label
-                  (e.g. "2 — Windows Server 2025 Standard (Desktop Experience) · GUI") so you never have to
-                  guess which index gets you a GUI, otherwise it's a plain image-index number. This
-                  defaults to index 1, which is <em>not</em> a considered default, it's whatever
-                  Microsoft's media happens to put first, typically Server Core (no GUI) on standard
-                  multi-edition Server ISOs, check the dropdown rather than assuming. That GUI/Core label
-                  comes from the WIM's own <Code>FLAGS</Code> metadata (a Core edition's flag always ends
-                  in <Code>Core</Code>, e.g. <Code>ServerStandardCore</Code>),
-                  not from parsing the edition name, so it's reliable even on media whose name/description
-                  doesn't spell "(Desktop Experience)" out.</>,
+                  edition names as Microsoft's own media names them (e.g. "Windows Server 2025 Standard
+                  (Desktop Experience)"), so you're picking a real edition instead of a bare number,
+                  otherwise it's a plain image-index number. This defaults to index 1, which is{" "}
+                  <em>not</em> a considered default, it's whatever Microsoft's media happens to put first,
+                  typically Server Core (no GUI) on standard multi-edition Server ISOs, check the dropdown
+                  rather than assuming. Detection also works out whether each edition actually has a GUI
+                  from the WIM's own <Code>FLAGS</Code> metadata (a Core edition's flag always ends in{" "}
+                  <Code>Core</Code>, e.g. <Code>ServerStandardCore</Code>, more reliable than the edition
+                  name/description text, which isn't guaranteed to spell "(Desktop Experience)" out on
+                  every ISO), stored on the edition for future use even though the dropdown itself doesn't
+                  show it as a separate tag today, trusting Microsoft's own naming to already be clear.</>,
                 <>Disk layout, CPU count and cores per socket, RAM (MB), disk size (GB) and its{" "}
                   <strong>provisioning type</strong>: thin (space allocated on demand), thick lazily zeroed
                   (space reserved up front, zeroed on first write), or thick eagerly zeroed (space reserved
