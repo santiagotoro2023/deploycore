@@ -158,17 +158,17 @@ class ESXiDriver(HypervisorDriver):
             # pipeline never installs it), a fresh Windows guest only has the
             # default PS/2 mouse, which the ESXi/vSphere web console can't
             # track properly, the cursor doesn't reliably show up or move
-            # with the actual pointer at all. A USB controller is the
-            # standard fix (the same one Packer's vsphere-iso builder and
-            # most other vSphere automation tools apply by default) since
-            # ESXi presents an absolute-positioning USB tablet over it
-            # automatically, no VMware Tools required.
+            # with the actual pointer at all. A USB 3.0 (xHCI) controller is
+            # the standard fix, confirmed against Packer's own vsphere-iso
+            # builder source (its "xhci" option constructs exactly
+            # types.VirtualUSBXHCIController with no other properties set,
+            # same as here, specifically "needed for mouse during install
+            # without VMware Tools"): ESXi presents an absolute-positioning
+            # USB tablet over it automatically, no VMware Tools required.
             try:
                 usb_spec = vim.vm.device.VirtualDeviceSpec()
                 usb_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
-                usb_spec.device = vim.vm.device.VirtualUSBController()
-                usb_spec.device.autoConnectDevices = True
-                usb_spec.device.ehciEnabled = True
+                usb_spec.device = vim.vm.device.VirtualUSBXHCIController()
                 WaitForTask(vm.ReconfigVM_Task(spec=vim.vm.ConfigSpec(deviceChange=[usb_spec])))
             except Exception:  # noqa: BLE001 - cosmetic, never worth failing VM creation over
                 logger.exception("esxi: failed to add a USB controller to %s, console mouse may not work", spec.name)

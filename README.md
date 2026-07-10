@@ -522,14 +522,17 @@ pending → creating_vm → booting → installing_os → post_install → confi
   without injecting the VMware Tools PVSCSI driver first, which nothing
   here does; LSI Logic SAS needs no driver injection on any Windows
   Server version, at the cost of PVSCSI's performance edge on very
-  high-IOPS workloads; a USB controller too, best-effort and separate from
-  VM creation itself so a failure here can never block a deployment: ESXi
-  presents an absolute-positioning USB tablet over it automatically, no
-  VMware Tools required, without it a fresh guest only has the default
-  PS/2 mouse, which the ESXi/vSphere web console can't track properly,
-  the cursor doesn't reliably show up or move with the actual pointer at
-  all, the same fix Packer's vsphere-iso builder and most other vSphere
-  automation applies by default),
+  high-IOPS workloads; a USB 3.0/xHCI controller too, best-effort and
+  separate from VM creation itself so a failure here can never block a
+  deployment: ESXi presents an absolute-positioning USB tablet over it
+  automatically, no VMware Tools required, without it a fresh guest only
+  has the default PS/2 mouse, which the ESXi/vSphere web console can't
+  track properly, the cursor doesn't reliably show up or move with the
+  actual pointer at all, confirmed against Packer's own vsphere-iso
+  builder source, which constructs exactly `VirtualUSBXHCIController`
+  with no other properties for its own "xhci" option, specifically
+  documented there as "needed for mouse during install without VMware
+  Tools"),
   attaches media (a floppy, not a second CD-ROM: a second CD-ROM does get
   found and applied for most of the answer file, but empirically not
   reliably for Setup's very first implicit check, the one deciding

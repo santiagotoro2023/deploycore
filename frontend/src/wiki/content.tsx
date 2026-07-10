@@ -789,15 +789,17 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               nobody watching every single time.
             </P>
             <P>
-              <strong>Console mouse cursor.</strong> Every VM also gets a USB controller added right after
-              creation (best-effort, a separate step from VM creation itself so a failure here never blocks
-              a deployment): ESXi presents an absolute-positioning USB tablet over it automatically, no
-              VMware Tools required. Without it, a fresh guest only has the default PS/2 mouse, which the
-              ESXi/vSphere web console can't track properly, the cursor doesn't reliably show up or move
-              with the actual pointer at all, only really noticeable if you open the console yourself
-              (post-install itself is entirely WinRM-driven, it never needs the console or a working mouse
-              for anything). Same fix Packer's <Code>vsphere-iso</Code> builder and most other vSphere
-              automation applies by default.
+              <strong>Console mouse cursor.</strong> Every VM also gets a USB 3.0 (xHCI) controller added
+              right after creation (best-effort, a separate step from VM creation itself so a failure here
+              never blocks a deployment): ESXi presents an absolute-positioning USB tablet over it
+              automatically, no VMware Tools required. Without it, a fresh guest only has the default PS/2
+              mouse, which the ESXi/vSphere web console can't track properly, the cursor doesn't reliably
+              show up or move with the actual pointer at all, only really noticeable if you open the
+              console yourself (post-install itself is entirely WinRM-driven, it never needs the console or
+              a working mouse for anything). Confirmed against Packer's own <Code>vsphere-iso</Code> builder
+              source, which constructs exactly <Code>VirtualUSBXHCIController</Code> with no other
+              properties for its own <Code>"xhci"</Code> option, documented there as specifically "needed
+              for mouse during install without VMware Tools."
             </P>
             <P>
               <strong>The "Press any key to boot from CD or DVD..." prompt.</strong> This isn't part of

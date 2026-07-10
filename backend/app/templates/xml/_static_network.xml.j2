@@ -7,14 +7,28 @@
      out first, then reconfigure to the static address remotely, which
      can't work at all on a network with no DHCP server to hand out that
      first address in the first place. This way the static config is
-     live before Windows Setup even finishes, no DHCP involved anywhere. -->
+     live before Windows Setup even finishes, no DHCP involved anywhere.
+
+     Element order below is load-bearing, not stylistic: Microsoft's own
+     schema requires Interface's children in the exact order Ipv4Settings,
+     Identifier, UnicastIpAddresses, Routes (confirmed against
+     learn.microsoft.com's own component reference, which explicitly warns
+     about this), and Route's children in the exact order Identifier,
+     Metric, NextHopAddress, Prefix. Getting either wrong doesn't raise a
+     helpful XML error, Setup just fails specialize-pass processing with a
+     generic "Windows installieren: Die Installation konnte nicht
+     abgeschlossen werden" dialog and no other detail, exactly what an
+     earlier version of this file did (Identifier before Ipv4Settings,
+     Route fields in the wrong order) before being fixed against a real,
+     working example (cloudfoundry-community/windows-stemcell-concourse's
+     autounattend.xml) and Microsoft's own documented ordering. -->
 <component name="Microsoft-Windows-TCPIP" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
     <Interfaces>
         <Interface wcm:action="add">
-            <Identifier>Ethernet</Identifier>
             <Ipv4Settings>
                 <DhcpEnabled>false</DhcpEnabled>
             </Ipv4Settings>
+            <Identifier>Ethernet</Identifier>
             <UnicastIpAddresses>
                 <IpAddress wcm:action="add" wcm:keyValue="1">{{ deployment.static_ip }}/{{ static_prefix }}</IpAddress>
             </UnicastIpAddresses>
@@ -22,9 +36,9 @@
             <Routes>
                 <Route wcm:action="add">
                     <Identifier>1</Identifier>
-                    <Prefix>0.0.0.0/0</Prefix>
-                    <NextHopAddress>{{ deployment.static_gateway }}</NextHopAddress>
                     <Metric>1</Metric>
+                    <NextHopAddress>{{ deployment.static_gateway }}</NextHopAddress>
+                    <Prefix>0.0.0.0/0</Prefix>
                 </Route>
             </Routes>
 {% endif %}
