@@ -179,19 +179,26 @@ def test_ui_language_has_a_fallback():
     assert winpe_intl.xpath("string(u:SetupUILanguage/u:UILanguage)", namespaces=NS) == "de-CH"
 
 
-def test_oobe_sets_protectyourpc_and_networklocation():
-    """Hide*/Skip* alone don't cover every OOBE screen: ProtectYourPC has
-    no default at all and Microsoft's own docs say plainly that leaving it
-    unset opens the "Get going fast" diagnostic-data/privacy consent
-    screen regardless of the other flags, confirmed the hard way in real
-    testing. NetworkLocation is the same shape for the "Computer's Current
-    Location" network-profile prompt, which a guest with a real network
-    connection (every deployment has one) legitimately triggers."""
+def test_oobe_stays_at_the_last_confirmed_working_set():
+    """ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen were tried
+    and rolled back: added on a documentation-only theory, never actually
+    confirmed to fix anything, and every deployment after adding them
+    failed outright (a generic Setup-level error, unrelated to static vs.
+    DHCP networking or hostname length, both independently ruled out).
+    Locking in the plain six-element set that was last confirmed to
+    actually complete a real install, so a future change doesn't silently
+    reintroduce the untested ones without a real reason."""
     root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout()).encode())
 
     oobe = root.xpath("//u:component[@name='Microsoft-Windows-Shell-Setup']/u:OOBE", namespaces=NS)[0]
-    assert oobe.xpath("string(u:ProtectYourPC)", namespaces=NS) == "3"
-    assert oobe.xpath("string(u:NetworkLocation)", namespaces=NS) == "Home"
+    assert [c.tag.split("}")[-1] for c in oobe] == [
+        "HideEULAPage",
+        "HideLocalAccountScreen",
+        "HideOnlineAccountScreens",
+        "HideWirelessSetupInOOBE",
+        "SkipMachineOOBE",
+        "SkipUserOOBE",
+    ]
 
 
 def test_custom_admin_disabled_by_default_keeps_builtin_administrator():

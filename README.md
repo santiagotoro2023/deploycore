@@ -581,16 +581,7 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `SkipMachineOOBE`/`SkipUserOOBE` alone don't make Setup log in on their own,
   `FirstLogonCommands` only ever run as part of an actual first-logon event,
   without `AutoLogon` that means a plain login prompt sitting at the console
-  until a human physically logs in, defeating the entire point. `Skip*`
-  flags alone were also never the full story for the diagnostics/privacy
-  screens seen appearing anyway (observed in testing): `ProtectYourPC` has
-  no default at all, Microsoft's own docs for it say plainly that leaving
-  it unset opens the "Get going fast" page during Setup regardless of
-  every other flag, and `NetworkLocation` is the same shape for the
-  "Computer's Current Location" network-profile prompt a guest with a real
-  network connection (every deployment has one) legitimately triggers.
-  Both are now set (`ProtectYourPC=3`, `NetworkLocation=Home`) alongside
-  the existing `Hide*`/`Skip*` flags. `LogonCount` is `1`, so
+  until a human physically logs in, defeating the entire point. `LogonCount` is `1`, so
   Windows won't auto-logon again after this, and the very first
   `FirstLogonCommand` (before anything else, including enabling WinRM)
   scrubs the plaintext password `AutoLogon` leaves in the

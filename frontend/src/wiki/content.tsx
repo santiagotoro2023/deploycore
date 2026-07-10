@@ -897,21 +897,18 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               <strong>OOBE and the built-in Administrator account.</strong> The <Code>OOBE</Code> block
               (<Code>HideEULAPage</Code>, <Code>HideLocalAccountScreen</Code>,{" "}
-              <Code>HideOEMRegistrationScreen</Code>, <Code>HideOnlineAccountScreens</Code>,{" "}
-              <Code>HideWirelessSetupInOOBE</Code>, <Code>NetworkLocation</Code>,{" "}
-              <Code>ProtectYourPC</Code>, <Code>SkipMachineOOBE</Code>, <Code>SkipUserOOBE</Code>)
-              suppresses the interactive OOBE account-setup/network screens, but{" "}
-              <strong>on its own doesn't get anyone logged in</strong> at all: <Code>FirstLogonCommands</Code>{" "}
-              only ever run as part of an actual first-logon event, and without something making that
-              happen unattended, Setup just leaves a plain login prompt sitting at the console, exactly
-              the manual step this whole tool exists to remove. The <Code>Hide*</Code>/<Code>Skip*</Code>{" "}
-              flags were also never the full picture on their own for the diagnostics/privacy screens seen
-              in real testing: <Code>ProtectYourPC</Code> has no default value at all, and Microsoft's own
-              documentation for it says plainly that leaving it unset opens the "Get going fast"
-              diagnostic-data/privacy consent page during Setup regardless of every other flag being set,
-              exactly what was showing up. <Code>NetworkLocation</Code> is the same shape for the{" "}
-              "Computer's Current Location" network-profile prompt, which a guest with a real network
-              connection (every deployment has one) legitimately triggers otherwise.{" "}
+              <Code>HideOnlineAccountScreens</Code>, <Code>HideWirelessSetupInOOBE</Code>,{" "}
+              <Code>SkipMachineOOBE</Code>, <Code>SkipUserOOBE</Code>) suppresses the interactive OOBE
+              account-setup/network screens, but <strong>on its own doesn't get anyone logged in</strong>{" "}
+              at all: <Code>FirstLogonCommands</Code> only ever run as part of an actual first-logon
+              event, and without something making that happen unattended, Setup just leaves a plain
+              login prompt sitting at the console, exactly the manual step this whole tool exists to
+              remove. (A few extra <Code>OOBE</Code> settings, <Code>ProtectYourPC</Code> and{" "}
+              <Code>NetworkLocation</Code>, were tried at one point to suppress a diagnostics/privacy
+              screen seen once in testing, but were never actually confirmed to fix anything and every
+              deployment after adding them failed outright at the Setup level, unrelated to networking
+              mode or hostname length, both independently ruled out; rolled back to this plain six-flag
+              set, the one last confirmed to actually complete a real install.){" "}
               <Code>AutoLogon</Code> is what actually closes the login-prompt gap: Setup logs the target admin
               account in itself the moment specialize/OOBE processing is done, <Code>LogonCount</Code>{" "}
               set to <Code>1</Code> so it only ever does this once. The account it logs into is always

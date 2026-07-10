@@ -97,28 +97,32 @@
             <FirstLogonCommands>
 {% include "_first_logon_commands.xml.j2" %}
             </FirstLogonCommands>
-            <!-- HideEULAPage/HideLocalAccountScreen/HideOnlineAccountScreens/
-                 HideWirelessSetupInOOBE/SkipMachineOOBE/SkipUserOOBE alone
-                 were never the full picture, confirmed against Microsoft's
-                 own "Automate OOBE" guidance: ProtectYourPC has no default
-                 value at all, and its own doc says plainly "if a value is
-                 not set, the Get going fast page opens during setup", the
-                 exact diagnostic-data/privacy consent screen seen in
-                 testing despite every Hide*/Skip* flag already being set,
-                 none of them cover it. NetworkLocation is the same shape
-                 (deprecated on Windows 10 client, but still the documented
-                 way to suppress the "Computer's Current Location" network
-                 profile prompt, which a Windows Server guest with a real
-                 network connection - every deployment here has one -
-                 legitimately triggers otherwise). -->
+            <!-- Rolled back to exactly what this was in the last confirmed-
+                 working deployment (Setup completed, reached a login
+                 screen). ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen
+                 were added afterward on the theory that they'd suppress a
+                 diagnostics/privacy OOBE screen seen once, but were never
+                 actually confirmed to fix anything, empirically or
+                 otherwise, before landing, and NetworkLocation is
+                 Microsoft's own documented-deprecated setting, a real "this
+                 might not be honored the same way" flag. Every deployment
+                 since adding them has failed outright with a generic
+                 Setup-level "installation could not be completed" error
+                 regardless of static vs. DHCP networking (both tested,
+                 both fail identically) or hostname length (short hostnames
+                 tested, still fails), narrowing this down to the answer
+                 file's oobeSystem content itself, and this is the one part
+                 of it that was never battle-tested against anything beyond
+                 documentation and a single example, unlike AutoLogon
+                 (verified against three independent real, current,
+                 vSphere-targeting Windows Server answer files). If this
+                 revert doesn't restore working installs on its own, they
+                 weren't the cause either and AutoLogon is next. -->
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
                 <HideLocalAccountScreen>true</HideLocalAccountScreen>
-                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
                 <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
                 <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-                <NetworkLocation>Home</NetworkLocation>
-                <ProtectYourPC>3</ProtectYourPC>
                 <SkipMachineOOBE>true</SkipMachineOOBE>
                 <SkipUserOOBE>true</SkipUserOOBE>
             </OOBE>
