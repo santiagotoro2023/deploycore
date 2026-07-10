@@ -52,6 +52,7 @@
             <UILanguage>{{ template.locale }}</UILanguage>
             <UserLocale>{{ template.locale }}</UserLocale>
         </component>
+{% include "_specialize_autologon.xml.j2" %}
 {% if deployment.ip_mode == "static" and deployment.static_ip and static_prefix %}
 {% include "_static_network.xml.j2" %}
 {% endif %}
@@ -90,25 +91,31 @@
                 </LocalAccounts>
 {% endif %}
             </UserAccounts>
-            <!-- AutoLogon deliberately removed for now: this is the exact
-                 oobeSystem content from the last commit a deployment is
-                 confirmed to have actually completed on (git show
-                 fff61d6), byte for byte, reinstated to isolate whether
-                 AutoLogon itself is what regressed installs, since static
-                 vs. DHCP networking, hostname length, and the separately-
-                 added ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen
-                 OOBE settings have all now been ruled out by direct,
-                 controlled tests and none of them restored a working
-                 install on their own. This reintroduces the original
-                 "needs a human to log in once before FirstLogonCommands
-                 can run" limitation on purpose, worth it to get a true,
-                 known-good baseline confirmed again before rebuilding
-                 AutoLogon back in more carefully. -->
+            <!-- The declarative <AutoLogon> element is deliberately absent
+                 here: see _specialize_autologon.xml.j2 (specialize pass)
+                 for auto-logon, and its comment for why. HideEULAPage/
+                 HideLocalAccountScreen/HideOnlineAccountScreens/
+                 HideWirelessSetupInOOBE/SkipMachineOOBE/SkipUserOOBE alone
+                 were never the full picture: ProtectYourPC has no default
+                 value at all and its own documentation says plainly "if a
+                 value is not set, the Get going fast page opens during
+                 setup", the diagnostic-data/privacy screen actually seen
+                 in testing despite every Hide*/Skip* flag already being
+                 set. NetworkLocation is the same shape for the "Computer's
+                 Current Location" network-profile prompt. Both were
+                 speculatively reverted alongside AutoLogon at one point on
+                 the theory they might be involved in a total Setup
+                 failure, then confirmed innocent: removing them alone
+                 (AutoLogon still present) did not fix that failure, only
+                 removing AutoLogon did, so they're back. -->
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
                 <HideLocalAccountScreen>true</HideLocalAccountScreen>
+                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
                 <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
                 <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <NetworkLocation>Home</NetworkLocation>
+                <ProtectYourPC>3</ProtectYourPC>
                 <SkipMachineOOBE>true</SkipMachineOOBE>
                 <SkipUserOOBE>true</SkipUserOOBE>
             </OOBE>

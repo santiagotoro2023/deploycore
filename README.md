@@ -575,22 +575,38 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `/api/callback/{token}` (single-use per-deployment token, sets
   `callback_token_used`, which `wait_for_callback` polls for instead of a
   state change, since the state's already `installing_os` by the time this
-  fires). The oobeSystem pass does **not** currently include `AutoLogon`: an
-  earlier attempt at it (auto-logging in as whichever account
-  `local_admin_username`/`local_admin_password` resolve to, so
-  `FirstLogonCommands` could run with nobody at the console) was rolled back
-  after every deployment that included it failed outright during Setup on
-  real hardware. Static vs. DHCP networking, hostname length, and a
-  separate, also-reverted OOBE addition were all independently ruled out via
-  controlled, one-variable-at-a-time tests, leaving `AutoLogon` itself as the
-  last untested variable and the current working hypothesis, pending
-  confirmation from a real deployment run without it. Until that's resolved
-  and `AutoLogon` can be reintroduced more carefully, `FirstLogonCommands`
-  only run once a human physically logs in at the console, since
-  `SkipMachineOOBE`/`SkipUserOOBE` alone don't make Setup log in on their
-  own and `FirstLogonCommands` only ever fire as part of an actual
-  first-logon event. If `template.custom_admin_enabled` is on (off by
-  default), two more commands render: `LocalAccountTokenFilterPolicy=1`
+  fires). The oobeSystem pass does **not** include the declarative
+  `AutoLogon` element: an earlier attempt at it (auto-logging in as
+  whichever account `local_admin_username`/`local_admin_password` resolve
+  to, so `FirstLogonCommands` could run with nobody at the console) was
+  rolled back after every deployment that included it failed outright
+  during Setup on real hardware, regardless of where in oobeSystem it was
+  placed. Static vs. DHCP networking, hostname length, and a separate OOBE
+  addition (below) were all independently ruled out via controlled,
+  one-variable-at-a-time tests, isolating `AutoLogon` itself, and a real
+  deployment completed once it was removed entirely, confirming it.
+  Auto-logon is still configured, just differently: a `RunSynchronousCommand`
+  in the specialize pass's `Microsoft-Windows-Deployment` component writes
+  the same registry values (`AutoAdminLogon`, `DefaultUserName`,
+  `DefaultPassword`, `AutoLogonCount`) Windows itself would write from a
+  working `AutoLogon` element, via a PowerShell one-liner run in the system
+  context. Winlogon reads those values at first-logon time the same way
+  regardless of which mechanism put them there, so the effect is identical,
+  just reached without going through whatever Setup-time processing of the
+  `AutoLogon` schema element itself was breaking on this environment. If
+  that also turns out not to be reliable, the next place to look is
+  probably ESXi 6.7 specifically (Server 2025 is only vSphere-certified on
+  7.0+/8.0+): not likely given this same environment installed successfully
+  before all this XML work started, but worth ruling in or out with a real
+  test on 7.0+/8.0+ if the registry approach fails too. `AutoLogonCount=1`
+  mirrors the element's own `LogonCount=1`, Windows stops auto-logging in
+  once it hits 0, and the first `FirstLogonCommand` (before anything else,
+  including enabling WinRM) scrubs the plaintext password this leaves in
+  the `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon` registry
+  key as a side effect, `DefaultPassword` and `AutoAdminLogon`, keeping the
+  exposure window as short as possible, same as it did for the declarative
+  element. If `template.custom_admin_enabled` is on (off by default), two
+  more commands render: `LocalAccountTokenFilterPolicy=1`
   right after enabling WinRM (by default Windows' UAC remote restriction only
   exempts the actual built-in Administrator (RID 500) from a filtered, non-elevated
   token on network logons, without this every WinRM command DeployCore

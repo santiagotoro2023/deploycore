@@ -179,53 +179,81 @@ def test_ui_language_has_a_fallback():
     assert winpe_intl.xpath("string(u:SetupUILanguage/u:UILanguage)", namespaces=NS) == "de-CH"
 
 
-def test_oobe_stays_at_the_last_confirmed_working_set():
-    """ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen were tried
-    and rolled back: added on a documentation-only theory, never actually
-    confirmed to fix anything, and every deployment after adding them
-    failed outright (a generic Setup-level error, unrelated to static vs.
-    DHCP networking or hostname length, both independently ruled out).
-    Locking in the plain six-element set that was last confirmed to
-    actually complete a real install, so a future change doesn't silently
-    reintroduce the untested ones without a real reason."""
+def test_oobe_includes_protectyourpc_and_networklocation():
+    """ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen were
+    speculatively reverted alongside AutoLogon at one point (on the theory
+    they might be involved in a total Setup failure seen in testing), then
+    confirmed innocent: removing them alone, with AutoLogon still present,
+    did not fix that failure; only removing AutoLogon did. They're back
+    since they're what Microsoft's own "Automate OOBE" guidance says is
+    needed to actually suppress the diagnostic-data/privacy and network-
+    location screens Hide*/Skip* alone don't cover, confirmed live in
+    testing (both screens shown despite every Hide*/Skip* flag)."""
     root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout()).encode())
 
     oobe = root.xpath("//u:component[@name='Microsoft-Windows-Shell-Setup']/u:OOBE", namespaces=NS)[0]
     assert [c.tag.split("}")[-1] for c in oobe] == [
         "HideEULAPage",
         "HideLocalAccountScreen",
+        "HideOEMRegistrationScreen",
         "HideOnlineAccountScreens",
         "HideWirelessSetupInOOBE",
+        "NetworkLocation",
+        "ProtectYourPC",
         "SkipMachineOOBE",
         "SkipUserOOBE",
     ]
+    assert oobe.xpath("string(u:NetworkLocation)", namespaces=NS) == "Home"
+    assert oobe.xpath("string(u:ProtectYourPC)", namespaces=NS) == "3"
 
 
-def test_no_autologon_for_now():
-    """AutoLogon was tried (targeting whichever account
-    local_admin_username/local_admin_password resolve to) and rolled back:
-    every deployment after adding it failed outright at the Setup level,
-    and static vs. DHCP networking, hostname length, and the OOBE
-    ProtectYourPC/NetworkLocation additions have all separately been ruled
-    out by direct, controlled tests, narrowing it down to AutoLogon itself
-    as the one remaining untested variable. Locked in as absent so a
-    future change can't silently reintroduce it without a real reason;
-    see autounattend_base.xml.j2's comment for the reasoning and what
-    reintroducing it carefully would need to look like."""
+def test_no_declarative_autologon_element():
+    """The declarative <AutoLogon> element specifically is what's absent:
+    every deployment that included it failed outright at the Setup level
+    regardless of where in oobeSystem it was placed, isolated by
+    eliminating every other variable changed around the same time (static
+    vs. DHCP networking, hostname length, the OOBE additions above) via
+    controlled tests, and confirmed by a real deployment completing once
+    it was removed. Auto-logon itself is still configured, just via a
+    RunSynchronousCommand registry write in the specialize pass instead
+    (test_specialize_autologon_sets_registry_values below), a different
+    Setup code path than the one that kept failing."""
     template = _make_template()
     root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
 
     assert root.xpath("//u:AutoLogon", namespaces=NS) == []
 
+
+def test_specialize_autologon_sets_registry_values():
+    """Same functional outcome as the declarative element (auto sign-in
+    once specialize/OOBE is done, so FirstLogonCommands can run with
+    nobody at the console), reached by writing the same registry values
+    Winlogon itself reads at first-logon time, targeting whichever account
+    local_admin_username/local_admin_password resolve to, same account
+    WinRM authenticates as later."""
+    template = _make_template()
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+
+    path = root.xpath(
+        "string(//u:component[@name='Microsoft-Windows-Deployment']"
+        "//u:RunSynchronousCommand/u:Path)",
+        namespaces=NS,
+    )
+    assert "AutoAdminLogon" in path
+    assert "DefaultUserName" in path and "'Administrator'" in path
+    assert "DefaultPassword" in path and "'P@ssw0rd1!'" in path
+    assert "AutoLogonCount" in path
+
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
-    command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)
-    assert "DefaultPassword" not in command_lines and "AutoAdminLogon" not in command_lines
+    first_command = commands[0].xpath("string(u:CommandLine)", namespaces=NS)
+    assert "DefaultPassword" in first_command and "AutoAdminLogon" in first_command
 
 
 def test_custom_admin_disabled_by_default_keeps_builtin_administrator():
     """Off by default: no LocalAccounts entry, the built-in Administrator
     keeps its password and is never touched by FirstLogonCommands, and
-    only the two baseline commands (enable WinRM, callback) render."""
+    only the three baseline commands (scrub auto-logon registry, enable
+    WinRM, callback) render."""
     template = _make_template()
     root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
 
@@ -234,7 +262,7 @@ def test_custom_admin_disabled_by_default_keeps_builtin_administrator():
 
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
     command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)
-    assert len(commands) == 2
+    assert len(commands) == 3
     assert "LocalAccountTokenFilterPolicy" not in command_lines
     assert "Disable-LocalUser" not in command_lines
 
@@ -289,9 +317,20 @@ def test_local_accounts_creates_custom_admin_and_still_sets_builtin_password():
 
     assert root.xpath("string(//u:AdministratorPassword/u:Value)", namespaces=NS) == "P@ssw0rd1!"
 
+    # The specialize-pass auto-logon registry write must target the custom
+    # account, not the built-in one being disabled: that's the account
+    # meant to actually be used going forward, and the one WinRM
+    # authenticates as later in post_install.
+    path = root.xpath(
+        "string(//u:component[@name='Microsoft-Windows-Deployment']"
+        "//u:RunSynchronousCommand/u:Path)",
+        namespaces=NS,
+    )
+    assert "'svcwinadmin'" in path
+
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
     command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)
-    assert len(commands) == 4
+    assert len(commands) == 5
     assert "LocalAccountTokenFilterPolicy" in command_lines
     assert "Disable-LocalUser -Name 'Administrator'" in command_lines
 

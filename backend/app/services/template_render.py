@@ -6,7 +6,7 @@ from app.config import get_settings
 from app.models.deployment import Deployment, IpMode
 from app.models.disk_layout import DiskLayout
 from app.models.template import DeploymentTemplate
-from app.winrm.client import netmask_to_prefix
+from app.winrm.client import netmask_to_prefix, ps_single_quote
 
 # Windows' Setup UI only accepts InputLocale as either a bare locale tag
 # (which picks *a* default keyboard for that locale, not necessarily the
@@ -66,6 +66,14 @@ _ENV = jinja2.Environment(
     trim_blocks=True,
     lstrip_blocks=True,
 )
+# Only needed where a value is embedded inside a PowerShell command line
+# rendered into the answer file (e.g. the specialize-pass autologon
+# registry write), not for values that are plain XML element text:
+# autoescape above already makes those safe. XML-escaping alone doesn't
+# protect a value from PowerShell's own parser (a literal ' would close
+# the surrounding quoted string early), so this needs to run first and
+# autoescape still applies afterward to the quotes/apostrophes it adds.
+_ENV.filters["ps_quote"] = ps_single_quote
 
 
 def render_autounattend(

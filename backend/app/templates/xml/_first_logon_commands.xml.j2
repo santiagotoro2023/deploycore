@@ -1,23 +1,28 @@
 <SynchronousCommand wcm:action="add">
     <Order>1</Order>
+    <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name DefaultPassword,AutoAdminLogon -ErrorAction SilentlyContinue"</CommandLine>
+    <Description>Scrub the plaintext auto-logon password (and the AutoAdminLogon flag) from the registry now that it's done its one job, getting Setup to this first logon with nobody at the console. AutoLogonCount=1 (set alongside it in the specialize pass) already stops Windows from using it again; this removes the plaintext copy that would otherwise sit in the registry indefinitely. Runs first, before anything else, to keep the exposure window as short as possible</Description>
+</SynchronousCommand>
+<SynchronousCommand wcm:action="add">
+    <Order>2</Order>
     <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Enable-PSRemoting -Force; New-NetFirewallRule -DisplayName 'DeployCore WinRM' -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow"</CommandLine>
     <Description>Enable WinRM for post-install configuration</Description>
 </SynchronousCommand>
 {% if template.custom_admin_enabled %}
 <SynchronousCommand wcm:action="add">
-    <Order>2</Order>
+    <Order>3</Order>
     <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy -PropertyType DWord -Value 1 -Force"</CommandLine>
     <Description>Let a non-built-in local administrator authenticate over WinRM with a full token: by default Windows' UAC remote restriction only exempts the actual built-in Administrator account (RID 500) from a filtered, non-elevated token on network logons, which would otherwise make every WinRM command DeployCore runs post-install silently fail for the custom admin account even though it's in Administrators</Description>
 </SynchronousCommand>
 {% endif %}
 <SynchronousCommand wcm:action="add">
-    <Order>3</Order>
+    <Order>4</Order>
     <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri '{{ callback_base_url }}/api/callback/{{ deployment.callback_token }}' -Method POST -UseBasicParsing"</CommandLine>
     <Description>Notify DeployCore that OS install is complete</Description>
 </SynchronousCommand>
 {% if template.custom_admin_enabled %}
 <SynchronousCommand wcm:action="add">
-    <Order>4</Order>
+    <Order>5</Order>
     <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Disable-LocalUser -Name 'Administrator'"</CommandLine>
     <Description>Deactivate the built-in Administrator account: the LocalAccounts-created account is the one meant to be used from here on. Runs after the callback above on purpose, so a guest-side quirk from disabling the account FirstLogonCommands is running as can never prevent DeployCore from learning Setup finished, the one signal the rest of the pipeline depends on</Description>
 </SynchronousCommand>

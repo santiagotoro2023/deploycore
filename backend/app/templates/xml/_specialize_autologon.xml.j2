@@ -1,0 +1,32 @@
+<!-- Auto-logon set via the registry (specialize pass), not the declarative
+     <AutoLogon> element: that element was tried first and every deployment
+     that included it failed outright during Setup itself with
+     "Installation could not be completed", regardless of where in
+     oobeSystem it was placed (tested both immediately after UserAccounts
+     and immediately before FirstLogonCommands) - narrowed down by
+     eliminating every other variable changed around the same time
+     (static-vs-DHCP networking, hostname length, the OOBE additions
+     below) via controlled, single-variable tests, and confirmed by a real
+     deployment completing once <AutoLogon> was removed entirely. This
+     writes the exact same registry values Windows itself would write from
+     a working <AutoLogon> element (Winlogon reads these at first-logon
+     time regardless of which mechanism put them there), just without
+     going through whatever Setup-time processing of the schema element
+     itself was breaking. Runs during specialize (system context, so no
+     Credentials needed), well before oobeSystem's logon prompt is ever
+     shown, and self-contained: no dependency on the OOBE/UserAccounts
+     ordering questions investigated (and ruled out) for AutoLogon.
+     AutoLogonCount=1 mirrors AutoLogon's own LogonCount=1, Windows stops
+     auto-logging in once it hits 0. The plaintext password this leaves in
+     the registry is scrubbed by the first FirstLogonCommand, same as it
+     was for the declarative element - identical exposure window, just a
+     different write path getting it there. -->
+<component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+    <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+            <Description>Set auto-logon registry values for the first boot</Description>
+            <Order>1</Order>
+            <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'; Set-ItemProperty -Path $p -Name AutoAdminLogon -Value '1' -Type String -Force; Set-ItemProperty -Path $p -Name DefaultUserName -Value {{ template.local_admin_username | ps_quote }} -Type String -Force; Set-ItemProperty -Path $p -Name DefaultPassword -Value {{ template.local_admin_password | ps_quote }} -Type String -Force; Set-ItemProperty -Path $p -Name AutoLogonCount -Value 1 -Type DWord -Force"</Path>
+        </RunSynchronousCommand>
+    </RunSynchronous>
+</component>

@@ -897,30 +897,43 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               <strong>OOBE and the built-in Administrator account.</strong> The <Code>OOBE</Code> block
               (<Code>HideEULAPage</Code>, <Code>HideLocalAccountScreen</Code>,{" "}
-              <Code>HideOnlineAccountScreens</Code>, <Code>HideWirelessSetupInOOBE</Code>,{" "}
-              <Code>SkipMachineOOBE</Code>, <Code>SkipUserOOBE</Code>) suppresses the interactive OOBE
-              account-setup/network screens, but <strong>on its own doesn't get anyone logged in</strong>{" "}
-              at all: <Code>FirstLogonCommands</Code> only ever run as part of an actual first-logon
-              event, and without something making that happen unattended, Setup just leaves a plain
-              login prompt sitting at the console, exactly the manual step this whole tool exists to
-              remove. (A few extra <Code>OOBE</Code> settings, <Code>ProtectYourPC</Code> and{" "}
-              <Code>NetworkLocation</Code>, were tried at one point to suppress a diagnostics/privacy
-              screen seen once in testing, but were never actually confirmed to fix anything and every
-              deployment after adding them failed outright at the Setup level, unrelated to networking
-              mode or hostname length, both independently ruled out; rolled back to this plain six-flag
-              set, the one last confirmed to actually complete a real install.){" "}
-              <Code>AutoLogon</Code> was meant to close that login-prompt gap the same way: log the target
-              admin account in itself the moment specialize/OOBE processing is done, no human at the
-              console required. It's <strong>not currently in the answer file</strong> either, for the same
-              reason as the two OOBE settings above — every deployment on real hardware that included it
-              also failed outright during Setup, and static-vs-DHCP networking and hostname length have
-              both separately been ruled out, leaving <Code>AutoLogon</Code> itself as the last untested
-              variable and the current working hypothesis, pending confirmation from a real deployment run
-              without it. Until that's resolved, <Code>FirstLogonCommands</Code> only run once a human
-              physically logs in at the console once, the original limitation this tool is trying to build
-              past. Setup always requires the built-in Administrator account to have a password at this
-              point regardless (<Code>AdministratorPassword</Code>), so it always gets one whether or not
-              it ends up being the account that's actually used.
+              <Code>HideOEMRegistrationScreen</Code>, <Code>HideOnlineAccountScreens</Code>,{" "}
+              <Code>HideWirelessSetupInOOBE</Code>, <Code>NetworkLocation</Code>,{" "}
+              <Code>ProtectYourPC</Code>, <Code>SkipMachineOOBE</Code>, <Code>SkipUserOOBE</Code>)
+              suppresses every interactive OOBE screen: account setup, network location, and the
+              diagnostic-data/privacy consent page. The last two settings, <Code>NetworkLocation</Code>{" "}
+              and <Code>ProtectYourPC</Code>, matter specifically because the Hide*/Skip* flags alone
+              don't cover them — <Code>ProtectYourPC</Code> has no default value at all, and Microsoft's
+              own documentation says plainly that leaving it unset opens the "Get going fast" diagnostics
+              page during setup regardless of every other flag, confirmed live in testing (that page, and
+              the network-location prompt, both still showed up on manual first logon with only the
+              Hide*/Skip* flags set). But <strong>on its own the OOBE block still doesn't get anyone
+              logged in</strong>: <Code>FirstLogonCommands</Code> only ever run as part of an actual
+              first-logon event, and without something making that happen unattended, Setup leaves a
+              plain login prompt sitting at the console, exactly the manual step this whole tool exists
+              to remove. The declarative <Code>AutoLogon</Code> element was tried for that, targeting
+              whichever account <Code>local_admin_username</Code>/<Code>local_admin_password</Code>{" "}
+              resolve to — but it's <strong>not in the answer file</strong>: every deployment on real
+              hardware that included it failed outright during Setup regardless of where in oobeSystem
+              it was placed, isolated by ruling out static-vs-DHCP networking, hostname length, and the
+              OOBE settings above via controlled, one-variable-at-a-time tests, and confirmed when a real
+              deployment finally completed once <Code>AutoLogon</Code> was removed entirely. Auto-logon
+              is still configured, just differently: a <Code>RunSynchronousCommand</Code> in the
+              specialize pass's <Code>Microsoft-Windows-Deployment</Code> component runs a PowerShell
+              one-liner that writes the same registry values (<Code>AutoAdminLogon</Code>,{" "}
+              <Code>DefaultUserName</Code>, <Code>DefaultPassword</Code>, <Code>AutoLogonCount</Code>) a
+              working <Code>AutoLogon</Code> element would itself write — Winlogon reads those at
+              first-logon time the same way no matter which mechanism put them there, so the effect is
+              identical, just reached without whatever Setup-time processing of the declarative element
+              was breaking on this environment. One side effect worth knowing, same as the element had:
+              this leaves that password in plaintext in the registry
+              (<Code>HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon</Code>) as an
+              implementation detail of how it works at all; the very first <Code>FirstLogonCommand</Code>,
+              before anything else including enabling WinRM, scrubs both values out again, keeping the
+              window that plaintext copy exists as short as possible. Setup always requires the built-in
+              Administrator account to have a password at this point too
+              (<Code>AdministratorPassword</Code>), so it always gets one regardless of which account
+              ends up being the one that's actually used.
             </P>
             <P>
               A template's <strong>custom admin account</strong> toggle (Templates page, off by default)

@@ -20,7 +20,7 @@ def netmask_to_prefix(netmask: str) -> int:
     return ipaddress.ip_network(f"0.0.0.0/{netmask}").prefixlen
 
 
-def _ps_single_quote(value: str) -> str:
+def ps_single_quote(value: str) -> str:
     """PowerShell's own escape convention for a single-quoted string
     literal is doubling the quote, not backslash-escaping it."""
     return "'" + value.replace("'", "''") + "'"
@@ -67,17 +67,17 @@ class WinRMClient:
         convention is. Exit code 3010 (success, reboot required) counts as
         success alongside 0, the same convention MSI and many EXE
         installers both use for "done, but you should reboot"."""
-        url = _ps_single_quote(download_url)
-        path = _ps_single_quote(remote_path)
+        url = ps_single_quote(download_url)
+        path = ps_single_quote(remote_path)
         if kind == "msi":
             # A single raw argument-list string, not an array: msiexec (like
             # most Windows installers) does its own command-line parsing,
             # splitting install_args ("/qn /norestart") into an array would
             # pass it as one single quoted argument instead of two flags.
-            arg_list = _ps_single_quote(f'/i "{remote_path}" {install_args}')
+            arg_list = ps_single_quote(f'/i "{remote_path}" {install_args}')
             run_line = f"$p = Start-Process msiexec.exe -ArgumentList {arg_list} -Wait -PassThru"
         else:
-            arg_list = _ps_single_quote(install_args)
+            arg_list = ps_single_quote(install_args)
             run_line = f"$p = Start-Process -FilePath {path} -ArgumentList {arg_list} -Wait -PassThru"
         script = (
             f"Invoke-WebRequest -Uri {url} -OutFile {path} -UseBasicParsing; "
