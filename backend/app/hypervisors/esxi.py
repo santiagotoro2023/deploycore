@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import ssl
 
 import httpx
@@ -8,6 +9,8 @@ from pyVmomi import vim
 
 from app.hypervisors.base import ConnectionResult, HypervisorDriver, PowerState, VmSpec
 from app.models.hypervisor import HypervisorHost
+
+logger = logging.getLogger(__name__)
 
 _POWER_STATE_MAP = {
     vim.VirtualMachinePowerState.poweredOn: PowerState.POWERED_ON,
@@ -148,7 +151,29 @@ class ESXiDriver(HypervisorDriver):
             # (the default raiseOnError=True) so getting past this line at
             # all means it succeeded; the created VM itself is task.info.result.
             WaitForTask(task)
-            return task.info.result._moId
+            vm = task.info.result
+
+            # Best-effort, separate reconfigure so a failure here can never
+            # affect VM creation itself: without VMware Tools installed (this
+            # pipeline never installs it), a fresh Windows guest only has the
+            # default PS/2 mouse, which the ESXi/vSphere web console can't
+            # track properly, the cursor doesn't reliably show up or move
+            # with the actual pointer at all. A USB controller is the
+            # standard fix (the same one Packer's vsphere-iso builder and
+            # most other vSphere automation tools apply by default) since
+            # ESXi presents an absolute-positioning USB tablet over it
+            # automatically, no VMware Tools required.
+            try:
+                usb_spec = vim.vm.device.VirtualDeviceSpec()
+                usb_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+                usb_spec.device = vim.vm.device.VirtualUSBController()
+                usb_spec.device.autoConnectDevices = True
+                usb_spec.device.ehciEnabled = True
+                WaitForTask(vm.ReconfigVM_Task(spec=vim.vm.ConfigSpec(deviceChange=[usb_spec])))
+            except Exception:  # noqa: BLE001 - cosmetic, never worth failing VM creation over
+                logger.exception("esxi: failed to add a USB controller to %s, console mouse may not work", spec.name)
+
+            return vm._moId
         finally:
             connect.Disconnect(service_instance)
 
