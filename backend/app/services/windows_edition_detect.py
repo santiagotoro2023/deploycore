@@ -15,44 +15,65 @@ logger = logging.getLogger(__name__)
 # mean by "install Windows Server" by default. Detecting the real list
 # once at upload time (rather than guessing a fixed index that varies by
 # ISO) lets template creation offer an actual dropdown instead.
-_INSTALL_IMAGE_GLOB = "[iI][nN][sS][tT][aA][lL][lL].[wW][iI][mM]"
-_INSTALL_ESD_GLOB = "[iI][nN][sS][tT][aA][lL][lL].[eE][sS][dD]"
+#
+# Uses 7z (p7zip-full), not xorriso, deliberately: Microsoft's own ISO
+# builder lays out Windows Setup media as a UDF+ISO9660+Joliet hybrid
+# specifically so install.wim can exceed the 4 GiB plain-ISO9660 file size
+# limit (a multi-edition Server WIM routinely does). xorriso 1.5.4 can
+# list such a file, but silently truncates it on -osirrox extraction
+# (confirmed against a real >4 GiB UDF test image, exit 0, "1 files
+# restored", extracted file a fraction of the real size, no error at
+# all), which corrupts install.wim before wimlib-imagex ever sees it. 7z
+# reads the UDF tree directly and both lists and extracts the full,
+# correct byte count in the same scenario.
+_INSTALL_NAMES = {"install.wim", "install.esd"}
 
 
 def _run(args: list[str]) -> str:
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(f"{args[0]} failed: {result.stderr[-2000:]}")
+        raise RuntimeError(f"{args[0]} failed: {(result.stderr or result.stdout)[-2000:]}")
     return result.stdout
 
 
-def _find_path(iso_path: Path, name_glob: str) -> str | None:
-    stdout = _run(["xorriso", "-indev", str(iso_path), "-find", "/", "-name", name_glob])
+def _find_path(iso_path: Path) -> str | None:
+    # `-ba` (bare) drops 7z's header/summary lines, leaving one line per
+    # entry: "<date> <time> <attr> <size> <compressed>  <name>", with
+    # <size>/<compressed> blank (and so absent as tokens) for directories.
+    # split(None, 5) is exactly right either way: it stops splitting once
+    # it hits the name, which is the only field that can itself contain
+    # whitespace.
+    stdout = _run(["7z", "l", "-ba", str(iso_path)])
     for line in stdout.splitlines():
-        line = line.strip().strip("'")
-        if line.startswith("/"):
-            return line
+        parts = line.split(None, 5)
+        if not parts:
+            continue
+        name = parts[-1]
+        if name.rsplit("/", 1)[-1].lower() in _INSTALL_NAMES:
+            return name
     return None
 
 
 def detect_editions(iso_path: Path) -> list[dict]:
     """Best-effort: returns [] on anything unexpected (no install.wim/.esd
-    found, wimlib-imagex missing or fails, XML doesn't parse, ...) rather
-    than raising, an ISO that isn't laid out the way Microsoft's own
+    found, 7z/wimlib-imagex missing or failing, XML doesn't parse, ...)
+    rather than raising, an ISO that isn't laid out the way Microsoft's own
     Windows Server media is just doesn't get a dropdown, the template form
     falls back to a plain index field instead of losing the upload."""
     try:
-        wim_path = _find_path(iso_path, _INSTALL_IMAGE_GLOB) or _find_path(iso_path, _INSTALL_ESD_GLOB)
+        wim_path = _find_path(iso_path)
         if wim_path is None:
             logger.info("windows_edition_detect: no install.wim/install.esd found in %s", iso_path)
             return []
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
-            local_wim = tmp_dir / "install.wim"
-            # osirrox extraction, read-only against the ISO, never touches
-            # it: unrelated to iso_remaster.py's in-place boot-prompt patch.
-            _run(["xorriso", "-osirrox", "on", "-indev", str(iso_path), "-extract", wim_path, str(local_wim)])
+            # `x` (not `e`) so the extracted file lands at tmp_dir/wim_path,
+            # preserving whatever subdirectory 7z listed it under (normally
+            # sources/); read-only against the ISO either way, unrelated to
+            # iso_remaster.py's separate in-place boot-prompt patch.
+            _run(["7z", "x", f"-o{tmp_dir}", str(iso_path), wim_path, "-y"])
+            local_wim = tmp_dir / wim_path
 
             xml_path = tmp_dir / "images.xml"
             _run(["wimlib-imagex", "info", str(local_wim), "--extract-xml", str(xml_path)])

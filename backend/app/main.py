@@ -23,6 +23,16 @@ from app.api.routes import (
     webhooks,
 )
 
+# Nothing else in the app ever configures logging, and uvicorn's own
+# default config (see its LOGGING_CONFIG) only attaches handlers to its
+# own uvicorn/uvicorn.error/uvicorn.access loggers, not the root one. Every
+# app-level logger.info/.warning (getLogger(__name__), the normal pattern
+# throughout app/services/*) was silently going nowhere, only .error and
+# above happened to surface at all via Python's WARNING-level "handler of
+# last resort". This is what makes those actually show up in
+# `docker compose logs api`.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
 logger = logging.getLogger("deploycore")
 
 app = FastAPI(title="DeployCore API")

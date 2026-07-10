@@ -344,10 +344,21 @@ org-scoped copy.
   in its `install.wim` (`app/services/windows_edition_detect.py`): Windows
   Server media typically ships several editions (Standard/Datacenter x
   Server Core/Desktop Experience) in one file, selected only by a numeric
-  `/IMAGE/INDEX` in the answer file. Detection extracts the WIM with
-  `xorriso -osirrox` (read-only against the ISO) and reads its embedded
-  metadata with `wimlib-imagex info --extract-xml` (UTF-16 XML), storing
-  the result as `iso_assets.windows_editions` (JSONB list of
+  `/IMAGE/INDEX` in the answer file. Detection lists and extracts the WIM
+  with `7z` (`p7zip-full`), not `xorriso`: Microsoft's own ISO builder lays
+  Windows Setup media out as a UDF+ISO9660+Joliet hybrid specifically so
+  `install.wim` can exceed the 4&nbsp;GiB plain-ISO9660 limit, which a
+  multi-edition Server WIM routinely does, and `xorriso` 1.5.4 (Debian
+  bookworm) silently truncates such a file on extraction (confirmed against
+  a real >4&nbsp;GiB UDF test image: exit 0, "files restored", extracted
+  file a fraction of the real size, no error raised at all) even though it
+  can list it just fine; `7z` reads the UDF tree directly and extracts the
+  full, correct byte count in the same scenario. Extraction is read-only
+  against the ISO either way, this is unrelated to the in-place boot-prompt
+  patch above, which still uses `xorriso` (a tiny UEFI boot image, nowhere
+  near the size where this matters). Detection then reads the extracted
+  WIM's embedded metadata with `wimlib-imagex info --extract-xml` (UTF-16
+  XML), storing the result as `iso_assets.windows_editions` (JSONB list of
   `{index, name, description, has_gui}`). `has_gui` is derived from the
   WIM's own `FLAGS` value (every Core, no-GUI SKU's flag ends in `Core`,
   e.g. `ServerStandardCore`; every Desktop Experience one doesn't), not

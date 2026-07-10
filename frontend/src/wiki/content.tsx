@@ -444,7 +444,20 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               guessed from the edition's name. Templates use this list to offer a named, GUI/Core-labeled
               edition picker instead of a bare number, see "Templates and Windows roles". An ISO with no
               detectable editions (non-Microsoft media, or an ISO uploaded before this existed) just falls
-              back to a plain image-index number field.
+              back to a plain image-index number field, silently, this never blocks or fails the upload
+              itself. If a real Windows ISO unexpectedly gets no editions detected, the reason (couldn't
+              find <Code>install.wim</Code>/<Code>install.esd</Code>, extraction failed, malformed
+              metadata, ...) is logged on the <Code>api</Code> container, not shown anywhere in the UI:
+              <Code>docker compose logs api</Code> right after the upload.
+            </P>
+            <P>
+              This step uses <Code>7z</Code>, not the <Code>xorriso</Code> tool the boot-prompt patch
+              above relies on: real Windows Setup media lays itself out as a UDF-plus-ISO9660 hybrid
+              specifically so <Code>install.wim</Code> can be larger than the 4&nbsp;GiB plain-ISO9660
+              limit (a multi-edition Server WIM routinely is), and <Code>xorriso</Code> can silently
+              truncate a file that large when extracting it from that layout, no error, just a corrupted
+              copy, whereas <Code>7z</Code> reads the underlying UDF filesystem directly and doesn't have
+              that problem.
             </P>
             <P>
               Deleting an ISO asset removes the file from disk and the database record. If any template

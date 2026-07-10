@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mtools \
     xorriso \
     wimtools \
+    p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
