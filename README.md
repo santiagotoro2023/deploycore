@@ -31,8 +31,9 @@ cd deploycore
 ./scripts/setup.sh
 ```
 
-That's it. The script copies `.env.example` to `.env`, generates a secret key
-for you, and builds and starts the whole stack. Open `https://localhost`
+That's it. The script copies `.env.example` to `.env`, generates a secret
+key, detects this host's own LAN IP and sets `APP_PUBLIC_URL` to it (see
+below), and builds and starts the whole stack. Open `https://localhost`
 and you'll land on a two-step setup wizard: name your instance, then create
 your first administrator account. Everything else (database schema, etc.) is
 handled automatically, including on every future update (see "Updating"
@@ -45,19 +46,23 @@ it's self-signed by default. See "HTTPS certificate" below for uploading a
 real one. `http://localhost:5173` (the frontend directly, no TLS) still
 works too, useful for local development.
 
-One setting worth checking before you provision real VMs:
+One setting worth double-checking before you provision real VMs:
 `APP_PUBLIC_URL` in `.env`. This is the address your ESXi guest VMs call back
 to once Windows Setup finishes, it needs to be reachable from your customer
-networks, not just from your own laptop. `localhost` almost never works: that
-value is baked as a literal string into PowerShell commands that run *inside
-the guest itself*, so "localhost" resolves to the VM, not to DeployCore.
-Set it to this host's real, routable address (an IP or hostname the VM's
-network can actually reach), then `docker compose up -d` to pick up the
-change. Keep it `http://`, on port 8000, not `https://`/443: that port is the
-`api` container exposed directly (`8000:8000`), a separate path from the
-HTTPS reverse proxy that only fronts the browser UI, on purpose, since a
-fresh Windows guest's default PowerShell can't easily validate the
-proxy's self-signed certificate.
+networks, not just from your own laptop. That value is baked as a literal
+string into PowerShell commands that run *inside the guest itself*, so
+`localhost` almost never works there, it'd resolve to the VM, not to
+DeployCore. `scripts/setup.sh` sets this for you automatically (detects this
+host's own LAN-facing IP and writes `http://<that-ip>:8000`), so most
+installs never need to touch it by hand at all, but the auto-detected
+address is only as good as the network `setup.sh` happened to run from: on a
+multi-NIC host, or if your VMs actually land on a different network than the
+one detected, edit `APP_PUBLIC_URL` in `.env` yourself and re-run
+`docker compose up -d` to pick up the change. Keep it `http://`, on port
+8000, not `https://`/443: that port is the `api` container exposed directly
+(`8000:8000`), a separate path from the HTTPS reverse proxy that only fronts
+the browser UI, on purpose, since a fresh Windows guest's default PowerShell
+can't easily validate the proxy's self-signed certificate.
 
 ## First run, step by step
 
@@ -219,7 +224,10 @@ org-scoped copy.
   password required, email optional); locked out (`409`) once any user
   exists; auto-creates a default global disk layout
 - One-command install (`scripts/setup.sh`): generates `APP_SECRET_KEY` if
-  left blank, builds and starts everything
+  left blank, detects this host's own LAN IP and sets `APP_PUBLIC_URL` to it
+  if that's still at its shipped default (see "Quickstart" above for why
+  that setting matters and when to override the detected value), builds and
+  starts everything
 - Database migrations run automatically on every `api` container start
   (`backend/entrypoint.sh`), no manual step for first install or later
   updates
@@ -860,7 +868,7 @@ fills in `APP_SECRET_KEY` for you.
 | `APP_SECRET_KEY` | yes | none | Fernet key for credential encryption and JWT signing |
 | `DATABASE_URL` | yes | none | `postgresql+asyncpg://...` |
 | `REDIS_URL` | yes | none | `redis://...`, shared by arq, the login rate limiter, and session tracking |
-| `APP_PUBLIC_URL` | no | `http://localhost:8000` | Base URL guest VMs use to reach `/api/callback` and app-asset downloads; must be reachable from provisioned VMs (not `localhost`), and stays plain `http://` on port 8000, bypassing the HTTPS proxy on purpose (see "HTTPS certificate") |
+| `APP_PUBLIC_URL` | no | `http://localhost:8000`, auto-set to this host's detected LAN IP by `scripts/setup.sh` | Base URL guest VMs use to reach `/api/callback` and app-asset downloads; must be reachable from provisioned VMs (not `localhost`), and stays plain `http://` on port 8000, bypassing the HTTPS proxy on purpose (see "HTTPS certificate") |
 | `ISO_STORAGE_PATH` | no | `/data/isos` | Permanent ISO and logo storage inside the `api`/`worker` containers |
 | `ISO_BUILD_TMP` | no | `/data/iso_build_tmp` | Scratch space for answer-file floppy builds and in-progress ISO uploads |
 | `APP_ASSET_STORAGE_PATH` | no | `/data/app_assets` | Permanent MSI/EXE installer storage, `api` container only (the worker never touches these bytes directly, the guest downloads them itself) |

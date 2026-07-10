@@ -67,9 +67,20 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               <Code>scripts/setup.sh</Code> generates <Code>APP_SECRET_KEY</Code> if you leave it blank,
               the Fernet key DeployCore encrypts every stored credential and password with (hypervisor
               credentials, local admin/domain-join passwords, M365 client secret) and signs JWTs with,
-              then builds and starts every container with Docker Compose. Database
-              migrations run automatically on every <Code>api</Code> container start, both for this first
-              install and every later update, there's no separate migration step to remember.
+              then builds and starts every container with Docker Compose. Database migrations run
+              automatically on every <Code>api</Code> container start, both for this first install and
+              every later update, there's no separate migration step to remember.
+            </P>
+            <P>
+              It also detects this host's own LAN-facing IP and writes it into <Code>APP_PUBLIC_URL</Code>{" "}
+              (skipped if that's already set to something other than the shipped default), the address
+              guest VMs call back to once Windows Setup finishes, so a fresh install works without having
+              to know to set that by hand, see "Troubleshooting a failed or stuck deployment" and "HTTPS
+              certificate" for exactly why that setting matters and needs to be a real, VM-reachable
+              address rather than <Code>localhost</Code>. It's a best-effort guess, not a guarantee: on a
+              host with multiple network interfaces, or if your VMs actually land on a different network
+              than whichever one <Code>setup.sh</Code> happened to detect, open <Code>.env</Code>, correct{" "}
+              <Code>APP_PUBLIC_URL</Code> yourself, then <Code>docker compose up -d</Code> to apply it.
             </P>
             <P>
               The setup wizard itself appears the first time you open the app: it asks for an instance
