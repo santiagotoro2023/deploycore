@@ -909,20 +909,18 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               deployment after adding them failed outright at the Setup level, unrelated to networking
               mode or hostname length, both independently ruled out; rolled back to this plain six-flag
               set, the one last confirmed to actually complete a real install.){" "}
-              <Code>AutoLogon</Code> is what actually closes the login-prompt gap: Setup logs the target admin
-              account in itself the moment specialize/OOBE processing is done, <Code>LogonCount</Code>{" "}
-              set to <Code>1</Code> so it only ever does this once. The account it logs into is always
-              whichever one <Code>local_admin_username</Code>/<Code>local_admin_password</Code> resolve
-              to, same account WinRM authenticates as later, so this stays correct automatically for
-              both the custom-admin-off and custom-admin-on cases below without needing its own branch.
-              One side effect worth knowing: <Code>AutoLogon</Code> leaves that password in plaintext in
-              the registry (<Code>HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon</Code>,{" "}
-              <Code>DefaultPassword</Code>/<Code>AutoAdminLogon</Code>) as an implementation detail of
-              how it works at all; the very first <Code>FirstLogonCommand</Code>, before anything else
-              including enabling WinRM, scrubs both values out again, keeping the window that plaintext
-              copy exists as short as possible. Setup always requires the built-in Administrator account
-              to have a password at this point too (<Code>AdministratorPassword</Code>), so it always
-              gets one regardless of which account ends up being the one that's actually used.
+              <Code>AutoLogon</Code> was meant to close that login-prompt gap the same way: log the target
+              admin account in itself the moment specialize/OOBE processing is done, no human at the
+              console required. It's <strong>not currently in the answer file</strong> either, for the same
+              reason as the two OOBE settings above — every deployment on real hardware that included it
+              also failed outright during Setup, and static-vs-DHCP networking and hostname length have
+              both separately been ruled out, leaving <Code>AutoLogon</Code> itself as the last untested
+              variable and the current working hypothesis, pending confirmation from a real deployment run
+              without it. Until that's resolved, <Code>FirstLogonCommands</Code> only run once a human
+              physically logs in at the console once, the original limitation this tool is trying to build
+              past. Setup always requires the built-in Administrator account to have a password at this
+              point regardless (<Code>AdministratorPassword</Code>), so it always gets one whether or not
+              it ends up being the account that's actually used.
             </P>
             <P>
               A template's <strong>custom admin account</strong> toggle (Templates page, off by default)

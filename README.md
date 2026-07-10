@@ -575,20 +575,22 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `/api/callback/{token}` (single-use per-deployment token, sets
   `callback_token_used`, which `wait_for_callback` polls for instead of a
   state change, since the state's already `installing_os` by the time this
-  fires). None of this runs unattended without `AutoLogon` in the oobeSystem
-  pass, set to whichever account `local_admin_username`/`local_admin_password`
-  resolve to (the built-in Administrator off toggle, the custom account on):
-  `SkipMachineOOBE`/`SkipUserOOBE` alone don't make Setup log in on their own,
-  `FirstLogonCommands` only ever run as part of an actual first-logon event,
-  without `AutoLogon` that means a plain login prompt sitting at the console
-  until a human physically logs in, defeating the entire point. `LogonCount` is `1`, so
-  Windows won't auto-logon again after this, and the very first
-  `FirstLogonCommand` (before anything else, including enabling WinRM)
-  scrubs the plaintext password `AutoLogon` leaves in the
-  `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon` registry key
-  as a side effect, `DefaultPassword` and `AutoAdminLogon`, keeping the
-  exposure window as short as possible. If `template.custom_admin_enabled` is
-  on (off by default), two more commands render: `LocalAccountTokenFilterPolicy=1`
+  fires). The oobeSystem pass does **not** currently include `AutoLogon`: an
+  earlier attempt at it (auto-logging in as whichever account
+  `local_admin_username`/`local_admin_password` resolve to, so
+  `FirstLogonCommands` could run with nobody at the console) was rolled back
+  after every deployment that included it failed outright during Setup on
+  real hardware. Static vs. DHCP networking, hostname length, and a
+  separate, also-reverted OOBE addition were all independently ruled out via
+  controlled, one-variable-at-a-time tests, leaving `AutoLogon` itself as the
+  last untested variable and the current working hypothesis, pending
+  confirmation from a real deployment run without it. Until that's resolved
+  and `AutoLogon` can be reintroduced more carefully, `FirstLogonCommands`
+  only run once a human physically logs in at the console, since
+  `SkipMachineOOBE`/`SkipUserOOBE` alone don't make Setup log in on their
+  own and `FirstLogonCommands` only ever fire as part of an actual
+  first-logon event. If `template.custom_admin_enabled` is on (off by
+  default), two more commands render: `LocalAccountTokenFilterPolicy=1`
   right after enabling WinRM (by default Windows' UAC remote restriction only
   exempts the actual built-in Administrator (RID 500) from a filtered, non-elevated
   token on network logons, without this every WinRM command DeployCore

@@ -201,11 +201,31 @@ def test_oobe_stays_at_the_last_confirmed_working_set():
     ]
 
 
+def test_no_autologon_for_now():
+    """AutoLogon was tried (targeting whichever account
+    local_admin_username/local_admin_password resolve to) and rolled back:
+    every deployment after adding it failed outright at the Setup level,
+    and static vs. DHCP networking, hostname length, and the OOBE
+    ProtectYourPC/NetworkLocation additions have all separately been ruled
+    out by direct, controlled tests, narrowing it down to AutoLogon itself
+    as the one remaining untested variable. Locked in as absent so a
+    future change can't silently reintroduce it without a real reason;
+    see autounattend_base.xml.j2's comment for the reasoning and what
+    reintroducing it carefully would need to look like."""
+    template = _make_template()
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+
+    assert root.xpath("//u:AutoLogon", namespaces=NS) == []
+
+    commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
+    command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)
+    assert "DefaultPassword" not in command_lines and "AutoAdminLogon" not in command_lines
+
+
 def test_custom_admin_disabled_by_default_keeps_builtin_administrator():
     """Off by default: no LocalAccounts entry, the built-in Administrator
     keeps its password and is never touched by FirstLogonCommands, and
-    only the three baseline commands (scrub AutoLogon registry, enable
-    WinRM, callback) render."""
+    only the two baseline commands (enable WinRM, callback) render."""
     template = _make_template()
     root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
 
@@ -214,30 +234,9 @@ def test_custom_admin_disabled_by_default_keeps_builtin_administrator():
 
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
     command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)
-    assert len(commands) == 3
+    assert len(commands) == 2
     assert "LocalAccountTokenFilterPolicy" not in command_lines
     assert "Disable-LocalUser" not in command_lines
-
-
-def test_autologon_targets_whichever_account_is_meant_to_be_used():
-    """Without AutoLogon, Setup leaves a plain login prompt at the console
-    and FirstLogonCommands (the callback included) never run unattended,
-    the entire point of this deployment tool. AutoLogon's account must
-    match local_admin_username exactly, same account WinRM authenticates
-    as later, off by default that's "Administrator", the built-in account,
-    confirmed here rather than assuming the custom-admin test below is
-    the only case that matters."""
-    template = _make_template()
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
-
-    assert root.xpath("string(//u:AutoLogon/u:Username)", namespaces=NS) == "Administrator"
-    assert root.xpath("string(//u:AutoLogon/u:Password/u:Value)", namespaces=NS) == "P@ssw0rd1!"
-    assert root.xpath("string(//u:AutoLogon/u:Enabled)", namespaces=NS) == "true"
-    assert root.xpath("string(//u:AutoLogon/u:LogonCount)", namespaces=NS) == "1"
-
-    commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
-    first_command = commands[0].xpath("string(u:CommandLine)", namespaces=NS)
-    assert "DefaultPassword" in first_command and "AutoAdminLogon" in first_command
 
 
 def test_static_ip_configured_declaratively_not_over_dhcp():
@@ -290,14 +289,9 @@ def test_local_accounts_creates_custom_admin_and_still_sets_builtin_password():
 
     assert root.xpath("string(//u:AdministratorPassword/u:Value)", namespaces=NS) == "P@ssw0rd1!"
 
-    # AutoLogon must target the custom account, not the built-in one being
-    # disabled: that's the account meant to actually be used going
-    # forward, and the one WinRM authenticates as later in post_install.
-    assert root.xpath("string(//u:AutoLogon/u:Username)", namespaces=NS) == "svcwinadmin"
-
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
     command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)
-    assert len(commands) == 5
+    assert len(commands) == 4
     assert "LocalAccountTokenFilterPolicy" in command_lines
     assert "Disable-LocalUser -Name 'Administrator'" in command_lines
 
