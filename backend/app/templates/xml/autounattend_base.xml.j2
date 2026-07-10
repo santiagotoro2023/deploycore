@@ -61,6 +61,67 @@
     </settings>
     <settings pass="oobeSystem">
         <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <!-- Without this, Setup leaves a plain login prompt at the
+                 console after specialize/OOBE processing finishes:
+                 FirstLogonCommands only ever run as part of an actual
+                 first-logon event, and nothing about SkipMachineOOBE/
+                 SkipUserOOBE makes that happen on its own, it still needs
+                 a human to type credentials at the console (or, as seen in
+                 testing, still shows some OOBE privacy/diagnostics screens
+                 on that manual first logon despite the Skip* flags below).
+                 AutoLogon is what makes the whole deployment actually
+                 unattended: Setup logs the target admin account in itself
+                 once specialize/OOBE is done, which is what lets
+                 FirstLogonCommands (WinRM enable, the callback, disabling
+                 the built-in Administrator when custom_admin_enabled) run
+                 with nobody at the console at all. LogonCount 1 means
+                 Windows won't auto-logon again after this; the plaintext
+                 password AutoLogon leaves in the registry as a side effect
+                 is scrubbed by the very first FirstLogonCommand below.
+                 Ordered first (AutoLogon, FirstLogonCommands, OOBE,
+                 UserAccounts), matching two independent real, working,
+                 vSphere-targeting Windows Server 2022 answer files
+                 (ruzickap/packer-templates, openshift/windows-machine-
+                 config-operator) rather than the order used before, no
+                 confirmed proof either order is required, but this is the
+                 more battle-tested convention for this exact environment. -->
+            <AutoLogon>
+                <Password>
+                    <Value>{{ template.local_admin_password }}</Value>
+                    <PlainText>true</PlainText>
+                </Password>
+                <Enabled>true</Enabled>
+                <LogonCount>1</LogonCount>
+                <Username>{{ template.local_admin_username }}</Username>
+            </AutoLogon>
+            <FirstLogonCommands>
+{% include "_first_logon_commands.xml.j2" %}
+            </FirstLogonCommands>
+            <!-- HideEULAPage/HideLocalAccountScreen/HideOnlineAccountScreens/
+                 HideWirelessSetupInOOBE/SkipMachineOOBE/SkipUserOOBE alone
+                 were never the full picture, confirmed against Microsoft's
+                 own "Automate OOBE" guidance: ProtectYourPC has no default
+                 value at all, and its own doc says plainly "if a value is
+                 not set, the Get going fast page opens during setup", the
+                 exact diagnostic-data/privacy consent screen seen in
+                 testing despite every Hide*/Skip* flag already being set,
+                 none of them cover it. NetworkLocation is the same shape
+                 (deprecated on Windows 10 client, but still the documented
+                 way to suppress the "Computer's Current Location" network
+                 profile prompt, which a Windows Server guest with a real
+                 network connection - every deployment here has one -
+                 legitimately triggers otherwise). -->
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideLocalAccountScreen>true</HideLocalAccountScreen>
+                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <NetworkLocation>Home</NetworkLocation>
+                <ProtectYourPC>3</ProtectYourPC>
+                <SkipMachineOOBE>true</SkipMachineOOBE>
+                <SkipUserOOBE>true</SkipUserOOBE>
+            </OOBE>
             <UserAccounts>
                 <!-- Always sets the built-in Administrator's password: with
                      custom_admin_enabled off, that's the account actually
@@ -90,60 +151,6 @@
                 </LocalAccounts>
 {% endif %}
             </UserAccounts>
-            <!-- Without this, Setup leaves a plain login prompt at the
-                 console after specialize/OOBE processing finishes:
-                 FirstLogonCommands only ever run as part of an actual
-                 first-logon event, and nothing about SkipMachineOOBE/
-                 SkipUserOOBE makes that happen on its own, it still needs
-                 a human to type credentials at the console (or, as seen in
-                 testing, still shows some OOBE privacy/diagnostics screens
-                 on that manual first logon despite the Skip* flags above).
-                 AutoLogon is what makes the whole deployment actually
-                 unattended: Setup logs the target admin account in itself
-                 once specialize/OOBE is done, which is what lets
-                 FirstLogonCommands (WinRM enable, the callback, disabling
-                 the built-in Administrator when custom_admin_enabled) run
-                 with nobody at the console at all. LogonCount 1 means
-                 Windows won't auto-logon again after this; the plaintext
-                 password AutoLogon leaves in the registry as a side effect
-                 is scrubbed by the very first FirstLogonCommand below. -->
-            <AutoLogon>
-                <Password>
-                    <Value>{{ template.local_admin_password }}</Value>
-                    <PlainText>true</PlainText>
-                </Password>
-                <Enabled>true</Enabled>
-                <LogonCount>1</LogonCount>
-                <Username>{{ template.local_admin_username }}</Username>
-            </AutoLogon>
-            <!-- HideEULAPage/HideLocalAccountScreen/HideOnlineAccountScreens/
-                 HideWirelessSetupInOOBE/SkipMachineOOBE/SkipUserOOBE alone
-                 were never the full picture, confirmed against Microsoft's
-                 own "Automate OOBE" guidance: ProtectYourPC has no default
-                 value at all, and its own doc says plainly "if a value is
-                 not set, the Get going fast page opens during setup", the
-                 exact diagnostic-data/privacy consent screen seen in
-                 testing despite every Hide*/Skip* flag already being set,
-                 none of them cover it. NetworkLocation is the same shape
-                 (deprecated on Windows 10 client, but still the documented
-                 way to suppress the "Computer's Current Location" network
-                 profile prompt, which a Windows Server guest with a real
-                 network connection - every deployment here has one -
-                 legitimately triggers otherwise). -->
-            <OOBE>
-                <HideEULAPage>true</HideEULAPage>
-                <HideLocalAccountScreen>true</HideLocalAccountScreen>
-                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
-                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-                <NetworkLocation>Home</NetworkLocation>
-                <ProtectYourPC>3</ProtectYourPC>
-                <SkipMachineOOBE>true</SkipMachineOOBE>
-                <SkipUserOOBE>true</SkipUserOOBE>
-            </OOBE>
-            <FirstLogonCommands>
-{% include "_first_logon_commands.xml.j2" %}
-            </FirstLogonCommands>
         </component>
     </settings>
 </unattend>
