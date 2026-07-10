@@ -144,7 +144,7 @@ export type HealthStatus = "unknown" | "healthy" | "unreachable";
 export interface Deployment {
   id: string;
   org_id: string;
-  template_id: string;
+  template_id: string | null;
   hypervisor_host_id: string;
   hostname: string;
   ip_mode: IpMode;

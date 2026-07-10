@@ -43,8 +43,17 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
     )
-    template_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("deployment_templates.id"), nullable=False
+    # Nullable: deleting a template must not be blocked by deployments
+    # already made from it (see the Templates delete confirm dialog's own
+    # "deployments already created from it ... are unaffected" wording,
+    # which this enforces at the DB level, matching the created_by_user_id
+    # and iso_asset_id ON DELETE SET NULL precedents). A deployment that's
+    # already completed/failed never needs its template again; one still
+    # actively provisioning (or retried after the template was deleted)
+    # is guarded explicitly in worker/tasks/provision.py instead of
+    # crashing on a None template.
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("deployment_templates.id", ondelete="SET NULL"), nullable=True
     )
     hypervisor_host_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("hypervisor_hosts.id"), nullable=False

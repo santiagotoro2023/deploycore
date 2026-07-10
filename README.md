@@ -426,6 +426,15 @@ org-scoped copy.
   leaves the stored value unchanged. Editing a template only affects
   deployments created from it afterward, deployments already completed or
   in progress are unaffected (shown as a note directly in the edit form)
+- Delete: `deployments.template_id` is `ON DELETE SET NULL` (migration
+  0028, the same pattern as `deployment_templates.iso_asset_id` above),
+  so a template with existing deployments deletes cleanly, it never
+  blocks on those deployments the way a plain foreign key would. A
+  deployment whose template gets deleted while it's still actively
+  provisioning (pending, or retried after the delete) fails with an
+  explicit "template ... has since been deleted" error instead of
+  crashing, everything already completed or failed keeps its full log
+  history regardless
 - Clone: duplicates any visible template (own org's or an inherited global
   one) into a new org-scoped copy named "<name> (copy)", including
   encrypted credentials (copied as ciphertext, not re-entered)

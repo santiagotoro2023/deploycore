@@ -572,6 +572,14 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               the exact XML that one actually shipped with, stored once rendered rather than re-derived,
               so it stays correct even if the template it came from is edited afterward.
             </P>
+            <P>
+              <strong>Delete</strong> always succeeds even if deployments were created from that template:
+              a deployment doesn't need its template to exist afterward, it keeps its own rendered answer
+              file and settings, deleting only clears the now-dangling reference on those deployment rows
+              rather than being blocked by them. The one edge case is a deployment that's still actively
+              provisioning (or gets retried) after its template was deleted mid-flight, that fails with an
+              explicit error in its log rather than deploying from a template that no longer exists.
+            </P>
           </>
         ),
       },

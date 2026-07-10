@@ -32,6 +32,7 @@ export default function Templates() {
   const [editing, setEditing] = useState<DeploymentTemplate | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DeploymentTemplate | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
@@ -80,9 +81,14 @@ export default function Templates() {
 
   async function deleteTemplate() {
     if (!confirmDelete) return;
-    await api.delete(`/organizations/${selectedOrgId}/templates/${confirmDelete.id}`);
-    setConfirmDelete(null);
-    await load();
+    setDeleteError(null);
+    try {
+      await api.delete(`/organizations/${selectedOrgId}/templates/${confirmDelete.id}`);
+      setConfirmDelete(null);
+      await load();
+    } catch (err) {
+      setDeleteError(err instanceof ApiError ? err.message : "Failed to delete this template.");
+    }
   }
 
   return (
@@ -168,7 +174,10 @@ export default function Templates() {
                   {t.org_id === selectedOrgId && (
                     <button
                       className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
-                      onClick={() => setConfirmDelete(t)}
+                      onClick={() => {
+                        setDeleteError(null);
+                        setConfirmDelete(t);
+                      }}
                     >
                       <Trash2 size={12} strokeWidth={1.75} />
                     </button>
@@ -210,10 +219,18 @@ export default function Templates() {
       <ConfirmDialog
         open={!!confirmDelete}
         title="Delete template"
-        message={`Delete "${confirmDelete?.name}"? Deployments already created from it keep their own copy of these settings and are unaffected. This cannot be undone.`}
+        message={
+          <>
+            {`Delete "${confirmDelete?.name}"? Deployments already created from it keep their own copy of these settings and are unaffected. This cannot be undone.`}
+            {deleteError && <div className="mt-2 text-red-600 dark:text-red-400">{deleteError}</div>}
+          </>
+        }
         confirmLabel="Delete"
         onConfirm={deleteTemplate}
-        onCancel={() => setConfirmDelete(null)}
+        onCancel={() => {
+          setDeleteError(null);
+          setConfirmDelete(null);
+        }}
       />
     </div>
   );

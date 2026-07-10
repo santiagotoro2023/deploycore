@@ -149,11 +149,19 @@ async def run_deployment(ctx, deployment_id: str) -> None:
         deployment = await db.get(Deployment, uuid.UUID(deployment_id))
         if deployment is None:
             return
-        template = await db.get(DeploymentTemplate, deployment.template_id)
-        disk_layout = await db.get(DiskLayout, template.disk_layout_id)
         host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
         driver = get_driver(host)
         defaults = HYPERVISOR_DEFAULTS[host.type.value]
+
+        # template_id is nullable (ON DELETE SET NULL, see models/deployment.py):
+        # an operator can delete a template out from under a deployment that's
+        # still pending/retried, so this can legitimately be None here even
+        # though it never was at creation time.
+        template = await db.get(DeploymentTemplate, deployment.template_id) if deployment.template_id else None
+        if template is None:
+            await _fail(ctx, db, driver, deployment, "the template this deployment was created from has since been deleted")
+            return
+        disk_layout = await db.get(DiskLayout, template.disk_layout_id)
 
         if template.iso_asset_id is None:
             await _fail(ctx, db, driver, deployment, "template has no Windows ISO configured")
@@ -312,9 +320,17 @@ async def run_post_install(ctx, deployment_id: str) -> None:
         deployment = await db.get(Deployment, uuid.UUID(deployment_id))
         if deployment is None:
             return
-        template = await db.get(DeploymentTemplate, deployment.template_id)
         host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
         driver = get_driver(host)
+
+        # See run_deployment's identical check: the template can be deleted
+        # by an operator at any point while Windows Setup is still running
+        # on the guest (wait_for_callback's poll window can be tens of
+        # minutes), well after run_deployment itself confirmed it existed.
+        template = await db.get(DeploymentTemplate, deployment.template_id) if deployment.template_id else None
+        if template is None:
+            await _fail(ctx, db, driver, deployment, "the template this deployment was created from has since been deleted")
+            return
 
         try:
             await log(db, deployment, "post_install", "waiting for guest IP address")

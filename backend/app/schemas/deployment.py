@@ -84,7 +84,7 @@ class DeploymentRead(BaseModel):
 
     id: uuid.UUID
     org_id: uuid.UUID
-    template_id: uuid.UUID
+    template_id: uuid.UUID | None
     hypervisor_host_id: uuid.UUID
     hostname: str
     ip_mode: IpMode
