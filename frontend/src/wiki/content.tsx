@@ -918,14 +918,26 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               it was placed, isolated by ruling out static-vs-DHCP networking, hostname length, and the
               OOBE settings above via controlled, one-variable-at-a-time tests, and confirmed when a real
               deployment finally completed once <Code>AutoLogon</Code> was removed entirely. Auto-logon
-              is still configured, just differently: a <Code>RunSynchronousCommand</Code> in the
-              specialize pass's <Code>Microsoft-Windows-Deployment</Code> component runs a PowerShell
-              one-liner that writes the same registry values (<Code>AutoAdminLogon</Code>,{" "}
+              is still configured, just differently: four <Code>RunSynchronousCommand</Code> entries in
+              the specialize pass's <Code>Microsoft-Windows-Deployment</Code> component, each running one{" "}
+              <Code>reg.exe add</Code>, write the same registry values (<Code>AutoAdminLogon</Code>,{" "}
               <Code>DefaultUserName</Code>, <Code>DefaultPassword</Code>, <Code>AutoLogonCount</Code>) a
               working <Code>AutoLogon</Code> element would itself write — Winlogon reads those at
               first-logon time the same way no matter which mechanism put them there, so the effect is
               identical, just reached without whatever Setup-time processing of the declarative element
-              was breaking on this environment. One side effect worth knowing, same as the element had:
+              was breaking on this environment. The first attempt at this used a single{" "}
+              <Code>powershell.exe -Command</Code> one-liner instead of <Code>reg.exe</Code>, and that
+              broke Setup a different way: a hard crash immediately after landing in the specialize pass
+              ("the computer was unexpectedly restarted, or an unexpected error occurred"), consistent
+              with a real, documented failure mode where PowerShell cmdlets in{" "}
+              <Code>RunSynchronousCommand</Code> crash this early because WMI/CIM and other subsystems it
+              can depend on aren't fully initialized yet. <Code>reg.exe</Code> has no such startup
+              dependency, which is why it's what actually runs now; command lines are built with Python's{" "}
+              <Code>subprocess.list2cmdline</Code> for correct Win32 argv quoting (<Code>Path</Code>{" "}
+              launches the executable directly, no <Code>cmd.exe</Code> involved, so none of{" "}
+              <Code>cmd</Code>'s own <Code>%</Code>/<Code>^</Code>/<Code>&amp;</Code> metacharacter
+              handling applies — just the same quoting rules <Code>CreateProcess</Code> itself expects).
+              One side effect worth knowing, same as the element had:
               this leaves that password in plaintext in the registry
               (<Code>HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon</Code>) as an
               implementation detail of how it works at all; the very first <Code>FirstLogonCommand</Code>,

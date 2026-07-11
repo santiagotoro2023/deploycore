@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import jinja2
@@ -6,7 +7,7 @@ from app.config import get_settings
 from app.models.deployment import Deployment, IpMode
 from app.models.disk_layout import DiskLayout
 from app.models.template import DeploymentTemplate
-from app.winrm.client import netmask_to_prefix, ps_single_quote
+from app.winrm.client import netmask_to_prefix
 
 # Windows' Setup UI only accepts InputLocale as either a bare locale tag
 # (which picks *a* default keyboard for that locale, not necessarily the
@@ -66,14 +67,44 @@ _ENV = jinja2.Environment(
     trim_blocks=True,
     lstrip_blocks=True,
 )
-# Only needed where a value is embedded inside a PowerShell command line
-# rendered into the answer file (e.g. the specialize-pass autologon
-# registry write), not for values that are plain XML element text:
-# autoescape above already makes those safe. XML-escaping alone doesn't
-# protect a value from PowerShell's own parser (a literal ' would close
-# the surrounding quoted string early), so this needs to run first and
-# autoescape still applies afterward to the quotes/apostrophes it adds.
-_ENV.filters["ps_quote"] = ps_single_quote
+
+_WINLOGON_KEY = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+
+
+def _autologon_reg_commands(username: str, password: str) -> list[str]:
+    """reg.exe, not PowerShell: RunSynchronousCommand runs this during
+    Setup's specialize pass, before WMI/CIM and other subsystems
+    PowerShell itself can depend on are guaranteed to be initialized - a
+    real, documented failure mode (a PowerShell cmdlet there crashing with
+    WBEM_E_CRITICAL_ERROR because a WMI class hadn't been populated yet,
+    per a Microsoft Q&A thread on the exact same RunSynchronousCommand/
+    specialize combination), and the actual, confirmed cause the one time
+    this used powershell.exe here: Setup crashed outright with "the
+    computer was unexpectedly restarted" immediately after landing.
+    reg.exe has none of PowerShell's startup dependencies, it's one of
+    the small set of tools MDT/Packer-style specialize-pass automation
+    reaches for specifically because of this fragility. Four separate
+    commands, not one semicolon-chained line, because RunSynchronousCommand
+    takes exactly one process invocation per Path. list2cmdline applies
+    the same argv-quoting CreateProcess itself expects (Path launches the
+    exe directly, no cmd.exe involved, so none of cmd's %/^/&
+    metacharacter handling applies, just standard C-runtime quote/
+    backslash escaping) for whatever ends up in the account name/
+    password."""
+    return [
+        subprocess.list2cmdline(
+            ["reg.exe", "add", _WINLOGON_KEY, "/v", "AutoAdminLogon", "/t", "REG_SZ", "/d", "1", "/f"]
+        ),
+        subprocess.list2cmdline(
+            ["reg.exe", "add", _WINLOGON_KEY, "/v", "DefaultUserName", "/t", "REG_SZ", "/d", username, "/f"]
+        ),
+        subprocess.list2cmdline(
+            ["reg.exe", "add", _WINLOGON_KEY, "/v", "DefaultPassword", "/t", "REG_SZ", "/d", password, "/f"]
+        ),
+        subprocess.list2cmdline(
+            ["reg.exe", "add", _WINLOGON_KEY, "/v", "AutoLogonCount", "/t", "REG_DWORD", "/d", "1", "/f"]
+        ),
+    ]
 
 
 def render_autounattend(
@@ -89,6 +120,9 @@ def render_autounattend(
         disk_layout=disk_layout,
         callback_base_url=get_settings().app_public_url,
         input_locale=_resolve_input_locale(template.keyboard_layout),
+        autologon_commands=_autologon_reg_commands(
+            template.local_admin_username, template.local_admin_password
+        ),
         # Only meaningful (and only computed) for a static deployment: CIDR
         # prefix length Windows' own TCP/IP unattend component wants
         # (UnicastIpAddresses takes "<ip>/<prefix>", not a dotted netmask).

@@ -7,26 +7,44 @@
      eliminating every other variable changed around the same time
      (static-vs-DHCP networking, hostname length, the OOBE additions
      below) via controlled, single-variable tests, and confirmed by a real
-     deployment completing once <AutoLogon> was removed entirely. This
-     writes the exact same registry values Windows itself would write from
-     a working <AutoLogon> element (Winlogon reads these at first-logon
-     time regardless of which mechanism put them there), just without
-     going through whatever Setup-time processing of the schema element
-     itself was breaking. Runs during specialize (system context, so no
-     Credentials needed), well before oobeSystem's logon prompt is ever
-     shown, and self-contained: no dependency on the OOBE/UserAccounts
-     ordering questions investigated (and ruled out) for AutoLogon.
-     AutoLogonCount=1 mirrors AutoLogon's own LogonCount=1, Windows stops
-     auto-logging in once it hits 0. The plaintext password this leaves in
-     the registry is scrubbed by the first FirstLogonCommand, same as it
-     was for the declarative element - identical exposure window, just a
-     different write path getting it there. -->
+     deployment completing once <AutoLogon> was removed entirely.
+
+     The commands below write the exact same registry values Windows
+     itself would write from a working <AutoLogon> element (Winlogon
+     reads these at first-logon time regardless of which mechanism put
+     them there). They run via reg.exe, not powershell.exe: a first
+     attempt used a single powershell.exe -Command one-liner here and
+     that broke Setup a different way, a hard crash immediately after
+     landing in specialize ("the computer was unexpectedly restarted, or
+     an unexpected error occurred"), consistent with a real, documented
+     failure mode where PowerShell cmdlets in RunSynchronousCommand crash
+     this early in Setup because WMI/CIM and other subsystems it can
+     depend on aren't fully initialized yet (Microsoft Q&A 731439, same
+     RunSynchronousCommand/specialize combination, a cmdlet failing with
+     WBEM_E_CRITICAL_ERROR for exactly this reason). reg.exe has none of
+     that startup dependency, it's one of the small set of tools
+     MDT/Packer-style specialize-pass automation reaches for specifically
+     because of this fragility. Four separate commands, not one
+     semicolon-chained line, because RunSynchronousCommand's Path is a
+     single process invocation, not a shell.
+
+     Runs during specialize (system context, so no Credentials needed),
+     well before oobeSystem's logon prompt is ever shown, and
+     self-contained: no dependency on the OOBE/UserAccounts ordering
+     questions investigated (and ruled out) for AutoLogon. AutoLogonCount=1
+     mirrors AutoLogon's own LogonCount=1, Windows stops auto-logging in
+     once it hits 0. The plaintext password this leaves in the registry is
+     scrubbed by the first FirstLogonCommand, same as it was for the
+     declarative element - identical exposure window, just a different
+     write path getting it there. -->
 <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
     <RunSynchronous>
+{% for cmd in autologon_commands %}
         <RunSynchronousCommand wcm:action="add">
-            <Description>Set auto-logon registry values for the first boot</Description>
-            <Order>1</Order>
-            <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'; Set-ItemProperty -Path $p -Name AutoAdminLogon -Value '1' -Type String -Force; Set-ItemProperty -Path $p -Name DefaultUserName -Value {{ template.local_admin_username | ps_quote }} -Type String -Force; Set-ItemProperty -Path $p -Name DefaultPassword -Value {{ template.local_admin_password | ps_quote }} -Type String -Force; Set-ItemProperty -Path $p -Name AutoLogonCount -Value 1 -Type DWord -Force"</Path>
+            <Description>Set auto-logon registry value {{ loop.index }} of {{ loop.length }}</Description>
+            <Order>{{ loop.index }}</Order>
+            <Path>{{ cmd }}</Path>
         </RunSynchronousCommand>
+{% endfor %}
     </RunSynchronous>
 </component>

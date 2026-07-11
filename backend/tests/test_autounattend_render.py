@@ -230,19 +230,25 @@ def test_specialize_autologon_sets_registry_values():
     nobody at the console), reached by writing the same registry values
     Winlogon itself reads at first-logon time, targeting whichever account
     local_admin_username/local_admin_password resolve to, same account
-    WinRM authenticates as later."""
+    WinRM authenticates as later. Via reg.exe, not powershell.exe (see
+    _specialize_autologon.xml.j2's comment): four separate
+    RunSynchronousCommand entries, one process invocation each, not one
+    semicolon-chained PowerShell line."""
     template = _make_template()
     root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
 
-    path = root.xpath(
-        "string(//u:component[@name='Microsoft-Windows-Deployment']"
-        "//u:RunSynchronousCommand/u:Path)",
+    run_synchronous_commands = root.xpath(
+        "//u:component[@name='Microsoft-Windows-Deployment']//u:RunSynchronousCommand",
         namespaces=NS,
     )
-    assert "AutoAdminLogon" in path
-    assert "DefaultUserName" in path and "'Administrator'" in path
-    assert "DefaultPassword" in path and "'P@ssw0rd1!'" in path
-    assert "AutoLogonCount" in path
+    assert len(run_synchronous_commands) == 4
+    paths = [c.xpath("string(u:Path)", namespaces=NS) for c in run_synchronous_commands]
+    assert all(p.startswith("reg.exe add ") for p in paths)
+    joined = " ".join(paths)
+    assert "AutoAdminLogon" in joined
+    assert "DefaultUserName" in joined and "Administrator" in joined
+    assert "DefaultPassword" in joined and "P@ssw0rd1!" in joined
+    assert "AutoLogonCount" in joined
 
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
     first_command = commands[0].xpath("string(u:CommandLine)", namespaces=NS)
@@ -321,12 +327,11 @@ def test_local_accounts_creates_custom_admin_and_still_sets_builtin_password():
     # account, not the built-in one being disabled: that's the account
     # meant to actually be used going forward, and the one WinRM
     # authenticates as later in post_install.
-    path = root.xpath(
-        "string(//u:component[@name='Microsoft-Windows-Deployment']"
-        "//u:RunSynchronousCommand/u:Path)",
+    paths = root.xpath(
+        "//u:component[@name='Microsoft-Windows-Deployment']//u:RunSynchronousCommand/u:Path/text()",
         namespaces=NS,
     )
-    assert "'svcwinadmin'" in path
+    assert "svcwinadmin" in " ".join(paths)
 
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
     command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)

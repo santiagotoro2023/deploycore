@@ -1,4 +1,4 @@
-<img src="docs/brand/deploycore-lockup.svg" alt="DeployCore" width="360" />
+<img src="docs/brand/deploycore-lockup.svg" alt="DeployCore" width="720" />
 
 **Contents:** [Quickstart](#quickstart) · [First run, step by step](#first-run-step-by-step) ·
 [Updating](#updating) · [HTTPS certificate](#https-certificate) ·
@@ -585,20 +585,32 @@ pending → creating_vm → booting → installing_os → post_install → confi
   addition (below) were all independently ruled out via controlled,
   one-variable-at-a-time tests, isolating `AutoLogon` itself, and a real
   deployment completed once it was removed entirely, confirming it.
-  Auto-logon is still configured, just differently: a `RunSynchronousCommand`
-  in the specialize pass's `Microsoft-Windows-Deployment` component writes
-  the same registry values (`AutoAdminLogon`, `DefaultUserName`,
+  Auto-logon is still configured, just differently: four
+  `RunSynchronousCommand` entries in the specialize pass's
+  `Microsoft-Windows-Deployment` component each run one `reg.exe add`,
+  writing the same registry values (`AutoAdminLogon`, `DefaultUserName`,
   `DefaultPassword`, `AutoLogonCount`) Windows itself would write from a
-  working `AutoLogon` element, via a PowerShell one-liner run in the system
-  context. Winlogon reads those values at first-logon time the same way
-  regardless of which mechanism put them there, so the effect is identical,
-  just reached without going through whatever Setup-time processing of the
-  `AutoLogon` schema element itself was breaking on this environment. If
-  that also turns out not to be reliable, the next place to look is
-  probably ESXi 6.7 specifically (Server 2025 is only vSphere-certified on
-  7.0+/8.0+): not likely given this same environment installed successfully
-  before all this XML work started, but worth ruling in or out with a real
-  test on 7.0+/8.0+ if the registry approach fails too. `AutoLogonCount=1`
+  working `AutoLogon` element. Winlogon reads those values at first-logon
+  time the same way regardless of which mechanism put them there, so the
+  effect is identical, just reached without going through whatever
+  Setup-time processing of the `AutoLogon` schema element itself was
+  breaking on this environment. The first attempt at this used a single
+  `powershell.exe -Command` one-liner instead, and that broke Setup a
+  different way: a hard crash immediately after landing in the specialize
+  pass ("the computer was unexpectedly restarted, or an unexpected error
+  occurred"), consistent with a real, documented failure mode where
+  PowerShell cmdlets in `RunSynchronousCommand` crash this early because
+  WMI/CIM and other subsystems it depends on aren't fully initialized yet.
+  `reg.exe` has none of that startup dependency, which is why it's the one
+  used now; command lines are built with Python's `subprocess.list2cmdline`
+  for correct Win32 argv quoting (`Path` launches the exe directly, no
+  `cmd.exe` involved, so none of `cmd`'s own `%`/`^`/`&` metacharacter
+  handling applies). If this also turns out not to be reliable, the next
+  place to look is probably ESXi 6.7 specifically (Server 2025 is only
+  vSphere-certified on 7.0+/8.0+): not likely given this same environment
+  installed successfully before all this XML work started, but worth
+  ruling in or out with a real test on 7.0+/8.0+ if the registry approach
+  fails too. `AutoLogonCount=1`
   mirrors the element's own `LogonCount=1`, Windows stops auto-logging in
   once it hits 0, and the first `FirstLogonCommand` (before anything else,
   including enabling WinRM) scrubs the plaintext password this leaves in
