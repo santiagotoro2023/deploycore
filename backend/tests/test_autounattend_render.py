@@ -179,32 +179,36 @@ def test_ui_language_has_a_fallback():
     assert winpe_intl.xpath("string(u:SetupUILanguage/u:UILanguage)", namespaces=NS) == "de-CH"
 
 
-def test_oobe_includes_protectyourpc_and_networklocation():
-    """ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen were
-    speculatively reverted alongside AutoLogon at one point (on the theory
-    they might be involved in a total Setup failure seen in testing), then
-    confirmed innocent: removing them alone, with AutoLogon still present,
-    did not fix that failure; only removing AutoLogon did. They're back
-    since they're what Microsoft's own "Automate OOBE" guidance says is
-    needed to actually suppress the diagnostic-data/privacy and network-
-    location screens Hide*/Skip* alone don't cover, confirmed live in
-    testing (both screens shown despite every Hide*/Skip* flag)."""
+def test_oobe_stays_at_the_last_confirmed_working_set():
+    """ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen have been
+    added and reverted twice now. First revert: alongside the old
+    declarative <AutoLogon> element, on the theory either might be
+    involved in a total Setup failure - inconclusive, since removing them
+    alone (AutoLogon still present) didn't fix that failure, only removing
+    AutoLogon did, but that also never actually tested this OOBE set
+    without AutoLogon in the picture. Second attempt: reintroduced
+    alongside the new specialize-pass reg.exe autologon (a real deployment
+    had never tested this specific combination) - Setup failed again with
+    the exact same WINDEPLOY 0x80220005 signature as the AutoLogon-era
+    failures, and this time setupact.log showed specialize (reg.exe
+    commands included) completing cleanly before failing at the
+    Pre-OOBE -> OOBE transition these settings directly govern, a much
+    more direct implication than already-finished specialize-pass work.
+    Reverted again to isolate whether they're the actual cause. Locking in
+    the six-element set last confirmed to actually complete a real
+    install, so a future change doesn't silently reintroduce the other
+    three without a real reason."""
     root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout()).encode())
 
     oobe = root.xpath("//u:component[@name='Microsoft-Windows-Shell-Setup']/u:OOBE", namespaces=NS)[0]
     assert [c.tag.split("}")[-1] for c in oobe] == [
         "HideEULAPage",
         "HideLocalAccountScreen",
-        "HideOEMRegistrationScreen",
         "HideOnlineAccountScreens",
         "HideWirelessSetupInOOBE",
-        "NetworkLocation",
-        "ProtectYourPC",
         "SkipMachineOOBE",
         "SkipUserOOBE",
     ]
-    assert oobe.xpath("string(u:NetworkLocation)", namespaces=NS) == "Home"
-    assert oobe.xpath("string(u:ProtectYourPC)", namespaces=NS) == "3"
 
 
 def test_no_declarative_autologon_element():

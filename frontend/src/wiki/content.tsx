@@ -897,28 +897,39 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               <strong>OOBE and the built-in Administrator account.</strong> The <Code>OOBE</Code> block
               (<Code>HideEULAPage</Code>, <Code>HideLocalAccountScreen</Code>,{" "}
-              <Code>HideOEMRegistrationScreen</Code>, <Code>HideOnlineAccountScreens</Code>,{" "}
-              <Code>HideWirelessSetupInOOBE</Code>, <Code>NetworkLocation</Code>,{" "}
-              <Code>ProtectYourPC</Code>, <Code>SkipMachineOOBE</Code>, <Code>SkipUserOOBE</Code>)
-              suppresses every interactive OOBE screen: account setup, network location, and the
-              diagnostic-data/privacy consent page. The last two settings, <Code>NetworkLocation</Code>{" "}
-              and <Code>ProtectYourPC</Code>, matter specifically because the Hide*/Skip* flags alone
-              don't cover them — <Code>ProtectYourPC</Code> has no default value at all, and Microsoft's
-              own documentation says plainly that leaving it unset opens the "Get going fast" diagnostics
-              page during setup regardless of every other flag, confirmed live in testing (that page, and
-              the network-location prompt, both still showed up on manual first logon with only the
-              Hide*/Skip* flags set). But <strong>on its own the OOBE block still doesn't get anyone
-              logged in</strong>: <Code>FirstLogonCommands</Code> only ever run as part of an actual
-              first-logon event, and without something making that happen unattended, Setup leaves a
-              plain login prompt sitting at the console, exactly the manual step this whole tool exists
-              to remove. The declarative <Code>AutoLogon</Code> element was tried for that, targeting
-              whichever account <Code>local_admin_username</Code>/<Code>local_admin_password</Code>{" "}
-              resolve to — but it's <strong>not in the answer file</strong>: every deployment on real
-              hardware that included it failed outright during Setup regardless of where in oobeSystem
-              it was placed, isolated by ruling out static-vs-DHCP networking, hostname length, and the
-              OOBE settings above via controlled, one-variable-at-a-time tests, and confirmed when a real
-              deployment finally completed once <Code>AutoLogon</Code> was removed entirely. Auto-logon
-              is still configured, just differently: four <Code>RunSynchronousCommand</Code> entries in
+              <Code>HideOnlineAccountScreens</Code>, <Code>HideWirelessSetupInOOBE</Code>,{" "}
+              <Code>SkipMachineOOBE</Code>, <Code>SkipUserOOBE</Code>) suppresses the interactive OOBE
+              account-setup/network screens, but <strong>on its own doesn't get anyone logged in</strong>{" "}
+              at all: <Code>FirstLogonCommands</Code> only ever run as part of an actual first-logon
+              event, and without something making that happen unattended, Setup leaves a plain login
+              prompt sitting at the console, exactly the manual step this whole tool exists to remove.
+              Two extra settings, <Code>ProtectYourPC</Code> and <Code>NetworkLocation</Code> (plus{" "}
+              <Code>HideOEMRegistrationScreen</Code>), have been tried and reverted <em>twice</em> now:
+              they're what Microsoft's own "Automate OOBE" guidance says is needed to cover the
+              diagnostic-data/privacy and network-location screens the Hide*/Skip* flags above don't
+              (<Code>ProtectYourPC</Code> has no default value at all, and leaving it unset opens the
+              "Get going fast" page regardless of every other flag — confirmed live, that page and the
+              network-location prompt both still showed up on manual first logon with only the Hide*/
+              Skip* flags set), but every attempt at actually shipping them has coincided with Setup
+              failing outright. First alongside the old declarative <Code>AutoLogon</Code> element,
+              inconclusively (removing them alone, with <Code>AutoLogon</Code> still present, didn't fix
+              that failure, so it was never confirmed whether they were involved at all). Second alongside
+              the current specialize-pass auto-logon mechanism below, more conclusively: Setup failed with
+              the exact same generic error code as the <Code>AutoLogon</Code>-era failures, and
+              setupact.log this time showed the specialize pass (auto-logon commands included) completing
+              cleanly before failing exactly at the Pre-OOBE → OOBE transition these three settings
+              govern. Reverted again pending an isolated test with them absent and auto-logon still
+              present — if that completes, they're the confirmed cause and need a different fix (probably
+              suppressing those two prompts via a <Code>FirstLogonCommand</Code> instead of these OOBE
+              flags) rather than being reintroduced as-is. The declarative <Code>AutoLogon</Code> element
+              itself was tried too, targeting whichever account{" "}
+              <Code>local_admin_username</Code>/<Code>local_admin_password</Code> resolve to — but it's{" "}
+              <strong>not in the answer file</strong>: every deployment on real hardware that included it
+              failed outright during Setup regardless of where in oobeSystem it was placed, isolated by
+              ruling out static-vs-DHCP networking and hostname length via controlled,
+              one-variable-at-a-time tests, and confirmed when a real deployment finally completed once{" "}
+              <Code>AutoLogon</Code> was removed entirely. Auto-logon is still configured, just
+              differently: four <Code>RunSynchronousCommand</Code> entries in
               the specialize pass's <Code>Microsoft-Windows-Deployment</Code> component, each running one{" "}
               <Code>reg.exe add</Code>, write the same registry values (<Code>AutoAdminLogon</Code>,{" "}
               <Code>DefaultUserName</Code>, <Code>DefaultPassword</Code>, <Code>AutoLogonCount</Code>) a

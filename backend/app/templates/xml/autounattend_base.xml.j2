@@ -93,29 +93,41 @@
             </UserAccounts>
             <!-- The declarative <AutoLogon> element is deliberately absent
                  here: see _specialize_autologon.xml.j2 (specialize pass)
-                 for auto-logon, and its comment for why. HideEULAPage/
-                 HideLocalAccountScreen/HideOnlineAccountScreens/
-                 HideWirelessSetupInOOBE/SkipMachineOOBE/SkipUserOOBE alone
-                 were never the full picture: ProtectYourPC has no default
-                 value at all and its own documentation says plainly "if a
-                 value is not set, the Get going fast page opens during
-                 setup", the diagnostic-data/privacy screen actually seen
-                 in testing despite every Hide*/Skip* flag already being
-                 set. NetworkLocation is the same shape for the "Computer's
-                 Current Location" network-profile prompt. Both were
-                 speculatively reverted alongside AutoLogon at one point on
-                 the theory they might be involved in a total Setup
-                 failure, then confirmed innocent: removing them alone
-                 (AutoLogon still present) did not fix that failure, only
-                 removing AutoLogon did, so they're back. -->
+                 for auto-logon, and its comment for why.
+
+                 ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen are
+                 ALSO absent again, for the same reason, not because
+                 they're confirmed guilty but because they're not confirmed
+                 innocent either: the previous "confirmed innocent" verdict
+                 here was wrong, or at least incomplete. It was based on
+                 removing them while the old declarative <AutoLogon>
+                 element was still present and Setup still failing the
+                 same way either way - which only shows they weren't
+                 SUFFICIENT to fix that failure on their own, not that
+                 they're safe. The one deployment that actually completed
+                 (lern-st-test-04) had both AutoLogon and these three OOBE
+                 settings absent together; that combination was never
+                 actually tested in isolation. Once they were reintroduced
+                 alongside the specialize-pass reg.exe autologon, Setup
+                 failed again with the exact same WINDEPLOY 0x80220005
+                 signature as the original AutoLogon-era failures, and this
+                 time setupact.log showed specialize completing cleanly
+                 (the reg.exe commands included) before failing at the
+                 Pre-OOBE -> OOBE transition these settings directly
+                 govern - a much more direct implication than specialize-
+                 pass registry writes that already finished. Reverted again
+                 to isolate: if a deployment completes with these absent
+                 and the reg.exe autologon still in place, that confirms
+                 these three specifically (not the autologon mechanism) as
+                 the actual cause, and they'll need a different fix
+                 (probably suppressing the diagnostics/network-location
+                 prompts via a FirstLogonCommand instead of these OOBE
+                 flags) rather than being reintroduced as-is. -->
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
                 <HideLocalAccountScreen>true</HideLocalAccountScreen>
-                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
                 <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
                 <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-                <NetworkLocation>Home</NetworkLocation>
-                <ProtectYourPC>3</ProtectYourPC>
                 <SkipMachineOOBE>true</SkipMachineOOBE>
                 <SkipUserOOBE>true</SkipUserOOBE>
             </OOBE>
