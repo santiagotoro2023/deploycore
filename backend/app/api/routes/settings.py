@@ -10,13 +10,18 @@ from app.config import get_settings
 from app.db import get_db
 from app.jobs import get_arq_pool
 from app.models.m365_config import M365Config
+from app.models.notification import NotificationTemplate
 from app.models.setting import Setting, SettingScope
+from app.models.teams_config import TeamsConfig
 from app.models.user import Role, User
 from app.schemas.m365 import M365ConfigRead, M365ConfigUpdate
+from app.schemas.notification import NotificationTemplateRead, NotificationTemplateUpdate
 from app.schemas.setting import SettingRead, SettingValue
+from app.schemas.teams import TeamsConfigRead, TeamsConfigUpdate
 from app.schemas.update import UpdateStatusRead
 from app.security.rbac import get_current_user, require_role
-from app.services import audit, m365, tls_certs
+from app.services import audit, m365, teams, tls_certs
+from app.services.notifications import EVENT_CONTEXT_FIELDS
 
 router = APIRouter(tags=["settings"])
 
@@ -205,6 +210,131 @@ async def test_m365_config(
     except Exception as exc:  # noqa: BLE001 - surfaced to the admin testing the integration
         return {"ok": False, "message": str(exc)}
     return {"ok": True, "message": f"Test email sent to {current_user.email}"}
+
+
+async def _get_teams_config(db: AsyncSession) -> TeamsConfig | None:
+    result = await db.execute(select(TeamsConfig).limit(1))
+    return result.scalar_one_or_none()
+
+
+@router.get(
+    "/api/settings/global/teams",
+    response_model=TeamsConfigRead,
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def get_teams_config(db: AsyncSession = Depends(get_db)) -> TeamsConfigRead:
+    config = await _get_teams_config(db)
+    if config is None:
+        return TeamsConfigRead(tenant_id="", client_id="", teams_app_id="", enabled=False, configured=False)
+    return TeamsConfigRead(
+        tenant_id=config.tenant_id, client_id=config.client_id, teams_app_id=config.teams_app_id,
+        enabled=config.enabled, configured=True,
+    )
+
+
+@router.put(
+    "/api/settings/global/teams",
+    response_model=TeamsConfigRead,
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def set_teams_config(
+    body: TeamsConfigUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> TeamsConfigRead:
+    config = await _get_teams_config(db)
+    if config is None:
+        if not body.client_secret:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "client_secret is required for initial setup")
+        config = TeamsConfig(
+            tenant_id=body.tenant_id, client_id=body.client_id, teams_app_id=body.teams_app_id, enabled=body.enabled,
+        )
+        config.client_secret = body.client_secret
+        db.add(config)
+    else:
+        config.tenant_id = body.tenant_id
+        config.client_id = body.client_id
+        config.teams_app_id = body.teams_app_id
+        config.enabled = body.enabled
+        if body.client_secret:
+            config.client_secret = body.client_secret
+    audit.record(db, action="settings.teams_set", target_type="settings", user_id=current_user.id)
+    await db.commit()
+    await db.refresh(config)
+    return TeamsConfigRead(
+        tenant_id=config.tenant_id, client_id=config.client_id, teams_app_id=config.teams_app_id,
+        enabled=config.enabled, configured=True,
+    )
+
+
+@router.post(
+    "/api/settings/global/teams/test",
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def test_teams_config(
+    db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> dict:
+    if not current_user.email:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "your account has no email address to use as a Teams UPN")
+    config = await _get_teams_config(db)
+    if config is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Teams is not configured yet")
+    try:
+        await teams.send_activity_notification(
+            tenant_id=config.tenant_id, client_id=config.client_id, client_secret=config.client_secret,
+            teams_app_id=config.teams_app_id, to_upn=current_user.email,
+            message="This is a test notification from DeployCore.",
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced to the admin testing the integration
+        return {"ok": False, "message": str(exc)}
+    return {"ok": True, "message": f"Test notification sent to {current_user.email}"}
+
+
+@router.get(
+    "/api/settings/global/notification-templates",
+    response_model=list[NotificationTemplateRead],
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def list_notification_templates(db: AsyncSession = Depends(get_db)) -> list[NotificationTemplate]:
+    result = await db.execute(select(NotificationTemplate).order_by(NotificationTemplate.event_type))
+    return list(result.scalars().all())
+
+
+@router.get(
+    "/api/settings/global/notification-templates/fields",
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def get_notification_template_fields() -> dict:
+    """Which {placeholder} keys are actually available per event type,
+    for the settings UI's own cheat-sheet next to each editor - see
+    services/notifications.py's EVENT_CONTEXT_FIELDS, the single source
+    of truth this just exposes read-only."""
+    return EVENT_CONTEXT_FIELDS
+
+
+@router.put(
+    "/api/settings/global/notification-templates/{event_type}",
+    response_model=NotificationTemplateRead,
+    dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
+)
+async def update_notification_template(
+    event_type: str,
+    body: NotificationTemplateUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> NotificationTemplate:
+    result = await db.execute(select(NotificationTemplate).where(NotificationTemplate.event_type == event_type))
+    template = result.scalar_one_or_none()
+    if template is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown notification event type")
+    template.email_subject = body.email_subject
+    template.email_body = body.email_body
+    template.teams_message = body.teams_message
+    audit.record(
+        db, action="settings.notification_template_set", target_type="settings",
+        user_id=current_user.id, detail={"event_type": event_type},
+    )
+    await db.commit()
+    await db.refresh(template)
+    return template
 
 
 def _tls_status(db_mode: str | None) -> dict:

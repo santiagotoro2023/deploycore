@@ -28,6 +28,8 @@ export default function SettingsPage() {
           </div>
           <div className="flex-1 space-y-4">
             <M365Panel />
+            <TeamsPanel />
+            <NotificationTemplatesPanel />
             <TlsPanel />
           </div>
         </div>
@@ -692,6 +694,284 @@ function M365Panel() {
         </div>
       )}
     </form>
+  );
+}
+
+interface TeamsConfig {
+  tenant_id: string;
+  client_id: string;
+  teams_app_id: string;
+  enabled: boolean;
+  configured: boolean;
+}
+
+function TeamsPanel() {
+  const [tenantId, setTenantId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [teamsAppId, setTeamsAppId] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  async function load() {
+    const config = await api.get<TeamsConfig>("/settings/global/teams");
+    setTenantId(config.tenant_id);
+    setClientId(config.client_id);
+    setTeamsAppId(config.teams_app_id);
+    setEnabled(config.enabled);
+    setConfigured(config.configured);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaved(false);
+    try {
+      await api.put("/settings/global/teams", {
+        tenant_id: tenantId,
+        client_id: clientId,
+        client_secret: clientSecret || null,
+        teams_app_id: teamsAppId,
+        enabled,
+      });
+      setClientSecret("");
+      setSaved(true);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to save Teams configuration.");
+    }
+  }
+
+  async function sendTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.post<{ ok: boolean; message: string }>("/settings/global/teams/test");
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ ok: false, message: err instanceof ApiError ? err.message : "Test failed." });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function onSubmitChecked(e: FormEvent) {
+    if (!tenantId || !clientId || !teamsAppId || (!configured && !clientSecret)) {
+      e.preventDefault();
+      setError("Tenant ID, client ID, Teams app ID, and a client secret are required.");
+      return;
+    }
+    await onSubmit(e);
+  }
+
+  return (
+    <form noValidate onSubmit={onSubmitChecked} className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
+      <h2 className="mb-1 text-sm font-semibold">Teams notifications (Microsoft 365)</h2>
+      <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+        Notifies a specific person directly via Microsoft Graph's Activity Feed API (a banner + Activity-tab
+        entry, not a raw chat bubble - the app-only-auth-compatible way to message one person without hosting
+        a full bot). Two things beyond this form, both on your M365 tenant's own side: the app registration
+        needs <code>TeamsActivity.Send</code> and <code>TeamsAppInstallation.ReadWriteForUser.All</code>{" "}
+        application permissions (admin-consented), and Teams App ID below must be a Teams app already
+        published to your org's app catalog whose manifest declares an activity type named{" "}
+        <code>deploymentNotification</code> with template text <code>{"{message}"}</code>. See the
+        Documentation tab for the exact manifest snippet. Instance-wide, not per-organization.
+      </p>
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Tenant ID</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Client ID</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+        Client secret {configured && <span className="text-neutral-400">(leave blank to keep the current one)</span>}
+      </label>
+      <input
+        type="password"
+        autoComplete="new-password"
+        className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+        value={clientSecret}
+        onChange={(e) => setClientSecret(e.target.value)}
+      />
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Teams app ID (app catalog)</label>
+      <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={teamsAppId} onChange={(e) => setTeamsAppId(e.target.value)} />
+      <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        Enabled
+      </label>
+      {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
+      {saved && <div className="mb-3 text-xs text-emerald-600">Saved.</div>}
+      <div className="flex items-center gap-2">
+        <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">
+          Apply changes
+        </button>
+        {configured && (
+          <button
+            type="button"
+            disabled={testing}
+            className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+            onClick={sendTest}
+          >
+            {testing ? "Sending..." : "Send test notification"}
+          </button>
+        )}
+      </div>
+      {testResult && (
+        <div className={`mt-3 rounded-md border p-2 text-xs ${testResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400"}`}>
+          {testResult.message}
+        </div>
+      )}
+    </form>
+  );
+}
+
+interface NotificationTemplate {
+  event_type: string;
+  email_subject: string;
+  email_body: string;
+  teams_message: string;
+}
+
+const NOTIFICATION_EVENT_LABELS: Record<string, string> = {
+  start: "Deployment started",
+  complete: "Deployment completed",
+  failed: "Deployment failed",
+  health_degraded: "Completed deployment became unreachable",
+};
+
+function NotificationTemplatesPanel() {
+  const [templates, setTemplates] = useState<NotificationTemplate[]>([]);
+  const [fields, setFields] = useState<Record<string, string[]>>({});
+  const [editing, setEditing] = useState<NotificationTemplate | null>(null);
+
+  async function load() {
+    const [t, f] = await Promise.all([
+      api.get<NotificationTemplate[]>("/settings/global/notification-templates"),
+      api.get<Record<string, string[]>>("/settings/global/notification-templates/fields"),
+    ]);
+    setTemplates(t);
+    setFields(f);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
+      <h2 className="mb-1 text-sm font-semibold">Notification content</h2>
+      <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+        The exact subject/body sent for each event, for both email and Teams. Edit any of them to customize
+        wording, add your own context, or drop fields you don't care about.
+      </p>
+      <div className="space-y-2">
+        {templates.map((t) => (
+          <div key={t.event_type} className="flex items-center justify-between rounded-md border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-700">
+            <span>{NOTIFICATION_EVENT_LABELS[t.event_type] ?? t.event_type}</span>
+            <button
+              type="button"
+              className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              onClick={() => setEditing(t)}
+            >
+              Edit
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {editing && (
+        <NotificationTemplateModal
+          template={editing}
+          availableFields={fields[editing.event_type] ?? []}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NotificationTemplateModal({
+  template,
+  availableFields,
+  onClose,
+  onSaved,
+}: {
+  template: NotificationTemplate;
+  availableFields: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [emailSubject, setEmailSubject] = useState(template.email_subject);
+  const [emailBody, setEmailBody] = useState(template.email_body);
+  const [teamsMessage, setTeamsMessage] = useState(template.teams_message);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      await api.put(`/settings/global/notification-templates/${template.event_type}`, {
+        email_subject: emailSubject,
+        email_body: emailBody,
+        teams_message: teamsMessage,
+      });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 py-8">
+      <form noValidate onSubmit={onSubmit} className="w-[32rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
+        <h2 className="mb-1 text-sm font-semibold">{NOTIFICATION_EVENT_LABELS[template.event_type] ?? template.event_type}</h2>
+        <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+          Available placeholders: {availableFields.length > 0 ? availableFields.map((f) => `{${f}}`).join(", ") : "none"}.
+          An unknown placeholder is left as literal text rather than breaking the notification.
+        </p>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Email subject</label>
+        <input
+          className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+          value={emailSubject}
+          onChange={(e) => setEmailSubject(e.target.value)}
+        />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Email body</label>
+        <textarea
+          className="mb-3 h-24 w-full resize-y rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+          value={emailBody}
+          onChange={(e) => setEmailBody(e.target.value)}
+        />
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Teams message</label>
+        <textarea
+          className="mb-3 h-20 w-full resize-y rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+          value={teamsMessage}
+          onChange={(e) => setTeamsMessage(e.target.value)}
+        />
+        {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
+        <div className="flex justify-end gap-2">
+          <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" disabled={saving} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

@@ -4,8 +4,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.m365_config import M365Config
-from app.models.notification import Notification, NotificationPreference
+from app.models.notification import Notification, NotificationPreference, NotificationTemplate
+from app.models.teams_config import TeamsConfig
 from app.models.user import User
+
+# Which {placeholder} keys each event type's context dict actually
+# provides - the source of truth for what an operator can reference when
+# editing a notification template (see settings routes/UI), and what
+# _render below leaves untouched (literal "{typo}") rather than crashing
+# on if a template references something that isn't there.
+EVENT_CONTEXT_FIELDS = {
+    "start": ["hostname"],
+    "complete": ["hostname"],
+    "failed": ["hostname", "error"],
+    "health_degraded": ["hostname", "checked_at"],
+}
 
 
 def notify(
@@ -33,19 +46,37 @@ _PREFERENCE_DEFAULTS = {
 }
 
 
-async def maybe_email(
+class _SafeDict(dict):
+    """str.format_map with this leaves an unknown {placeholder} exactly
+    as typed instead of raising KeyError - an operator's template typo,
+    or a placeholder that's valid for a different event type, should
+    never be able to block a real notification from going out."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render(text: str, context: dict) -> str:
+    return text.format_map(_SafeDict(context))
+
+
+async def _get_template(db: AsyncSession, event_type: str) -> NotificationTemplate | None:
+    result = await db.execute(select(NotificationTemplate).where(NotificationTemplate.event_type == event_type))
+    return result.scalar_one_or_none()
+
+
+async def dispatch(
     db: AsyncSession,
     pool,
     *,
     user_id: uuid.UUID | None,
     event_type: str,
-    subject: str,
-    body: str,
+    context: dict,
 ) -> None:
-    """Enqueues send_email_notification if, and only if: the user has an
-    email address, their preference for this event type is on (defaulting
-    to _PREFERENCE_DEFAULTS when they've never visited Account settings),
-    and M365 is configured and enabled. `pool` is anything with an
+    """Renders and enqueues both the email and Teams deliveries for one
+    event, each independently gated on that user's own preference for
+    this event type/channel and on the corresponding integration being
+    configured and enabled instance-wide. `pool` is anything with an
     `enqueue_job` coroutine method: app.jobs.get_arq_pool() in the API
     process, or `ctx["redis"]` inside a worker task. user_id is optional,
     see notify()'s docstring."""
@@ -55,18 +86,30 @@ async def maybe_email(
     if user is None or not user.email:
         return
 
+    template = await _get_template(db, event_type)
+    if template is None:
+        return  # every event type is seeded by migration 0032; a missing row means nothing to send, not an error
+
     pref_result = await db.execute(select(NotificationPreference).where(NotificationPreference.user_id == user_id))
     pref = pref_result.scalar_one_or_none()
-    if pref is not None:
-        enabled = getattr(pref, f"email_on_{event_type}")
-    else:
-        enabled = _PREFERENCE_DEFAULTS.get(event_type, False)
-    if not enabled:
-        return
 
-    config_result = await db.execute(select(M365Config).limit(1))
-    config = config_result.scalar_one_or_none()
-    if config is None or not config.enabled:
-        return
+    def _enabled(channel: str) -> bool:
+        attr = f"{channel}_on_{event_type}"
+        return getattr(pref, attr) if pref is not None else _PREFERENCE_DEFAULTS.get(event_type, False)
 
-    await pool.enqueue_job("send_email_notification", user.email, subject, body)
+    if _enabled("email"):
+        m365_result = await db.execute(select(M365Config).limit(1))
+        m365_config = m365_result.scalar_one_or_none()
+        if m365_config is not None and m365_config.enabled:
+            await pool.enqueue_job(
+                "send_email_notification", user.email,
+                _render(template.email_subject, context), _render(template.email_body, context),
+            )
+
+    if _enabled("teams"):
+        teams_result = await db.execute(select(TeamsConfig).limit(1))
+        teams_config = teams_result.scalar_one_or_none()
+        if teams_config is not None and teams_config.enabled:
+            await pool.enqueue_job(
+                "send_teams_notification", user.email, _render(template.teams_message, context),
+            )

@@ -110,6 +110,10 @@ async def set_notification_preferences(
     pref.email_on_complete = body.email_on_complete
     pref.email_on_failed = body.email_on_failed
     pref.email_on_health_degraded = body.email_on_health_degraded
+    pref.teams_on_start = body.teams_on_start
+    pref.teams_on_complete = body.teams_on_complete
+    pref.teams_on_failed = body.teams_on_failed
+    pref.teams_on_health_degraded = body.teams_on_health_degraded
     await db.commit()
     await db.refresh(pref)
     return pref

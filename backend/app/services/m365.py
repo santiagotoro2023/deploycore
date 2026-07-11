@@ -1,31 +1,14 @@
-import asyncio
-
 import httpx
-import msal
 
-GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
+from app.services.graph_auth import acquire_token
+
 GRAPH_SEND_MAIL_TIMEOUT_SECONDS = 20
-
-
-def _acquire_token(tenant_id: str, client_id: str, client_secret: str) -> str:
-    """msal's ConfidentialClientApplication is a sync client (no asyncio
-    variant), run in a worker thread same as the pyvmomi/WinRM calls
-    elsewhere in this app."""
-    app = msal.ConfidentialClientApplication(
-        client_id,
-        authority=f"https://login.microsoftonline.com/{tenant_id}",
-        client_credential=client_secret,
-    )
-    result = app.acquire_token_for_client(scopes=GRAPH_SCOPE)
-    if "access_token" not in result:
-        raise RuntimeError(result.get("error_description", "failed to acquire a Graph API token"))
-    return result["access_token"]
 
 
 async def send_mail(
     *, tenant_id: str, client_id: str, client_secret: str, sender_upn: str, to_email: str, subject: str, body: str
 ) -> None:
-    token = await asyncio.to_thread(_acquire_token, tenant_id, client_id, client_secret)
+    token = await acquire_token(tenant_id, client_id, client_secret)
     payload = {
         "message": {
             "subject": subject,

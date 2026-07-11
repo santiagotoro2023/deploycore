@@ -100,10 +100,9 @@ async def check_deployment_health(ctx) -> None:
             await db.commit()
 
             if new_status == HealthStatus.UNREACHABLE and previous_status == HealthStatus.HEALTHY:
-                await notifications.maybe_email(
+                await notifications.dispatch(
                     db, ctx["redis"], user_id=deployment.created_by_user_id, event_type="health_degraded",
-                    subject=f"Deployment {deployment.hostname} became unreachable",
-                    body=f"Deployment {deployment.hostname} was healthy and is now unreachable as of {checked_at.isoformat()}.",
+                    context={"hostname": deployment.hostname, "checked_at": checked_at.isoformat()},
                 )
                 await webhooks.dispatch(
                     db, ctx["redis"], deployment.org_id, "health.degraded",

@@ -91,7 +91,18 @@ interface NotificationPreferences {
   email_on_complete: boolean;
   email_on_failed: boolean;
   email_on_health_degraded: boolean;
+  teams_on_start: boolean;
+  teams_on_complete: boolean;
+  teams_on_failed: boolean;
+  teams_on_health_degraded: boolean;
 }
+
+const EVENT_ROWS: { event: string; label: string }[] = [
+  { event: "start", label: "Deployment started" },
+  { event: "complete", label: "Deployment completed" },
+  { event: "failed", label: "Deployment failed" },
+  { event: "health_degraded", label: "A completed deployment became unreachable" },
+];
 
 function NotificationPreferencesPanel() {
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
@@ -129,29 +140,46 @@ function NotificationPreferencesPanel() {
 
   if (!prefs) return null;
 
-  const rows: { key: keyof NotificationPreferences; label: string }[] = [
-    { key: "email_on_start", label: "Deployment started" },
-    { key: "email_on_complete", label: "Deployment completed" },
-    { key: "email_on_failed", label: "Deployment failed" },
-    { key: "email_on_health_degraded", label: "A completed deployment became unreachable" },
-  ];
-
   return (
     <div className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-5">
-      <h2 className="mb-1 text-sm font-semibold">Email notifications</h2>
+      <h2 className="mb-1 text-sm font-semibold">Notifications</h2>
       <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
         {user?.email
-          ? "Sent to " + user.email + " when Microsoft 365 email is configured and enabled instance-wide."
-          : "Add an email address (Users page, or ask an admin) to receive these."}
+          ? "Delivered to " + user.email + " - email needs Microsoft 365 email configured and enabled " +
+            "instance-wide, Teams needs the Teams integration configured and enabled instance-wide. Either " +
+            "can be on without the other."
+          : "Add an email address (Users page, or ask an admin) to receive these - it's used for both email and Teams delivery."}
       </p>
-      <div className="mb-3 space-y-2">
-        {rows.map((row) => (
-          <label key={row.key} className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={prefs[row.key]} onChange={() => toggle(row.key)} />
-            {row.label}
-          </label>
-        ))}
-      </div>
+      <table className="mb-3 w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs text-neutral-500 dark:text-neutral-400">
+            <th className="pb-1 font-medium">Event</th>
+            <th className="w-16 pb-1 text-center font-medium">Email</th>
+            <th className="w-16 pb-1 text-center font-medium">Teams</th>
+          </tr>
+        </thead>
+        <tbody>
+          {EVENT_ROWS.map((row) => (
+            <tr key={row.event}>
+              <td className="py-1">{row.label}</td>
+              <td className="py-1 text-center">
+                <input
+                  type="checkbox"
+                  checked={prefs[`email_on_${row.event}` as keyof NotificationPreferences]}
+                  onChange={() => toggle(`email_on_${row.event}` as keyof NotificationPreferences)}
+                />
+              </td>
+              <td className="py-1 text-center">
+                <input
+                  type="checkbox"
+                  checked={prefs[`teams_on_${row.event}` as keyof NotificationPreferences]}
+                  onChange={() => toggle(`teams_on_${row.event}` as keyof NotificationPreferences)}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       <button
         disabled={!dirty || saving}
         className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:opacity-50"

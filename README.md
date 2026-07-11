@@ -917,12 +917,38 @@ pending → creating_vm → booting → installing_os → post_install → confi
   app registration's client ID/secret (Mail.Send application permission),
   and a sender mailbox, with a "Send test email" button to verify the setup
   actually works before relying on it
-- Per-user preferences (Account page): independently toggle email delivery
-  for deployment started / completed / failed / a completed deployment
-  going unreachable. Defaults to complete and failed only, not every start
-  or every health check, to avoid inbox noise
-- Email delivery always happens through a background job, never inline in
-  a request or the provisioning pipeline, so a slow or failing mail send
+- Optional Teams delivery, also instance-wide (Settings → Teams
+  notifications), messaging the specific person who triggered the event
+  directly via Microsoft Graph's Activity Feed API (`POST /users/{id}/
+  teamwork/sendActivityNotification`) - a notification banner + Activity-tab
+  entry, the documented app-only-auth-compatible way to notify one specific
+  Teams user without hosting a full Bot Framework bot (a real 1:1 chat via
+  `POST /chats` needs a second real user identity as the chat's other
+  member, which a plain app registration can't be). Two real prerequisites
+  beyond tenant/client ID/secret, both on the M365 tenant's own side:
+  `TeamsActivity.Send` + `TeamsAppInstallation.ReadWriteForUser.All`
+  application permissions admin-consented, and a Teams app already
+  published to the org's app catalog whose manifest declares a custom
+  activity type (`deploymentNotification`, `templateText: "{message}"`) -
+  that app's catalog ID is the "Teams app ID" field. "Send test
+  notification" surfaces Graph's own error text directly if either isn't
+  set up right, rather than silently doing nothing
+- Notification content itself - subject/body for email, message text for
+  Teams - is fully editable per event (Settings → Notification content),
+  not fixed strings: `{hostname}`/`{error}`/`{checked_at}` placeholders
+  (whichever apply to that event) get substituted in, an unknown or
+  misspelled placeholder is left as literal text rather than breaking the
+  send. `NotificationTemplate` rows are seeded with today's previously-
+  hardcoded text so behavior doesn't change until someone edits one
+- Per-user preferences (Account page): independently toggle email and Teams
+  delivery, per channel, for deployment started / completed / failed / a
+  completed deployment going unreachable. Defaults to complete and failed
+  only on both channels, not every start or every health check, to avoid
+  notification noise. Either channel works without the other being
+  configured; both need the user to have an email address set (doubles as
+  the Teams UPN)
+- Both channels always send through a background job, never inline in a
+  request or the provisioning pipeline, so a slow or failing Graph API call
   can never affect deployment outcome or page load time
 
 ### Webhooks

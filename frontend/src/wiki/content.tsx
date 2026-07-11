@@ -1351,22 +1351,23 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
       },
       {
         id: "email-notifications",
-        title: "Email notifications via Microsoft 365",
+        title: "Email and Teams notifications via Microsoft 365",
         overview: (
           <>
             <P>
-              DeployCore can also email users when their deployments start, finish, fail, or go
-              unreachable, by sending through your own Microsoft 365 tenant. It's configured once,
-              instance-wide, by a global admin, then each user chooses which of those events they
-              personally want emailed to them.
+              DeployCore can email <em>and</em> message users directly in Teams when their deployments
+              start, finish, fail, or go unreachable, through your own Microsoft 365 tenant. Both channels
+              are configured once, instance-wide, by a global admin; each user then chooses which events
+              they personally want on each channel; and the actual wording sent - subject, body, Teams
+              message - is fully editable too, not fixed text.
             </P>
           </>
         ),
         deepDive: (
           <>
             <P>
-              Settings → Email notifications needs an Entra ID (Azure AD) app registration with the{" "}
-              <Code>Mail.Send</Code> application permission granted, plus:
+              <strong>Email</strong> (Settings → Email notifications) needs an Entra ID (Azure AD) app
+              registration with the <Code>Mail.Send</Code> application permission granted, plus:
             </P>
             <List
               items={[
@@ -1377,11 +1378,61 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             />
             <P>
               Use <strong>Send test email</strong> after saving to confirm the whole chain actually works
-              before relying on it. Each user then controls their own delivery preferences from the
-              Account page (deployment started/completed/failed/became unreachable, complete and failed
-              are on by default, start and health checks are off by default to avoid inbox noise). Email
-              always sends through a background job, never inline in a request, so a slow or failing mail
-              server can never affect deployment outcome or page load time.
+              before relying on it.
+            </P>
+            <P>
+              <strong>Teams</strong> (Settings → Teams notifications) messages one specific person directly
+              - the one who triggered the event - via Microsoft Graph's <strong>Activity Feed API</strong>: a
+              notification banner plus an entry in that person's Activity tab, delivered by an app-only
+              (client-credential) Graph call, the same auth pattern as email. This is the actual mechanism
+              Microsoft supports for a backend service to message one specific Teams user without hosting a
+              full Bot Framework bot - a real 1:1 chat via <Code>POST /chats</Code> needs a second real user
+              identity as the chat's other member, which a plain app registration can't be. It reads
+              slightly differently from a normal chat message (a banner/Activity-tab entry rather than a
+              bubble in a conversation thread), but it's the genuinely-supported "notify this one person"
+              mechanism available without extra infrastructure.
+            </P>
+            <P>
+              Two real prerequisites on your M365 tenant's own side, beyond the settings form itself:
+            </P>
+            <List
+              items={[
+                <>The Entra app registration (can be the same one email uses, or a separate one) needs{" "}
+                  <Code>TeamsActivity.Send</Code> and <Code>TeamsAppInstallation.ReadWriteForUser.All</Code>{" "}
+                  application permissions, admin-consented.</>,
+                <>A Teams app published to your org's app catalog (Teams admin center → Manage apps →
+                  Upload), whose manifest declares a custom activity type DeployCore's notifications map
+                  to. The manifest needs at minimum:
+                  <Code>{'"activities": {"activityTypes": [{"type": "deploymentNotification", "description": "DeployCore notification", "templateText": "{message}"}]}'}</Code>{" "}
+                  - that app's catalog ID is what goes in the <strong>Teams app ID</strong> field.</>,
+              ]}
+            />
+            <P>
+              Without both, Graph returns its own error rather than DeployCore silently doing nothing -{" "}
+              <strong>Send test notification</strong> surfaces that error text directly, so a misconfigured
+              permission or an unpublished app is diagnosable against your own tenant instead of a black box.
+            </P>
+            <P>
+              <strong>Per-user preferences</strong> (Account page) cover both channels independently for
+              each event - deployment started/completed/failed/became unreachable - complete and failed are
+              on by default for both, start and health checks are off by default to avoid noise. Delivery
+              for either channel needs that user to have an email address set (used as both the mailbox and
+              the Teams UPN - true for the overwhelming majority of M365 tenants, where they match) as well
+              as their own preference being on and the corresponding integration configured and enabled.
+            </P>
+            <P>
+              <strong>Notification content</strong> (Settings → Notification content) is fully editable per
+              event, for both channels - Edit next to any event opens the email subject, email body, and
+              Teams message, each with the exact <Code>{"{placeholder}"}</Code> fields available for that
+              event listed above the fields (e.g. <Code>{"{hostname}"}</Code> everywhere,{" "}
+              <Code>{"{error}"}</Code> only on failure, <Code>{"{checked_at}"}</Code> only on the
+              unreachable check). An unknown or misspelled placeholder is left as literal text in the sent
+              message rather than breaking the notification - a typo in a custom template can never block a
+              real deployment event from reaching anyone.
+            </P>
+            <P>
+              Both channels always send through a background job, never inline in a request, so a slow or
+              failing Graph API call can never affect deployment outcome or page load time.
             </P>
           </>
         ),

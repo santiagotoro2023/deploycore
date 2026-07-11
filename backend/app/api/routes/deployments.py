@@ -156,10 +156,8 @@ async def create_deployment(
     await db.refresh(deployment)
 
     pool = await get_arq_pool()
-    await notifications.maybe_email(
-        db, pool, user_id=current_user.id, event_type="start",
-        subject=f"Deployment {deployment.hostname} started",
-        body=f"Deployment {deployment.hostname} has started provisioning.",
+    await notifications.dispatch(
+        db, pool, user_id=current_user.id, event_type="start", context={"hostname": deployment.hostname},
     )
     await webhooks.dispatch(
         db, pool, org_id, "deployment.start",
@@ -208,10 +206,8 @@ async def create_bulk_deployments(
     pool = await get_arq_pool()
     for deployment in deployments:
         await db.refresh(deployment)
-        await notifications.maybe_email(
-            db, pool, user_id=current_user.id, event_type="start",
-            subject=f"Deployment {deployment.hostname} started",
-            body=f"Deployment {deployment.hostname} has started provisioning.",
+        await notifications.dispatch(
+            db, pool, user_id=current_user.id, event_type="start", context={"hostname": deployment.hostname},
         )
         await webhooks.dispatch(
             db, pool, org_id, "deployment.start",

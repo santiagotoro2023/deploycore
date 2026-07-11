@@ -6,7 +6,7 @@ from app.config import get_settings
 from worker.tasks.backup import run_scheduled_backup
 from worker.tasks.hypervisor import test_hypervisor_connection
 from worker.tasks.maintenance import check_deployment_health, sweep_stale_deployments
-from worker.tasks.notifications import send_email_notification
+from worker.tasks.notifications import send_email_notification, send_teams_notification
 from worker.tasks.provision import cleanup_deployment, run_deployment, run_post_install, wait_for_callback
 from worker.tasks.webhooks import deliver_webhook
 
@@ -65,6 +65,7 @@ class WorkerSettings:
         cleanup_deployment,
         run_scheduled_backup,
         send_email_notification,
+        send_teams_notification,
         deliver_webhook,
     ]
     cron_jobs = [

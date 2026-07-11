@@ -191,10 +191,9 @@ async def _fail(
         message=f"Deployment {deployment.hostname} failed: {message}",
     )
     await db.commit()
-    await notifications.maybe_email(
+    await notifications.dispatch(
         db, ctx["redis"], user_id=deployment.created_by_user_id, event_type="failed",
-        subject=f"Deployment {deployment.hostname} failed",
-        body=f"Deployment {deployment.hostname} failed: {message}",
+        context={"hostname": deployment.hostname, "error": message},
     )
     await webhooks.dispatch(
         db, ctx["redis"], deployment.org_id, "deployment.failed",
@@ -847,10 +846,9 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 message=f"Deployment {deployment.hostname} completed successfully",
             )
             await db.commit()
-            await notifications.maybe_email(
+            await notifications.dispatch(
                 db, ctx["redis"], user_id=deployment.created_by_user_id, event_type="complete",
-                subject=f"Deployment {deployment.hostname} completed",
-                body=f"Deployment {deployment.hostname} completed successfully.",
+                context={"hostname": deployment.hostname},
             )
             await webhooks.dispatch(
                 db, ctx["redis"], deployment.org_id, "deployment.complete",

@@ -43,7 +43,7 @@ async def dispatch(db: AsyncSession, pool, org_id: uuid.UUID, event_type: str, d
     is subscribed to event_type. `pool` is anything with an async
     enqueue_job method: app.jobs.get_arq_pool() in the API process, or
     ctx["redis"] inside a worker task, same convention as
-    services.notifications.maybe_email."""
+    services.notifications.dispatch."""
     result = await db.execute(select(Webhook).where(Webhook.org_id == org_id, Webhook.enabled.is_(True)))
     for webhook in result.scalars().all():
         if event_type in webhook.events:
