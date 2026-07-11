@@ -593,15 +593,34 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             await _state_machine.transition(db, deployment, DeploymentState.POST_INSTALL)
 
+            # First post-install step, ahead of roles/features/apps: makes
+            # the static-IP cross-check below (and any future use of
+            # driver.get_guest_ip) actually have something to report, and
+            # gets VMware's own driver/integration updates in place before
+            # anything else runs on top of them. See WinRMClient.
+            # install_vmware_tools for why this runs here over WinRM
+            # instead of during Windows Setup's specialize pass.
+            await log(db, deployment, "post_install", "installing VMware Tools")
+            tools_result = await _run_with_heartbeat(
+                db, deployment, "post_install", "installing VMware Tools",
+                client.install_vmware_tools,
+            )
+            if not tools_result.ok:
+                await log(
+                    db, deployment, "post_install",
+                    f"VMware Tools install failed, continuing without it: {tools_result.stderr}",
+                    level=LogLevel.WARN,
+                )
+            elif tools_result.installed:
+                await log(db, deployment, "post_install", "VMware Tools installed, rebooting to apply driver updates")
+                await _reboot_and_wait(client, "guest did not come back reachable after the VMware Tools reboot")
+            else:
+                await log(db, deployment, "post_install", "no VMware Tools installer found (not an ESXi host, or Tools ISO wasn't mounted)")
+
             if deployment.ip_mode == IpMode.STATIC:
                 # Cross-check, not a source of truth: guest_ip above
                 # already used deployment.static_ip directly without
-                # needing this at all. VMware Tools (see esxi.py's
-                # create_vm/MountToolsInstaller and
-                # _specialize_install_vmware_tools.xml.j2) may or may not
-                # be up yet this early - a short, bounded, best-effort
-                # attempt, never worth failing or even delaying the
-                # deployment over. A mismatch doesn't necessarily mean
+                # needing this at all. A mismatch doesn't necessarily mean
                 # anything is wrong (a second NIC, a Tools version that
                 # hasn't reported yet, ...), it's a WARN, not an error.
                 try:

@@ -181,14 +181,14 @@ class ESXiDriver(HypervisorDriver):
             # Also best-effort, same reasoning: mounts ESXi's own bundled
             # Tools installer ISO onto a CD-ROM device it manages itself
             # (no need to track a unit number the way the Windows/VirtIO
-            # ISOs are), so it's already present and ready by the time
-            # Setup's specialize pass looks for it (see
-            # _specialize_install_vmware_tools.xml.j2). VMware Tools being
-            # installed is what makes get_guest_ip/the guest-ops surface
-            # actually work for a DHCP deployment - without it, only a
-            # static deployment (which already knows its own IP
-            # declaratively) can be reached at all without a human logging
-            # in at the console, see that file's own comment.
+            # ISOs are), so it's already present by the time post-install
+            # looks for it over WinRM (see WinRMClient.install_vmware_tools,
+            # run as the first step of provision.py's run_post_install).
+            # VMware Tools being installed is what makes get_guest_ip/the
+            # guest-ops surface actually work for a DHCP deployment -
+            # without it, only a static deployment (which already knows its
+            # own IP declaratively) can be reached at all without a human
+            # logging in at the console.
             try:
                 WaitForTask(vm.MountToolsInstaller())
             except Exception:  # noqa: BLE001 - never worth failing VM creation over

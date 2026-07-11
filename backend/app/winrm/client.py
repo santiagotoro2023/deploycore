@@ -29,6 +29,12 @@ class FeatureInstallResult(WinRMResult):
         self.restart_needed = restart_needed
 
 
+class VmwareToolsInstallResult(WinRMResult):
+    def __init__(self, status_code: int, stdout: str, stderr: str, installed: bool) -> None:
+        super().__init__(status_code, stdout, stderr)
+        self.installed = installed
+
+
 def netmask_to_prefix(netmask: str) -> int:
     return ipaddress.ip_network(f"0.0.0.0/{netmask}").prefixlen
 
@@ -231,6 +237,40 @@ if ($missing) {{
             "-Name fDenyTSConnections -Value 0; "
             "Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'"
         )
+
+    def install_vmware_tools(self) -> VmwareToolsInstallResult:
+        """Best-effort install from whichever CD-ROM ESXi mounted the Tools
+        installer ISO on at VM creation (see esxi.py's create_vm ->
+        MountToolsInstaller() - no fixed drive letter to rely on, Windows
+        Setup's own install media usually claims D:, so Tools typically
+        lands on E: or F:).
+
+        Runs via WinRM post-install, not during Windows Setup's specialize
+        pass: an earlier specialize-pass version of this (a
+        RunSynchronousCommand pair, since removed) crashed Setup outright
+        on a real deployment ("the computer was unexpectedly restarted") -
+        a WinRM call after Setup has already finished and the OS is fully
+        up carries none of that risk, and reuses the same channel already
+        proven for Install-WindowsFeature etc.
+
+        REBOOT=ReallySuppress: a documented VMware Tools/VMXNET3
+        interaction disconnects the network immediately if its driver
+        update takes effect without a full restart. The caller (see
+        provision.py's run_post_install) does a single controlled reboot
+        right after, but only when .installed is true - nothing to settle
+        if the ISO was never mounted (e.g. a non-VMware host)."""
+        script = """
+$installer = @('D:\\setup64.exe','E:\\setup64.exe','F:\\setup64.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($installer) {
+    Start-Process -FilePath $installer -ArgumentList '/S','/v"/qn REBOOT=ReallySuppress"' -Wait
+    Write-Output 'DEPLOYCORE_VMWARE_TOOLS_INSTALLED'
+} else {
+    Write-Output 'DEPLOYCORE_VMWARE_TOOLS_NOT_FOUND'
+}
+""".strip()
+        result = self.run_ps(script)
+        installed = "DEPLOYCORE_VMWARE_TOOLS_INSTALLED" in result.stdout
+        return VmwareToolsInstallResult(result.status_code, result.stdout.strip(), result.stderr, installed)
 
     def reboot(self) -> WinRMResult:
         return self.run_ps("Restart-Computer -Force")

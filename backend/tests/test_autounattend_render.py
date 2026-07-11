@@ -261,11 +261,10 @@ def test_specialize_pass_enables_winrm_without_a_login():
 
     # Off by default (no custom admin account configured): no need to set
     # LocalAccountTokenFilterPolicy, WinRM already authenticates fine as
-    # the built-in Administrator without it. _specialize_install_vmware_tools.xml.j2
-    # is temporarily not included (see autounattend_base.xml.j2's
-    # comment) while it's isolated as the suspect behind a real
-    # "computer was unexpectedly restarted" failure - just the 2 WinRM
-    # commands for now.
+    # the built-in Administrator without it. VMware Tools install isn't
+    # part of the specialize pass at all (see autounattend_base.xml.j2's
+    # comment - it runs post-install over WinRM instead), so just the 2
+    # WinRM commands.
     assert len(paths) == 2
 
 
@@ -279,15 +278,10 @@ def test_specialize_pass_sets_token_filter_policy_for_custom_admin():
     assert any("LocalAccountTokenFilterPolicy" in p for p in paths)
 
 
-# test_specialize_pass_installs_vmware_tools_with_a_controlled_reboot is
-# deliberately absent right now, not just skipped: _specialize_install_vmware_tools.xml.j2
-# isn't included in the rendered answer file at all while it's isolated
-# as the suspect behind a real "computer was unexpectedly restarted"
-# failure (see autounattend_base.xml.j2's comment). Re-add once a
-# deployment confirms _specialize_enable_winrm.xml.j2 alone is clean,
-# and either restore this file's original content once the tools
-# component is re-included, or dig further if it turns out to be
-# innocent too.
+# No test_specialize_pass_installs_vmware_tools_* here: VMware Tools is
+# installed post-install over WinRM (WinRMClient.install_vmware_tools),
+# not from the answer file, after a specialize-pass attempt at this
+# crashed Setup on a real deployment.
 
 
 def test_custom_admin_disabled_by_default_keeps_builtin_administrator():

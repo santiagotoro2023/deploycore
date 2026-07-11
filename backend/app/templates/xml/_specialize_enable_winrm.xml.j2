@@ -50,13 +50,12 @@
      still sets it too (redundant, harmless) for the case where a human
      does log in manually.
 
-     Included into the single shared Microsoft-Windows-Deployment/
-     RunSynchronous block in autounattend_base.xml.j2, alongside
-     _specialize_install_vmware_tools.xml.j2 - kept as a separate file
-     (not a separate <component>, unattend.xml's own schema doesn't
-     clearly support more than one Microsoft-Windows-Deployment per
-     pass) specifically so either one can be removed independently if it
-     ever needs reverting, without touching the other. -->
+     Included into the single Microsoft-Windows-Deployment/RunSynchronous
+     block in autounattend_base.xml.j2, kept as its own file (not a
+     separate <component>, unattend.xml's own schema doesn't clearly
+     support more than one Microsoft-Windows-Deployment per pass) so it
+     can be reasoned about and, if it ever needs it, removed independently
+     of whatever else that block grows. -->
 <RunSynchronousCommand wcm:action="add">
     <Description>Start and configure the WinRM listener</Description>
     <Order>1</Order>
