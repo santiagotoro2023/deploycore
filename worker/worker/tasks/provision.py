@@ -32,18 +32,21 @@ VIRTIO_ISO_UNIT = 1
 CALLBACK_POLL_INTERVAL_SECONDS = 15
 
 # The callback is FirstLogonCommands' own outbound HTTP POST reaching
-# DeployCore; if a firewall/network-segmentation gap sits between the
-# guest's network and DeployCore specifically (seen in practice: a lab
-# deployment VLAN with no route to the host's own network, callback POST
-# failing with a connection error while everything else - Setup, WinRM
-# enable, the static IP itself - worked fine), that one call never lands
-# and the deployment would otherwise wait out the full timeout despite
-# the install having genuinely finished. Checked far less often than the
-# callback poll itself: during the (usually much longer) WinPE/Setup
-# phase before FirstLogonCommands can even run, this would only ever
-# return False, no reason to hit the hypervisor API and attempt a guest
-# connection that often for nothing.
-FALLBACK_REACHABILITY_POLL_EVERY = 8  # ~2 minutes at CALLBACK_POLL_INTERVAL_SECONDS
+# DeployCore, which only ever runs if a human logs in at the console -
+# no auto-logon mechanism has survived being tried on real hardware (see
+# _specialize_enable_winrm.xml.j2's comment), so in the common,
+# unattended case this callback never fires at all, by design, not as a
+# failure. This WinRM-reachability check is what actually carries most
+# deployments now: _specialize_enable_winrm.xml.j2 gets WinRM listening
+# during the specialize pass itself, well before oobeSystem, so a guest
+# answering over WinRM is normally the very first real signal Setup has
+# finished, not a rare fallback for an occasional network gap anymore.
+# Checked more often than that reasoning alone might suggest, but still
+# not every single poll: during the (usually much longer) WinPE/Setup
+# phase before the specialize pass has even run yet, this would only
+# ever return False, no reason to hit the hypervisor API and attempt a
+# guest connection on literally every 15-second tick for nothing.
+FALLBACK_REACHABILITY_POLL_EVERY = 2  # ~30 seconds at CALLBACK_POLL_INTERVAL_SECONDS
 
 # Hard ceiling on a single WinRM reachability probe (_winrm_reachable
 # below). pywinrm has documented, long-standing gaps in its own timeout
@@ -571,6 +574,37 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 raise RuntimeError(f"guest at {guest_ip} never became reachable over WinRM")
 
             await _state_machine.transition(db, deployment, DeploymentState.POST_INSTALL)
+
+            if deployment.ip_mode == IpMode.STATIC:
+                # Cross-check, not a source of truth: guest_ip above
+                # already used deployment.static_ip directly without
+                # needing this at all. VMware Tools (see esxi.py's
+                # create_vm/MountToolsInstaller and
+                # _specialize_install_vmware_tools.xml.j2) may or may not
+                # be up yet this early - a short, bounded, best-effort
+                # attempt, never worth failing or even delaying the
+                # deployment over. A mismatch doesn't necessarily mean
+                # anything is wrong (a second NIC, a Tools version that
+                # hasn't reported yet, ...), it's a WARN, not an error.
+                try:
+                    reported_ip = await asyncio.wait_for(
+                        driver.get_guest_ip(deployment.vm_moref), timeout=WINRM_CHECK_TIMEOUT_SECONDS
+                    )
+                except Exception:  # noqa: BLE001 - best-effort cross-check only
+                    reported_ip = None
+                if reported_ip and reported_ip != deployment.static_ip:
+                    await log(
+                        db, deployment, "post_install",
+                        f"guest-reported IP ({reported_ip}) doesn't match the configured static "
+                        f"address ({deployment.static_ip}) - worth a look, but not necessarily wrong "
+                        "(a second NIC, for instance)",
+                        level=LogLevel.WARN,
+                    )
+                elif reported_ip:
+                    await log(
+                        db, deployment, "post_install",
+                        f"guest-reported IP confirms the configured static address ({reported_ip})",
+                    )
 
             if template.windows_features:
                 # One Install-WindowsFeature call for every requested

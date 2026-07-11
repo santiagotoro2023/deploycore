@@ -736,19 +736,20 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   while the VM is still powered on, which this always runs while it is), and deletes the
                   per-deployment answer-file floppy image from the datastore, all best-effort and never
                   worth failing an otherwise-successful deployment over. Nothing from here on (post-install
-                  runs entirely over WinRM) needs any of it. The
-                  wait for that callback isn't all-or-nothing, though: every couple of minutes (far less
-                  often than the poll itself, no reason to check any more eagerly while Setup is still in
-                  its much longer earlier phases) it also checks whether the guest has become reachable
-                  over WinRM directly, which the very same <Code>FirstLogonCommands</Code> batch enables
-                  before it ever sends the callback - so a guest answering over WinRM is treated as
-                  equally good evidence the install finished, even if the callback's own outbound request
-                  never actually landed (a firewall or network-segmentation gap between the guest's
-                  network and DeployCore's, for instance, can block just that one call while everything
-                  else about the install succeeded). A static deployment's own declared IP is used
+                  runs entirely over WinRM) needs any of it. The wait for that callback isn't
+                  all-or-nothing, and in the common, fully-unattended case (see "no human needs to log in"
+                  above) it's actually the secondary path, not the primary one: every 30 seconds or so
+                  (not every single poll, no reason to check any more eagerly while Setup is still in its
+                  much longer earlier phases) it also checks whether the guest has become reachable over
+                  WinRM directly. WinRM gets enabled during the specialize pass itself now, well before
+                  oobeSystem, so this check is normally what actually advances a deployment — a guest
+                  answering over WinRM is treated as equally good evidence the install finished, whether
+                  or not <Code>FirstLogonCommands</Code>' own callback ever runs at all (it only does if a
+                  human ends up logging in manually). A static deployment's own declared IP is used
                   directly for that check rather than asking the hypervisor for one - that lookup needs
-                  VMware Tools installed in the guest to report anything at all, and a static deployment
-                  already knows its address without asking. Every WinRM reachability check anywhere in
+                  VMware Tools installed in the guest to report anything at all (installed automatically
+                  now too, see "Unattended Windows Setup, in depth" for why and how), and a static
+                  deployment already knows its address without asking. Every WinRM reachability check anywhere in
                   this pipeline runs through <Code>asyncio.to_thread</Code> with a hard timeout, not a
                   bare call - a real bug caught during testing: pywinrm has documented gaps in its own
                   timeout handling and can hang well past whatever it's configured with against a host
@@ -1027,36 +1028,76 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               <Code>FirstLogonCommand</Code> once auto-logon itself works, rather than these OOBE flags.
             </P>
             <P>
-              <strong>Auto-logon: two attempts, both reverted.</strong> There is currently{" "}
-              <strong>no auto-logon mechanism in the answer file at all</strong>. The declarative{" "}
-              <Code>AutoLogon</Code> element was tried first, targeting whichever account{" "}
-              <Code>local_admin_username</Code>/<Code>local_admin_password</Code> resolve to: every
-              deployment on real hardware that included it failed outright during Setup regardless of
-              where in oobeSystem it was placed, isolated by ruling out static-vs-DHCP networking and
-              hostname length via controlled, one-variable-at-a-time tests, and confirmed when a real
-              deployment finally completed once <Code>AutoLogon</Code> was removed entirely. Second, a
+              <strong>No auto-logon element, but no human needs to log in either.</strong> Two attempts at
+              actual auto-logon were each independently reverted, permanently: the declarative{" "}
+              <Code>AutoLogon</Code> element (targeting whichever account{" "}
+              <Code>local_admin_username</Code>/<Code>local_admin_password</Code> resolve to), and a
               specialize-pass <Code>Microsoft-Windows-Deployment</Code>/<Code>RunSynchronousCommand</Code>{" "}
-              writing the same registry values (<Code>AutoAdminLogon</Code>, <Code>DefaultUserName</Code>,{" "}
-              <Code>DefaultPassword</Code>, <Code>AutoLogonCount</Code>) a working <Code>AutoLogon</Code>{" "}
-              element would itself write, on the theory that a different Setup code path — Winlogon reads
-              those registry values at first-logon time the same way no matter which mechanism wrote
-              them — would sidestep whatever the element itself was hitting. It didn't, and it took two
-              tries to even get a clean read on that: the first version ran a single{" "}
-              <Code>powershell.exe -Command</Code> one-liner and crashed Setup a completely different way
-              ("the computer was unexpectedly restarted, or an unexpected error occurred") immediately
-              after landing in the specialize pass — consistent with a real, documented failure mode
-              where PowerShell cmdlets in <Code>RunSynchronousCommand</Code> crash this early because
-              WMI/CIM and other subsystems they depend on aren't fully initialized yet. Switching to{" "}
-              <Code>reg.exe</Code> (no such startup dependency; command lines built with Python's{" "}
-              <Code>subprocess.list2cmdline</Code> for correct Win32 argv quoting) fixed <em>that</em>{" "}
-              crash, but a clean isolated test — OOBE settings already reverted, this component the only
-              variable left — still failed, with the exact same generic <Code>WINDEPLOY</Code> error code
-              the <Code>AutoLogon</Code> element produced. The one deployment that's actually completed
-              had neither mechanism present. Until something is found that avoids whatever both of these
-              hit, Setup leaves a plain login prompt at the console and a human has to log in once before{" "}
-              <Code>FirstLogonCommands</Code> runs. Setup always requires the built-in Administrator
-              account to have a password regardless (<Code>AdministratorPassword</Code>), so it always
-              gets one whether or not it ends up being the account that's actually used.
+              writing the exact same <Code>HKLM\...\Winlogon</Code> registry values (
+              <Code>AutoAdminLogon</Code>, <Code>DefaultUserName</Code>, <Code>DefaultPassword</Code>,{" "}
+              <Code>AutoLogonCount</Code>) a working <Code>AutoLogon</Code> element would itself write —
+              different mechanisms, same registry surface, and both failed identically: every deployment
+              that included either one failed outright during Setup with the same generic{" "}
+              <Code>WINDEPLOY 0x80220005</Code> error, confirmed via controlled, one-variable-at-a-time
+              tests each time (the <Code>RunSynchronousCommand</Code> version took two tries just to get
+              a clean read on that: a first attempt ran <Code>powershell.exe -Command</Code> and crashed
+              Setup a completely different way, "the computer was unexpectedly restarted", before ever
+              reaching the Winlogon-shaped failure — consistent with a documented failure mode where
+              PowerShell cmdlets in <Code>RunSynchronousCommand</Code> crash this early because WMI/CIM
+              isn't fully initialized yet; switching to <Code>reg.exe</Code> fixed <em>that</em> crash,
+              but then hit the identical <Code>WINDEPLOY</Code> failure the element itself produced). That
+              pattern — different mechanisms, same registry surface, same result — pointed at the Winlogon
+              auto-logon state itself being what this Windows Server build's OOBE launch chokes on here,
+              not "any specialize-pass automation" in general, since role installs, static IP, and
+              everything else in this pipeline all work fine without ever touching Winlogon.
+            </P>
+            <P>
+              So instead: WinRM is a <em>service</em>, not an interactive session, and getting it
+              listening is all the rest of the pipeline actually needs (the WinRM-reachability check in
+              "Deployments" above, which then carries everything through <Code>run_post_install</Code>).{" "}
+              <Code>_specialize_enable_winrm.xml.j2</Code> does exactly that during the specialize pass
+              itself, well before oobeSystem, via <Code>winrm.cmd quickconfig -quiet</Code> (a WSH/VBScript
+              wrapper, deliberately not PowerShell's <Code>Enable-PSRemoting</Code> — the crash above means
+              there's no way to be confident in advance that was specifically the WMI/CIM issue rather
+              than something more general about PowerShell's own startup this early) plus a{" "}
+              <Code>netsh.exe</Code> firewall rule, and never touches Winlogon/AutoAdminLogon at all.{" "}
+              <Code>FirstLogonCommands</Code> still exists and still runs identically if a human ever does
+              end up at the console (troubleshooting, or if the specialize-pass step somehow didn't take
+              for a specific deployment) — redundant with it in the common case, harmless either way. Setup
+              always requires the built-in Administrator account to have a password regardless (
+              <Code>AdministratorPassword</Code>), so it always gets one whether or not it ends up being
+              the account that's actually used.
+            </P>
+            <P>
+              <strong>VMware Tools installs automatically too</strong>, in the same specialize pass (
+              <Code>_specialize_install_vmware_tools.xml.j2</Code>), from a CD-ROM{" "}
+              <Code>esxi.py</Code>'s <Code>create_vm</Code> mounts via vSphere's own{" "}
+              <Code>MountToolsInstaller()</Code> API right after the VM is created — no unit number to
+              track, ESXi manages that device itself. This is what makes a <strong>DHCP</strong> deployment's
+              guest IP discoverable at all without a human logging in: <Code>get_guest_ip()</Code> has
+              nothing to report without VMware Tools present, which is a real gap this session's own
+              testing hit directly (a deployment spinning for the full{" "}
+              <Code>WINRM_REACHABILITY_MAX_ATTEMPTS</Code> waiting on exactly that). The installer's exit
+              code is deliberately never trusted for <Code>WillReboot</Code>'s <Code>OnRequest</Code>{" "}
+              0/1/2 return-code contract — any other code terminates the entire Windows installation per
+              that element's own documented behavior, and mapping <Code>setup64.exe</Code>'s own exit
+              code correctly into that contract, in batch syntax, without a real test cycle to verify
+              against, was judged too risky. Instead the install command's own exit code is
+              unconditionally forced to <Code>0</Code> (best-effort, same philosophy as everything else in
+              this pipeline that's never worth failing the whole deployment over), and a separate,
+              trivial, always-succeeding command right after does nothing but trigger a controlled reboot
+              via <Code>WillReboot=Always</Code>. That reboot matters: <Code>REBOOT=ReallySuppress</Code>{" "}
+              on the installer itself avoids an uncontrolled restart mid-Setup, but a real, documented
+              VMXNET3 interaction means the network driver update needs an actual restart to take effect
+              cleanly, or the guest loses network access immediately ("RPC service unavailable") — exactly
+              why the follow-up command exists at all rather than leaving this for later. Confirmed against
+              Microsoft's own documentation that Setup resumes any remaining{" "}
+              <Code>RunSynchronousCommand</Code> entries after a <Code>WillReboot</Code>-triggered restart.
+              A static deployment doesn't need any of this for IP discovery (its address is already known
+              declaratively), but gets Tools installed anyway — <Code>run_post_install</Code> uses it for
+              a one-time cross-check afterward, comparing the guest-reported address against the
+              configured static one and logging a <Code>WARN</Code> (never a hard failure) if they don't
+              match.
             </P>
             <P>
               A template's <strong>custom admin account</strong> toggle (Templates page, off by default)
@@ -1177,25 +1218,30 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   unusual character in a password, a role name, ...). <strong>View answer file</strong>{" "}
                   on the deployment's detail page shows the exact XML that shipped, compare it against
                   what you expected.</>,
-                <><strong>No auto-login yet, by design, for now.</strong> DeployCore doesn't currently log
-                  anyone in automatically after Windows Setup finishes (see "Unattended Windows Setup, in
-                  depth" for why - two different mechanisms tried were both found to reliably break Setup
-                  on real hardware, and were reverted rather than shipped broken). A deployment genuinely
-                  finishing installation will still sit at a plain login prompt, and{" "}
-                  <Code>FirstLogonCommands</Code> - which is what enables WinRM and sends the callback -
-                  only runs once a human physically logs in at the console. If a deployment seems stuck in{" "}
-                  <Code>installing_os</Code> for an unusually long time, check whether the VM is actually
-                  sitting at its login screen already; logging in once is often all it needs to continue.</>,
+                <><strong>No human needs to log in at the console anymore</strong> - not via auto-logon
+                  (two different attempts at that each independently broke Setup outright on real
+                  hardware, see "Unattended Windows Setup, in depth"), but WinRM gets enabled during the
+                  specialize pass itself now, well before Setup even reaches the login screen, which is
+                  enough to carry the rest of the pipeline unattended (WinRM is a service, doesn't need an
+                  interactive session). If a deployment still looks stuck in <Code>installing_os</Code>{" "}
+                  for an unusually long time, that specialize-pass step not having taken for some reason
+                  is worth checking (does the guest's login screen show up but nothing progresses past it
+                  - logging in once should still make FirstLogonCommands run as a fallback), but the
+                  common case no longer needs anyone to.</>,
                 <><strong>Reached <Code>post_install</Code> but stuck on "waiting for guest IP
-                  address"?</strong> This only happens for a DHCP deployment whose guest never called back
-                  in the first place (it advanced via <Code>wait_for_callback</Code>'s WinRM-reachability
-                  fallback instead - see "Unattended Windows Setup, in depth"), and the hypervisor's own
-                  guest-IP lookup needs VMware Tools installed in the guest to report anything at all. A
-                  static deployment never hits this: its IP is already known outright. If this happens
-                  repeatedly on DHCP deployments, installing VMware Tools in the base image (or the
-                  template's own post-install scripts, though those run after this point so they can't
-                  help this specific case) is the actual fix; there isn't a hypervisor-side workaround for
-                  it today.</>,
+                  address"?</strong> DeployCore now installs VMware Tools automatically during the
+                  specialize pass specifically so this doesn't happen (a DHCP deployment's guest IP is
+                  only discoverable via VMware Tools reporting it, which needs Tools installed - a real
+                  deployment previously spun on exactly this gap before that existed). If it still
+                  happens: check whether VMware Tools actually finished installing in the guest (Programs
+                  and Features, or <Code>Get-Service VMTools</Code> once you can reach it another way) -
+                  the CD-ROM it installs from is mounted via ESXi's own <Code>MountToolsInstaller()</Code>{" "}
+                  API and the installer is run silently during specialize, both best-effort steps that log
+                  a failure but never block the deployment if either one didn't work for some reason (a
+                  datastore issue mounting the installer ISO, an unexpected drive letter, etc.). A static
+                  deployment never hits this at all: its IP is already known outright, VMware Tools isn't
+                  needed for discovery, only for the optional post-install cross-check against the
+                  configured address.</>,
                 <><strong>Static IP configured but the guest still shows DHCP after install?</strong>{" "}
                   <Code>Microsoft-Windows-TCPIP</Code>'s <Code>Identifier</Code> matches the NIC by MAC
                   address (assigned explicitly to the VM at creation time, see "Unattended Windows Setup,

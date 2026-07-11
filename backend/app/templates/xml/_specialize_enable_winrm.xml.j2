@@ -1,0 +1,76 @@
+<!-- Enables WinRM during the specialize pass, without a human ever
+     logging in at the console: this is what actually lets the rest of
+     the pipeline (the WinRM-reachability fallback in wait_for_callback,
+     then run_post_install) run unattended, replacing what used to
+     depend on a login triggering FirstLogonCommands.
+
+     Deliberately touches only WinRM's own configuration, nothing under
+     HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon: two
+     different auto-logon mechanisms (the declarative <AutoLogon>
+     element, and an earlier specialize-pass RunSynchronousCommand that
+     wrote the exact same Winlogon registry values via reg.exe) each
+     independently broke Setup outright with the same WINDEPLOY
+     0x80220005 failure - different mechanisms, identical failure
+     signature, which points at the Winlogon auto-logon registry state
+     itself being what this specific Windows Server build's WINDEPLOY/
+     OOBE launch chokes on here, not "any specialize-pass automation" in
+     general (role installs, static IP, RDP, etc. all work fine from
+     elsewhere in this pipeline without touching Winlogon at all). This
+     is the next, deliberately different experiment: get WinRM up
+     through a path that never sets AutoAdminLogon/DefaultUserName/
+     DefaultPassword or anything else under that registry key at all.
+
+     winrm.cmd (a WSH/VBScript wrapper, not a PowerShell cmdlet), not
+     Enable-PSRemoting: the one specialize-pass attempt that used
+     PowerShell here crashed Setup a third, different way ("the computer
+     was unexpectedly restarted") before ever getting far enough to hit
+     the Winlogon-shaped failure above, and there's no way to be certain
+     in advance whether that was specifically a WMI/CIM-readiness issue
+     (Microsoft Q&A 731439, a different cmdlet failing in
+     RunSynchronousCommand for exactly that reason) or something more
+     general about PowerShell's own startup this early - winrm.cmd is a
+     much older, lighter, foundational component (present since Windows
+     XP/2003) with none of PowerShell's engine/CLR/WMI-provider startup
+     weight, the more conservative choice between the two either way.
+     `-quiet` is documented as suppressing every confirmation prompt
+     quickconfig would otherwise show interactively, essential here:
+     anything that could block waiting for input Setup will never
+     provide is worse than not running at all. netsh (a plain, native
+     executable, matching the already-proven-reliable reg.exe pattern
+     used elsewhere in specialize) opens the firewall explicitly too,
+     redundant with quickconfig's own firewall step but cheap insurance
+     given how much rides on this working.
+
+     LocalAccountTokenFilterPolicy moves here too, when a custom admin
+     account is configured: it used to be set by FirstLogonCommands
+     (guest-side, needs a login), but WinRM authenticating as that
+     account needs it regardless of which mechanism enabled WinRM
+     itself, so it has to be set unconditionally here now rather than
+     depending on a login that may never happen. _first_logon_commands.xml.j2
+     still sets it too (redundant, harmless) for the case where a human
+     does log in manually.
+
+     Included into the single shared Microsoft-Windows-Deployment/
+     RunSynchronous block in autounattend_base.xml.j2, alongside
+     _specialize_install_vmware_tools.xml.j2 - kept as a separate file
+     (not a separate <component>, unattend.xml's own schema doesn't
+     clearly support more than one Microsoft-Windows-Deployment per
+     pass) specifically so either one can be removed independently if it
+     ever needs reverting, without touching the other. -->
+<RunSynchronousCommand wcm:action="add">
+    <Description>Start and configure the WinRM listener</Description>
+    <Order>1</Order>
+    <Path>cmd.exe /c winrm.cmd quickconfig -quiet</Path>
+</RunSynchronousCommand>
+<RunSynchronousCommand wcm:action="add">
+    <Description>Open the firewall for WinRM</Description>
+    <Order>2</Order>
+    <Path>netsh.exe advfirewall firewall add rule name="DeployCore WinRM" dir=in action=allow protocol=TCP localport=5985</Path>
+</RunSynchronousCommand>
+{% if template.custom_admin_enabled %}
+<RunSynchronousCommand wcm:action="add">
+    <Description>Let a non-built-in local administrator authenticate over WinRM with a full token</Description>
+    <Order>3</Order>
+    <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f</Path>
+</RunSynchronousCommand>
+{% endif %}

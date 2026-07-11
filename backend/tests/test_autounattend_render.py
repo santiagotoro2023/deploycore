@@ -211,29 +211,98 @@ def test_oobe_stays_at_the_last_confirmed_working_set():
     ]
 
 
-def test_no_autologon_mechanism_at_all():
+def test_no_declarative_autologon_element():
     """Two different auto-logon mechanisms have each broken Setup outright
     on real hardware: the declarative <AutoLogon> element (oobeSystem
-    pass), and a specialize-pass Microsoft-Windows-Deployment/
-    RunSynchronousCommand writing the same registry values via reg.exe
-    (tried after the element failed, on the theory a different Setup code
-    path would avoid whatever it was hitting - it didn't, same WINDEPLOY
-    0x80220005 failure, confirmed with OOBE settings already reverted so
-    the RunSynchronousCommand component was the only variable left). The
-    one deployment that's actually completed had neither. Locked in as
-    fully absent - no <AutoLogon>, no Microsoft-Windows-Deployment
-    component at all - until a mechanism is found that doesn't hit
-    whatever both of these did. FirstLogonCommands only run once a human
-    physically logs in at the console until then."""
+    pass), and an earlier specialize-pass Microsoft-Windows-Deployment/
+    RunSynchronousCommand writing the same Winlogon registry values via
+    reg.exe (tried after the element failed, on the theory a different
+    Setup code path would avoid whatever it was hitting - it didn't, same
+    WINDEPLOY 0x80220005 failure). Locked in as permanently absent - no
+    <AutoLogon> element, and no FirstLogonCommand or RunSynchronousCommand
+    anywhere touches the Winlogon registry key either - until a mechanism
+    is found that doesn't hit whatever both of these did."""
     template = _make_template()
     root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     assert root.xpath("//u:AutoLogon", namespaces=NS) == []
-    assert root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS) == []
 
     commands = root.xpath("//u:FirstLogonCommands/u:SynchronousCommand", namespaces=NS)
     command_lines = " ".join(c.xpath("string(u:CommandLine)", namespaces=NS) for c in commands)
     assert "DefaultPassword" not in command_lines and "AutoAdminLogon" not in command_lines
+
+    deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
+    run_sync_paths = " ".join(
+        deployment_component.xpath(".//u:RunSynchronousCommand/u:Path/text()", namespaces=NS)
+    )
+    assert "Winlogon" not in run_sync_paths
+    assert "AutoAdminLogon" not in run_sync_paths and "DefaultPassword" not in run_sync_paths
+
+
+def test_specialize_pass_enables_winrm_without_a_login():
+    """This is what actually replaces AutoLogon: WinRM is a service, not
+    an interactive session, so getting it listening during the specialize
+    pass (well before oobeSystem, no human ever at the console) is enough
+    for wait_for_callback's WinRM-reachability check to carry the rest of
+    the pipeline unattended, without touching Winlogon/AutoAdminLogon at
+    all - see _specialize_enable_winrm.xml.j2's own comment for the full
+    reasoning. winrm.cmd (WSH/VBScript), not Enable-PSRemoting
+    (PowerShell): the one specialize-pass attempt that used PowerShell
+    here crashed Setup a different way before ever reaching the
+    Winlogon-shaped failure, so this deliberately avoids it too."""
+    template = _make_template()
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
+
+    deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
+    paths = deployment_component.xpath(".//u:RunSynchronousCommand/u:Path/text()", namespaces=NS)
+    assert any("winrm.cmd quickconfig" in p for p in paths)
+    assert any("netsh.exe" in p and "5985" in p for p in paths)
+    assert not any("powershell" in p.lower() for p in paths)
+
+    # Off by default (no custom admin account configured): no need to set
+    # LocalAccountTokenFilterPolicy, WinRM already authenticates fine as
+    # the built-in Administrator without it. 2 WinRM commands + 2 VMware
+    # Tools commands (install, then the WillReboot=Always trigger).
+    assert len(paths) == 4
+
+
+def test_specialize_pass_sets_token_filter_policy_for_custom_admin():
+    template = _make_template(custom_admin_enabled=True, local_admin_username="svcwinadmin")
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
+
+    deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
+    paths = deployment_component.xpath(".//u:RunSynchronousCommand/u:Path/text()", namespaces=NS)
+    assert len(paths) == 5
+    assert any("LocalAccountTokenFilterPolicy" in p for p in paths)
+
+
+def test_specialize_pass_installs_vmware_tools_with_a_controlled_reboot():
+    """VMware Tools is what makes get_guest_ip (and so a DHCP deployment's
+    IP discovery, and the static-IP cross-check in run_post_install) work
+    at all - see esxi.py's create_vm/MountToolsInstaller and this file's
+    own comment. The installer's own exit code is deliberately never
+    trusted for WillReboot=OnRequest's 0/1/2 contract (anything else
+    terminates the whole Windows installation per that element's own
+    documented behavior) - forced to plain `exit /b 0` unconditionally
+    instead, with a separate, trivial, always-succeeding command right
+    after doing nothing but trigger the actual reboot via
+    WillReboot=Always, sequential Order with no gaps either way."""
+    template = _make_template()
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
+
+    deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
+    commands = deployment_component.xpath(".//u:RunSynchronousCommand", namespaces=NS)
+    orders = [int(c.xpath("string(u:Order)", namespaces=NS)) for c in commands]
+    assert orders == list(range(1, len(orders) + 1))  # sequential, no gaps
+
+    install_cmd, reboot_cmd = commands[-2], commands[-1]
+    install_path = install_cmd.xpath("string(u:Path)", namespaces=NS)
+    assert "setup64.exe" in install_path
+    assert "REBOOT=ReallySuppress" in install_path
+    assert install_path.rstrip().endswith("exit /b 0")
+    assert install_cmd.xpath("u:WillReboot", namespaces=NS) == []
+
+    assert reboot_cmd.xpath("string(u:WillReboot)", namespaces=NS) == "Always"
 
 
 def test_custom_admin_disabled_by_default_keeps_builtin_administrator():

@@ -610,37 +610,69 @@ pending → creating_vm → booting → installing_os → post_install → confi
   these loops' lifetime - a real bug caught during testing, where a
   single hanging check silently stalled `wait_for_callback` entirely
   (never reacting to a callback that had, in fact, already landed) rather
-  than just failing that one attempt and moving on. There is currently
-  **no auto-logon mechanism at all**: two
-  different attempts at it have each broken Setup outright on real
-  hardware, both fully reverted. First, the declarative `AutoLogon`
-  element (oobeSystem pass) - auto-logging in as whichever account
-  `local_admin_username`/`local_admin_password` resolve to, so
-  `FirstLogonCommands` could run with nobody at the console. Every
-  deployment that included it failed during Setup regardless of where in
-  oobeSystem it was placed; static vs. DHCP networking, hostname length,
-  and a separate OOBE addition were all independently ruled out via
-  controlled tests, isolating the element itself, confirmed when a real
-  deployment finally completed once it was removed. Second, a
-  specialize-pass `Microsoft-Windows-Deployment`/`RunSynchronousCommand`
-  writing the same registry values (`AutoAdminLogon`, `DefaultUserName`,
-  `DefaultPassword`, `AutoLogonCount`) a working `AutoLogon` element would
-  itself write, via `reg.exe` (a first attempt used `powershell.exe`
-  instead and crashed Setup a different way, "the computer was
-  unexpectedly restarted", consistent with a documented failure mode
-  where PowerShell cmdlets crash this early in Setup because WMI/CIM
-  isn't fully initialized yet - `reg.exe` has no such dependency).
-  Reasonable in theory (Winlogon reads those registry values the same way
-  regardless of which mechanism wrote them, so a different Setup code
-  path should have sidestepped whatever the element itself was hitting),
-  but it didn't: a clean, isolated test (OOBE settings already reverted,
-  only this component present) failed with the exact same WINDEPLOY
-  0x80220005 error as the element did. The one deployment that's actually
-  completed had neither mechanism present. Until something is found that
-  avoids whatever both of these hit, `FirstLogonCommands` only run once a
-  human physically logs in at the console, since `SkipMachineOOBE`/
-  `SkipUserOOBE` alone don't make Setup log in on their own. If
-  `template.custom_admin_enabled` is on (off by default), two
+  than just failing that one attempt and moving on.
+
+  **No human ever needs to log in at the console**, but not via
+  auto-logon: two different attempts at that (the declarative `AutoLogon`
+  element, and a specialize-pass `RunSynchronousCommand` writing the same
+  `HKLM\...\Winlogon` registry values via `reg.exe`) each independently
+  broke Setup outright with the identical `WINDEPLOY 0x80220005` failure -
+  different mechanisms, same registry surface, same result, both fully
+  reverted, permanently. That pattern pointed at the Winlogon auto-logon
+  state itself being what this Windows Server build's OOBE launch chokes
+  on here, not "any specialize-pass automation" in general - role
+  installs, static IP, and everything else in this pipeline all work fine
+  without ever touching Winlogon. So instead: `_specialize_enable_winrm.xml.j2`
+  gets WinRM listening during the specialize pass itself, well before
+  oobeSystem, via `winrm.cmd quickconfig -quiet` (a WSH/VBScript wrapper,
+  deliberately not PowerShell's `Enable-PSRemoting` - the one specialize-pass
+  attempt that used PowerShell here crashed Setup a third, different way,
+  "the computer was unexpectedly restarted", and there's no way to be
+  certain in advance that was specifically the WMI/CIM-readiness issue
+  documented elsewhere rather than something more general about
+  PowerShell's own startup this early) plus a `netsh.exe` firewall rule.
+  WinRM is a service, not an interactive session, so this is enough:
+  `wait_for_callback`'s WinRM-reachability check (above) now normally
+  fires well before Setup even reaches oobeSystem, carrying the rest of
+  the pipeline the same way a landed callback always did.
+  `FirstLogonCommands` still exists as defense-in-depth for the rare case
+  a human does end up at the console (troubleshooting, or if that
+  specialize-pass step somehow didn't take for a given deployment) -
+  redundant in the common case, harmless either way.
+
+  The same specialize pass also installs VMware Tools
+  (`_specialize_install_vmware_tools.xml.j2`), from the CD-ROM
+  `esxi.py`'s `create_vm` mounts via `vm.MountToolsInstaller()` right
+  after the VM is created (ESXi manages that device itself, no unit
+  number to track). This is what makes a **DHCP** deployment's guest IP
+  discoverable at all without VMware Tools already being present -
+  `HypervisorDriver.get_guest_ip()` has nothing to report without it, a
+  real deployment previously spun for the full
+  `WINRM_REACHABILITY_MAX_ATTEMPTS` on exactly that gap. The installer's
+  own exit code is deliberately never trusted for `WillReboot`'s
+  `OnRequest` 0/1/2 return-code contract (any other code terminates the
+  whole Windows installation per that element's own documented behavior);
+  instead the install command's exit code is unconditionally forced to 0
+  (best-effort, matching everything else in this pipeline that's "never
+  worth failing the whole deployment over"), and a separate, trivial,
+  always-succeeding command right after does nothing but trigger a
+  controlled reboot via `WillReboot=Always` - `REBOOT=ReallySuppress` on
+  the installer itself avoids Setup orchestrating an uncontrolled one
+  mid-install, but a real, documented VMXNET3 interaction means the
+  network driver update needs an actual restart to take effect cleanly or
+  the guest loses network access immediately ("RPC service unavailable").
+  Confirmed against Microsoft's own docs that Setup resumes any remaining
+  `RunSynchronousCommand` entries after a `WillReboot`-triggered restart.
+  For a **static** deployment, none of this is needed for IP discovery
+  (`deployment.static_ip` is already used directly, see `run_post_install`
+  above), but Tools gets installed anyway, and `run_post_install` uses it
+  for a one-time cross-check: if the guest-reported IP (once Tools is up)
+  doesn't match the configured static address, a `WARN`-level log line
+  says so - not a hard failure, a second NIC or Tools not having reported
+  yet aren't actually wrong, but worth an operator's attention if it
+  happens.
+
+  If `template.custom_admin_enabled` is on (off by default), two
   more commands render: `LocalAccountTokenFilterPolicy=1`
   right after enabling WinRM (by default Windows' UAC remote restriction only
   exempts the actual built-in Administrator (RID 500) from a filtered, non-elevated

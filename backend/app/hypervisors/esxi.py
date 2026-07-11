@@ -157,8 +157,10 @@ class ESXiDriver(HypervisorDriver):
             vm = task.info.result
 
             # Best-effort, separate reconfigure so a failure here can never
-            # affect VM creation itself: without VMware Tools installed (this
-            # pipeline never installs it), a fresh Windows guest only has the
+            # affect VM creation itself: during Setup itself (before
+            # VMware Tools is installed - see MountToolsInstaller below,
+            # which only finishes after Setup completes and the guest
+            # reboots into it), a fresh Windows guest only has the
             # default PS/2 mouse, which the ESXi/vSphere web console can't
             # track properly, the cursor doesn't reliably show up or move
             # with the actual pointer at all. A USB 3.0 (xHCI) controller is
@@ -175,6 +177,22 @@ class ESXiDriver(HypervisorDriver):
                 WaitForTask(vm.ReconfigVM_Task(spec=vim.vm.ConfigSpec(deviceChange=[usb_spec])))
             except Exception:  # noqa: BLE001 - cosmetic, never worth failing VM creation over
                 logger.exception("esxi: failed to add a USB controller to %s, console mouse may not work", spec.name)
+
+            # Also best-effort, same reasoning: mounts ESXi's own bundled
+            # Tools installer ISO onto a CD-ROM device it manages itself
+            # (no need to track a unit number the way the Windows/VirtIO
+            # ISOs are), so it's already present and ready by the time
+            # Setup's specialize pass looks for it (see
+            # _specialize_install_vmware_tools.xml.j2). VMware Tools being
+            # installed is what makes get_guest_ip/the guest-ops surface
+            # actually work for a DHCP deployment - without it, only a
+            # static deployment (which already knows its own IP
+            # declaratively) can be reached at all without a human logging
+            # in at the console, see that file's own comment.
+            try:
+                WaitForTask(vm.MountToolsInstaller())
+            except Exception:  # noqa: BLE001 - never worth failing VM creation over
+                logger.exception("esxi: failed to mount the VMware Tools installer on %s", spec.name)
 
             return vm._moId
         finally:

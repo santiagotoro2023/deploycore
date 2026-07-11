@@ -52,20 +52,12 @@
             <UILanguage>{{ template.locale }}</UILanguage>
             <UserLocale>{{ template.locale }}</UserLocale>
         </component>
-        <!-- No auto-logon mechanism at all right now - see the UserAccounts
-             comment below (oobeSystem pass) for the full history. Two
-             different mechanisms have each broken Setup outright on this
-             environment: the declarative <AutoLogon> element (oobeSystem),
-             and a specialize-pass Microsoft-Windows-Deployment/
-             RunSynchronousCommand writing the same registry values via
-             reg.exe (tried after the declarative element failed, on the
-             theory a different Setup code path would avoid whatever the
-             element was hitting - it didn't: same WINDEPLOY 0x80220005
-             failure the element produced, confirmed with a clean isolated
-             test, OOBE settings reverted, only the reg.exe component
-             present). The one deployment that's actually completed had
-             neither. Whatever comes next needs to avoid both oobeSystem's
-             <AutoLogon> and any specialize-pass RunSynchronousCommand. -->
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <RunSynchronous>
+{% include "_specialize_enable_winrm.xml.j2" %}
+{% include "_specialize_install_vmware_tools.xml.j2" %}
+            </RunSynchronous>
+        </component>
 {% if deployment.ip_mode == "static" and deployment.static_ip and static_prefix %}
 {% include "_static_network.xml.j2" %}
 {% endif %}
@@ -105,37 +97,35 @@
 {% endif %}
             </UserAccounts>
             <!-- The declarative <AutoLogon> element is deliberately absent
-                 here: see _specialize_autologon.xml.j2 (specialize pass)
-                 for auto-logon, and its comment for why.
+                 here, permanently at this point: it, and separately a
+                 specialize-pass RunSynchronousCommand writing the exact
+                 same Winlogon registry values via reg.exe, each
+                 independently broke Setup outright with the identical
+                 WINDEPLOY 0x80220005 failure - different mechanisms, same
+                 registry surface (HKLM\...\Winlogon), same result, which
+                 is why _specialize_enable_winrm.xml.j2 (specialize pass)
+                 gets unattended WinRM access a different way now, one
+                 that never touches Winlogon/AutoAdminLogon at all: no
+                 login is needed for the rest of the pipeline to run, but
+                 nobody is auto-logged-in at the console either, that's
+                 not the same thing. See that file's own comment for the
+                 full reasoning.
 
-                 ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen are
-                 ALSO absent again, for the same reason, not because
-                 they're confirmed guilty but because they're not confirmed
-                 innocent either: the previous "confirmed innocent" verdict
-                 here was wrong, or at least incomplete. It was based on
-                 removing them while the old declarative <AutoLogon>
-                 element was still present and Setup still failing the
-                 same way either way - which only shows they weren't
-                 SUFFICIENT to fix that failure on their own, not that
-                 they're safe. The one deployment that actually completed
-                 (lern-st-test-04) had both AutoLogon and these three OOBE
-                 settings absent together; that combination was never
-                 actually tested in isolation. Once they were reintroduced
-                 alongside the specialize-pass reg.exe autologon, Setup
-                 failed again with the exact same WINDEPLOY 0x80220005
-                 signature as the original AutoLogon-era failures, and this
-                 time setupact.log showed specialize completing cleanly
-                 (the reg.exe commands included) before failing at the
-                 Pre-OOBE -> OOBE transition these settings directly
-                 govern - a much more direct implication than specialize-
-                 pass registry writes that already finished. Reverted again
-                 to isolate: if a deployment completes with these absent
-                 and the reg.exe autologon still in place, that confirms
-                 these three specifically (not the autologon mechanism) as
-                 the actual cause, and they'll need a different fix
-                 (probably suppressing the diagnostics/network-location
-                 prompts via a FirstLogonCommand instead of these OOBE
-                 flags) rather than being reintroduced as-is. -->
+                 ProtectYourPC/NetworkLocation/HideOEMRegistrationScreen
+                 are also still absent: tried once alongside the
+                 declarative <AutoLogon> element (inconclusive - removing
+                 them alone didn't fix that failure, so they were never
+                 confirmed involved either way) and once alongside the
+                 reg.exe Winlogon write (Setup failed the same WINDEPLOY
+                 way again, more suggestive this time since specialize had
+                 completed cleanly first), rolled back both times without
+                 ever being tested against a deployment that actually
+                 completes. Worth retrying now that WinRM access no longer
+                 depends on anything Winlogon-related at all, but not
+                 attempted yet - the diagnostic-data/network-location OOBE
+                 prompts these suppress are cosmetic (only visible if a
+                 human does log in manually), unlike the login requirement
+                 this file's WinRM change actually fixes. -->
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
                 <HideLocalAccountScreen>true</HideLocalAccountScreen>

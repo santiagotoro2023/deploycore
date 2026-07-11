@@ -1,3 +1,9 @@
+<!-- Defense-in-depth now, not the primary path: _specialize_enable_winrm.xml.j2
+     (specialize pass) is what actually gets WinRM up without anyone
+     logging in. This still runs identically if a human does log in
+     manually (troubleshooting, or if that specialize-pass step somehow
+     didn't take for a given deployment) - redundant with it in the
+     common case, harmless either way. -->
 <SynchronousCommand wcm:action="add">
     <Order>1</Order>
     <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Enable-PSRemoting -Force; New-NetFirewallRule -DisplayName 'DeployCore WinRM' -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow"</CommandLine>
