@@ -462,7 +462,21 @@ class ESXiDriver(HypervisorDriver):
             vm = self._find_vm_sync(service_instance, vm_ref)
             if vm.runtime.powerState == vim.VirtualMachinePowerState.poweredOn:
                 WaitForTask(vm.PowerOffVM_Task())
+            name, datastore_name = vm.name, vm.datastore[0].name
             WaitForTask(vm.Destroy_Task())
+            # ponytail: known ESXi race, Destroy_Task can leave an empty
+            # folder behind if file locks from the just-completed power-off
+            # haven't released yet. Belt-and-suspenders cleanup, same call
+            # _delete_iso_sync already uses; no-op (folder already gone) in
+            # the normal case.
+            try:
+                content = service_instance.RetrieveContent()
+                datacenter = content.rootFolder.childEntity[0]
+                WaitForTask(content.fileManager.DeleteDatastoreFile_Task(
+                    name=f"[{datastore_name}] {name}", datacenter=datacenter
+                ))
+            except Exception:  # noqa: BLE001 - best-effort, folder is usually already gone
+                pass
         finally:
             connect.Disconnect(service_instance)
 

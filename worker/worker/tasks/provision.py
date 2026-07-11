@@ -376,7 +376,7 @@ async def _winrm_reachable(client: WinRMClient) -> bool:
         return False
 
 
-async def _run_with_heartbeat(db, deployment: Deployment, stage: str, description: str, blocking_call):
+async def _run_with_heartbeat(db, deployment: Deployment, stage: str, description: str, blocking_call, progress_check=None):
     """Runs a blocking WinRMClient call (install_features/install_app/
     run_ps/join_domain - see WinRMClient's own docstring: every method is
     blocking, needs asyncio.to_thread) in a background thread, logging a
@@ -386,7 +386,16 @@ async def _run_with_heartbeat(db, deployment: Deployment, stage: str, descriptio
     the underlying call running across heartbeat cycles rather than
     getting cancelled the moment any one wait_for window expires - only
     the waiting is bounded, not the call itself, that's the whole point
-    of a heartbeat rather than a timeout."""
+    of a heartbeat rather than a timeout.
+
+    progress_check, if given, is an additional blocking call (also run via
+    asyncio.to_thread, bounded so a stuck query can't stall a heartbeat
+    tick) polled alongside each "still running" line - install_features'
+    caller uses it for a per-role rundown (see get_feature_install_status)
+    since the batched Install-WindowsFeature call itself can't report
+    progress mid-flight. Any failure or timeout is swallowed: a missed
+    progress line just falls back to the plain heartbeat, same as before
+    this existed."""
     task = asyncio.ensure_future(asyncio.to_thread(blocking_call))
     elapsed = 0
     while not task.done():
@@ -394,7 +403,14 @@ async def _run_with_heartbeat(db, deployment: Deployment, stage: str, descriptio
             return await asyncio.wait_for(asyncio.shield(task), timeout=HEARTBEAT_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             elapsed += HEARTBEAT_INTERVAL_SECONDS
-            await log(db, deployment, stage, f"{description} - still running ({elapsed}s elapsed)")
+            detail = ""
+            if progress_check is not None:
+                try:
+                    progress = await asyncio.wait_for(asyncio.to_thread(progress_check), timeout=WINRM_CHECK_TIMEOUT_SECONDS)
+                    detail = f" ({progress})" if progress else ""
+                except Exception:  # noqa: BLE001 - best-effort progress line only
+                    pass
+            await log(db, deployment, stage, f"{description} - still running ({elapsed}s elapsed){detail}")
     return await task
 
 
@@ -621,6 +637,11 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     db, deployment, "post_install",
                     f"installing Windows features: {', '.join(template.windows_features)}",
                 )
+                def _feature_progress() -> str:
+                    status = client.get_feature_install_status(template.windows_features)
+                    done = [name for name in template.windows_features if status.get(name)]
+                    return f"{len(done)}/{len(template.windows_features)} installed so far: {', '.join(done)}" if done else ""
+
                 # ponytail: 0x80070020 (ERROR_SHARING_VIOLATION) right after
                 # first boot is a well-known transient servicing-stack lock
                 # (TrustedInstaller/CBS still settling), not a real failure -
@@ -629,6 +650,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     result = await _run_with_heartbeat(
                         db, deployment, "post_install", "installing Windows features",
                         lambda: client.install_features(template.windows_features),
+                        progress_check=_feature_progress,
                     )
                     if result.ok or "0x80070020" not in (result.stderr or ""):
                         break

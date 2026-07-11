@@ -79,9 +79,24 @@ class WinRMClient:
         table (ConvertTo-Json -Compress, parsed back out below) to get
         both Success and RestartNeeded reliably, and explicitly fails
         the command (non-zero exit) when Success is false rather than
-        relying on Install-WindowsFeature to raise on its own."""
+        relying on Install-WindowsFeature to raise on its own.
+
+        Waits for TrustedInstaller (Windows Modules Installer) to go
+        idle first: this is the actual root cause of the 0x80070020
+        (ERROR_SHARING_VIOLATION) failures seen right after first boot,
+        not something a bare retry could reliably outrun - TrustedInstaller
+        is demand-start and still runs for a while right after a fresh
+        image finishes applying, and Install-WindowsFeature can't touch
+        the servicing store while it holds the lock. Bounded so a stuck
+        service can't hang the deployment forever; if it's still Running
+        past the deadline, Install-WindowsFeature is attempted anyway and
+        surfaces its own error as before."""
         names_literal = ",".join(_ps_single_quote(name) for name in feature_names)
         script = f"""
+$deadline = (Get-Date).AddSeconds(120)
+while ((Get-Service TrustedInstaller -ErrorAction SilentlyContinue).Status -eq 'Running' -and (Get-Date) -lt $deadline) {{
+    Start-Sleep -Seconds 5
+}}
 $r = Install-WindowsFeature -Name @({names_literal}) -IncludeManagementTools
 $r
 $summary = [PSCustomObject]@{{ Success = $r.Success; RestartNeeded = [string]$r.RestartNeeded }} | ConvertTo-Json -Compress
@@ -99,6 +114,36 @@ if (-not $r.Success) {{ exit 1 }}
             except (ValueError, AttributeError):
                 pass  # Same effect as RestartNeeded genuinely being "No": nothing to act on either way
         return FeatureInstallResult(result.status_code, display_stdout.strip(), result.stderr, restart_needed)
+
+    def get_feature_install_status(self, feature_names: list[str]) -> dict[str, bool]:
+        """Cheap Get-WindowsFeature poll, {name: installed}. Used to report
+        per-role progress (see provision.py's install_features heartbeat)
+        while the single batched Install-WindowsFeature call above is still
+        running in the background - a real one-by-one rundown isn't
+        possible (it's one DISM/CBS transaction, not N sequential ones),
+        but polling which of the requested features have already flipped
+        to Installed gets the same visibility without giving up the speed
+        of the batched call. Returns {} on any failure (transient WinRM
+        hiccup mid-install is expected, not worth surfacing - the caller
+        just skips that tick's progress line)."""
+        names_literal = ",".join(_ps_single_quote(name) for name in feature_names)
+        script = f"""
+$names = @({names_literal})
+$names | ForEach-Object {{
+    $f = Get-WindowsFeature -Name $_ -ErrorAction SilentlyContinue
+    [PSCustomObject]@{{ Name = $_; Installed = [bool]($f -and $f.Installed) }}
+}} | ConvertTo-Json -Compress
+""".strip()
+        result = self.run_ps(script)
+        if not result.ok:
+            return {}
+        try:
+            data = json.loads(result.stdout)
+            if isinstance(data, dict):
+                data = [data]
+            return {item["Name"]: bool(item["Installed"]) for item in data}
+        except (ValueError, KeyError, TypeError):
+            return {}
 
     def verify_windows_features_installed(self, feature_names: list[str]) -> WinRMResult:
         """Explicit confirmation pass, run once after every requested
@@ -173,11 +218,18 @@ if ($missing) {{
         built-in "Remote Desktop" rule group is disabled by default
         alongside it; both need doing, and neither needs a restart to
         take effect - Terminal Services picks up the registry value on
-        the next connection attempt, not at boot."""
+        the next connection attempt, not at boot.
+
+        -Group '@FirewallAPI.dll,-28752', not -DisplayGroup 'Remote
+        Desktop': DisplayGroup is the GUI-facing text, localized per system
+        locale (e.g. "Remotedesktop" on a German image) - matching on it
+        broke every non-English deployment with an ObjectNotFound error.
+        Group is the underlying resource-string identifier the rule store
+        actually keys on, same on every locale."""
         return self.run_ps(
             "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' "
             "-Name fDenyTSConnections -Value 0; "
-            "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'"
+            "Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'"
         )
 
     def reboot(self) -> WinRMResult:
