@@ -516,12 +516,14 @@ async def wait_for_callback(ctx, deployment_id: str) -> None:
                 return
 
             if fell_back:
+                # Likely a network path issue between the guest and
+                # DeployCore rather than a failed install - FirstLogonCommands'
+                # callback request just never landed, but its WinRM-enable
+                # step (same batch) evidently did.
                 await log(
                     db, deployment, "installing_os",
-                    "guest OS install callback never arrived, but the guest answered over WinRM - "
-                    "treating the install as complete (likely a network path issue between the guest "
-                    "and DeployCore, not a failed install; FirstLogonCommands' own callback request "
-                    "just never landed)",
+                    "install callback did not arrive, but the guest is reachable over WinRM - "
+                    "treating Setup as complete",
                 )
 
         # The callback only ever fires from FirstLogonCommands, i.e. Setup
