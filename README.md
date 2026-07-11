@@ -658,9 +658,11 @@ pending → creating_vm → booting → installing_os → post_install → confi
   callback landing is also the first point DeployCore can be sure Setup is
   done with the install media for good (post-install runs entirely over
   WinRM from here on): `wait_for_callback` ejects the Windows/VirtIO ISOs
-  (drive kept, emptied), removes the floppy device outright, and deletes
-  the per-deployment answer-file floppy from the datastore, all
-  best-effort, never worth failing an otherwise-successful deployment over
+  and the floppy alike (drives kept, emptied - ESXi rejects actually
+  removing a floppy device while the VM is still powered on, which this
+  always runs while it is), and deletes the per-deployment answer-file
+  floppy image from the datastore, all best-effort, never worth failing
+  an otherwise-successful deployment over
 - Locale/keyboard are set in two places in the answer file:
   `Microsoft-Windows-International-Core-WinPE` (windowsPE pass, Setup's own
   UI only) and `Microsoft-Windows-International-Core` (specialize pass, the
@@ -701,7 +703,14 @@ pending → creating_vm → booting → installing_os → post_install → confi
   the App Assets section above for the token/download flow, then runs it
   silently and deletes it), run each post-install script in order, join
   the domain here if configured for `post_install` timing, reboot, verify
-  the guest comes back reachable, then as the very last WinRM action before
+  the guest comes back reachable. Every one of those (feature installs, app
+  installs, scripts, the domain join) runs through `_run_with_heartbeat`,
+  not a bare blocking WinRM call: a real Windows role install can
+  legitimately take several minutes, and without a periodic "still
+  running (Ns elapsed)" log line the deployment log otherwise goes
+  completely silent for however long that takes, indistinguishable from a
+  hang - confirmed as a real point of confusion on an otherwise-successful
+  deployment. Then, as the very last WinRM action before
   marking `completed`: remove the WinRM firewall rule, `Disable-PSRemoting`,
   and stop+disable the WinRM service itself (the service stop runs in a
   detached process a few seconds later, not inline, so the command reporting

@@ -708,10 +708,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   pairs a mixed-case/base64-style token would - <Code>callback_token_used</Code>, checked
                   rather than the state itself, since the state was already <Code>installing_os</Code>{" "}
                   before the callback exists to react to). That callback is the point DeployCore is sure
-                  Setup is done with the install media for good: it ejects the Windows/VirtIO ISOs,
-                  removes the floppy device, and deletes the per-deployment answer-file floppy from the
-                  datastore, all best-effort and never worth failing an otherwise-successful deployment
-                  over. Nothing from here on (post-install runs entirely over WinRM) needs any of it. The
+                  Setup is done with the install media for good: it ejects the Windows/VirtIO ISOs and the
+                  floppy alike (drives kept, emptied — ESXi rejects actually removing a floppy device
+                  while the VM is still powered on, which this always runs while it is), and deletes the
+                  per-deployment answer-file floppy image from the datastore, all best-effort and never
+                  worth failing an otherwise-successful deployment over. Nothing from here on (post-install
+                  runs entirely over WinRM) needs any of it. The
                   wait for that callback isn't all-or-nothing, though: every couple of minutes (far less
                   often than the poll itself, no reason to check any more eagerly while Setup is still in
                   its much longer earlier phases) it also checks whether the guest has become reachable
@@ -751,7 +753,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   callback having both already succeeded: install each selected Windows role, install
                   each attached app asset in order (see "App assets"), run post-install scripts in order,
                   join the domain here if configured for that timing, reboot, verify it comes back
-                  reachable, then mark the deployment completed.</>,
+                  reachable, then mark the deployment completed. Each of those steps — feature installs,
+                  app installs, scripts, the domain join — logs a "still running" heartbeat every 30
+                  seconds while it hasn't finished yet, rather than the deployment log going silent for
+                  however long that guest-side command actually takes: a real Windows role install can
+                  legitimately run several minutes, and without this a genuinely-still-working deployment
+                  looked indistinguishable from a stuck one.</>,
                 <>A stuck deployment (past its configured timeout, default 90 minutes, editable per
                   organization in Settings) is force-failed automatically by a background job, and cleaned
                   up the same way a real failure would be. This is independent of, and a genuine safety

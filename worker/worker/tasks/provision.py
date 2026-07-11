@@ -65,6 +65,16 @@ FALLBACK_REACHABILITY_POLL_EVERY = 8  # ~2 minutes at CALLBACK_POLL_INTERVAL_SEC
 # started.
 WINRM_CHECK_TIMEOUT_SECONDS = 10
 
+# How often a long-running post-install WinRM operation (a Windows
+# feature/role install, an app install, a post-install script, a domain
+# join) logs a "still running" heartbeat. Real feature installs can
+# legitimately take several minutes (Install-WindowsFeature
+# AD-Domain-Services, for instance); without a heartbeat the deployment
+# log goes completely silent the instant the command starts and stays
+# silent until it finishes, indistinguishable from a hang - confirmed as
+# a real point of confusion on an otherwise-successful deployment.
+HEARTBEAT_INTERVAL_SECONDS = 30
+
 # Phase 1: dismiss the "Press any key to boot from CD or DVD..." prompt,
 # which shows up once, early (around when set_boot_order's own 5s
 # bootDelay elapses, plus a couple seconds for the loader itself to read
@@ -117,11 +127,12 @@ async def _eject_install_media(db, driver: HypervisorDriver, deployment: Deploym
     are the only things that ever read the Windows/VirtIO ISOs or the
     answer-file floppy; once the callback has landed, nothing needs any of
     them again; the rest of post-install runs entirely over WinRM. Ejects
-    the CD-ROMs (kept as empty drives, matching detach_iso's existing
-    eject-not-remove behavior), removes the floppy device outright (it has
-    no purpose beyond delivering the answer file), and deletes the
-    per-deployment answer floppy image from the datastore, the same
-    cleanup _fail() already did on the failure path, now also on success.
+    the CD-ROMs and the floppy alike (kept as empty drives - ESXi rejects
+    actually removing a floppy device while the VM is still powered on,
+    which this always runs while it is, see esxi.py's detach_floppy), and
+    deletes the per-deployment answer floppy image from the datastore, the
+    same cleanup _fail() already did on the failure path, now also on
+    success.
     Best-effort throughout: never worth failing an otherwise-successful
     deployment over leftover media. Each step logs a warning on failure
     rather than silently passing, though - the unconditional "cleaned up"
@@ -362,6 +373,28 @@ async def _winrm_reachable(client: WinRMClient) -> bool:
         return False
 
 
+async def _run_with_heartbeat(db, deployment: Deployment, stage: str, description: str, blocking_call):
+    """Runs a blocking WinRMClient call (install_feature/install_app/
+    run_ps/join_domain - see WinRMClient's own docstring: every method is
+    blocking, needs asyncio.to_thread) in a background thread, logging a
+    "still running" heartbeat every HEARTBEAT_INTERVAL_SECONDS while it
+    hasn't finished yet, instead of the deployment log going silent for
+    however long the guest actually takes. asyncio.shield is what keeps
+    the underlying call running across heartbeat cycles rather than
+    getting cancelled the moment any one wait_for window expires - only
+    the waiting is bounded, not the call itself, that's the whole point
+    of a heartbeat rather than a timeout."""
+    task = asyncio.ensure_future(asyncio.to_thread(blocking_call))
+    elapsed = 0
+    while not task.done():
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=HEARTBEAT_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            elapsed += HEARTBEAT_INTERVAL_SECONDS
+            await log(db, deployment, stage, f"{description} - still running ({elapsed}s elapsed)")
+    return await task
+
+
 async def _guest_reachable_over_winrm(
     driver: HypervisorDriver, template: DeploymentTemplate, deployment: Deployment
 ) -> bool:
@@ -521,7 +554,10 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             for feature in template.windows_features:
                 await log(db, deployment, "post_install", f"installing Windows feature {feature}")
-                result = client.install_feature(feature)
+                result = await _run_with_heartbeat(
+                    db, deployment, "post_install", f"installing Windows feature {feature}",
+                    lambda f=feature: client.install_feature(f),
+                )
                 await log(
                     db,
                     deployment,
@@ -557,7 +593,11 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         f"?token={deployment.app_asset_access_token}"
                     )
                     remote_path = f"C:\\Windows\\Temp\\{app_asset.id}-{app_asset.filename}"
-                    result = client.install_app(download_url, remote_path, app_asset.kind.value, install_args)
+                    result = await _run_with_heartbeat(
+                        db, deployment, "post_install", f"installing {app_asset.name}",
+                        lambda u=download_url, p=remote_path, k=app_asset.kind.value, a=install_args:
+                            client.install_app(u, p, k, a),
+                    )
                     await log(
                         db,
                         deployment,
@@ -572,7 +612,10 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             for script in template.post_install_scripts:
                 await log(db, deployment, "post_install", f"running post-install script {script['name']}")
-                result = client.run_ps(script["script_text"])
+                result = await _run_with_heartbeat(
+                    db, deployment, "post_install", f"running post-install script {script['name']}",
+                    lambda s=script["script_text"]: client.run_ps(s),
+                )
                 await log(
                     db,
                     deployment,
@@ -587,9 +630,12 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             if template.domain_join_enabled and template.domain_join_timing == DomainJoinTiming.POST_INSTALL:
                 await log(db, deployment, "configuring", f"joining domain {template.domain_fqdn}")
-                result = client.join_domain(
-                    template.domain_fqdn, template.domain_join_account, template.domain_join_credential,
-                    template.domain_target_ou,
+                result = await _run_with_heartbeat(
+                    db, deployment, "configuring", f"joining domain {template.domain_fqdn}",
+                    lambda: client.join_domain(
+                        template.domain_fqdn, template.domain_join_account, template.domain_join_credential,
+                        template.domain_target_ou,
+                    ),
                 )
                 if not result.ok:
                     raise RuntimeError(f"domain join failed: {result.stderr}")

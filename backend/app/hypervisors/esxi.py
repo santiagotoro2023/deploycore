@@ -276,9 +276,27 @@ class ESXiDriver(HypervisorDriver):
             )
             if existing is None:
                 return
+            # Edit + swap the backing to "no media" (mirrors detach_iso's
+            # existing eject-not-remove pattern for VirtualCdrom, same
+            # RemotePassthroughBackingInfo-shaped empty state, just the
+            # VirtualFloppy-specific class), not Operation.remove: ESXi
+            # rejects removing a floppy device outright while the VM is
+            # powered on (vim.fault.InvalidPowerState, "cannot be
+            # performed in the current state (Powered on)"), confirmed on
+            # a real deployment - this call always runs right after the
+            # guest calls back, i.e. always while it's still running. The
+            # underlying answer-file image gets deleted from the datastore
+            # separately either way (_cleanup_answer_floppy), so the
+            # device itself lingering with nothing meaningful backing it
+            # is harmless - the plaintext password it once pointed to is
+            # gone regardless of whether the device entry is too.
             device_spec = vim.vm.device.VirtualDeviceSpec()
             device_spec.device = existing
-            device_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+            device_spec.device.backing = vim.vm.device.VirtualFloppy.RemoteDeviceBackingInfo()
+            device_spec.device.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
+            device_spec.device.connectable.connected = False
+            device_spec.device.connectable.startConnected = False
+            device_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
             config = vim.vm.ConfigSpec(deviceChange=[device_spec])
             WaitForTask(vm.ReconfigVM_Task(spec=config))
         finally:

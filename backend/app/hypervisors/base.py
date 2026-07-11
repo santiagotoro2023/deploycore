@@ -64,10 +64,14 @@ class HypervisorDriver(ABC):
 
     @abstractmethod
     async def detach_floppy(self, vm_ref: str, unit: int = 0) -> None:
-        """Removes the floppy device entirely (unlike detach_iso, which
-        ejects but keeps the CD-ROM device for potential reuse): the
-        answer-file floppy has exactly one job, delivering autounattend.xml
-        during Setup, and no purpose once the guest has called back."""
+        """Ejects the floppy's media (same eject-not-remove shape as
+        detach_iso, ESXi rejects actually removing a floppy device while
+        the VM is powered on, which this always runs while it still is):
+        the answer-file floppy has exactly one job, delivering
+        autounattend.xml during Setup, and no purpose once the guest has
+        called back. The underlying image is deleted from the datastore
+        separately either way, so an ejected, otherwise-empty device
+        entry lingering on the VM is harmless."""
 
     @abstractmethod
     async def set_boot_order(self, vm_ref: str, device_order: list[str]) -> None: ...
