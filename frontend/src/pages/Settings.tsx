@@ -285,6 +285,11 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 const CHECK_TIMEOUT_MS = 20000;
+const STAGE_ORDER = ["pulling", "building", "restarting", "finalizing", "done"];
+function stagePercent(stage: string): number {
+  const idx = STAGE_ORDER.indexOf(stage);
+  return idx === -1 ? 5 : Math.round(((idx + 1) / STAGE_ORDER.length) * 100);
+}
 
 function UpdatesPanel() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
@@ -292,8 +297,10 @@ function UpdatesPanel() {
   const [triggerError, setTriggerError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const checkBaselineRef = useRef<string | null>(null);
   const checkTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadedRef = useRef(false);
 
   async function load() {
     try {
@@ -321,11 +328,25 @@ function UpdatesPanel() {
     setTriggerError(null);
     try {
       await api.post("/settings/global/update/run");
+      reloadedRef.current = false;
+      setModalOpen(true);
       await load();
     } catch (err) {
       setTriggerError(err instanceof ApiError ? err.message : "Failed to start the update.");
     }
   }
+
+  useEffect(() => {
+    if (status && IN_PROGRESS_STAGES.has(status.stage)) setModalOpen(true);
+  }, [status?.stage]);
+
+  useEffect(() => {
+    if (modalOpen && status?.stage === "done" && !reloadedRef.current) {
+      reloadedRef.current = true;
+      const t = setTimeout(() => window.location.reload(), 1200);
+      return () => clearTimeout(t);
+    }
+  }, [modalOpen, status?.stage]);
 
   async function checkForUpdate() {
     setCheckError(null);
@@ -420,6 +441,40 @@ function UpdatesPanel() {
         onConfirm={triggerUpdate}
         onCancel={() => setConfirmUpdate(false)}
       />
+
+      {modalOpen && status && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="w-96 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-5 shadow-sm">
+            <h2 className="mb-4 text-sm font-semibold">
+              {status.stage === "failed" ? "Update failed" : status.stage === "done" ? "Update complete" : "Updating DeployCore"}
+            </h2>
+            <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+              <div
+                className={`h-full transition-all ${status.stage === "failed" ? "bg-red-600" : "bg-blue-600"}`}
+                style={{ width: `${stagePercent(status.stage)}%` }}
+              />
+            </div>
+            <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+              {status.stage === "failed"
+                ? status.error ?? "Update failed."
+                : status.stage === "done"
+                ? "Refreshing..."
+                : `${STAGE_LABELS[status.stage] ?? "Working..."} The app will be briefly unreachable while it restarts.`}
+            </p>
+            {status.stage === "failed" && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+                  onClick={() => setModalOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
