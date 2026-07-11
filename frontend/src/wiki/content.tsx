@@ -622,6 +622,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   timing, either <Code>answer_file</Code> (baked into the unattended install) or{" "}
                   <Code>post_install</Code> (joined afterward over WinRM).</>,
                 "A curated list of Windows roles/features, picked as checkboxes: AD Domain Services, DNS, DHCP, Web Server (IIS), Print Services, Remote Desktop Session Host, DFS Namespaces, DFS Replication.",
+                <><strong>Enable Remote Desktop during post-install</strong>, on by default: sets{" "}
+                  <Code>fDenyTSConnections=0</Code> and enables the built-in "Remote Desktop" firewall
+                  rule group over WinRM, no restart needed. On by default deliberately — WinRM itself is
+                  closed for good once post-install finishes (see "Unattended Windows Setup, in depth"),
+                  so a deployment with this off too would end up with no remote access at all once it's
+                  done.</>,
                 <>An ordered list of <strong>app installs</strong>, App Assets to install automatically
                   (see that article), with an optional argument override per attachment. Installed after
                   roles, before post-install scripts.</>,
@@ -629,13 +635,30 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               ]}
             />
             <P>
-              <strong>Important limitation:</strong> each role is installed with a plain{" "}
-              <Code>Install-WindowsFeature</Code>, nothing more. Checking "Active Directory Domain
-              Services" installs the AD DS role binaries only, it does <strong>not</strong> promote the
-              server to a domain controller and does <strong>not</strong> create or configure any Group
-              Policy Objects, OUs, or delegation. If you actually need a domain controller, you still need
-              to run <Code>Install-ADDSForest</Code> (or the classic <Code>dcpromo</Code> flow) and set up
-              GPOs through GPMC yourself afterward, nothing here is automated.
+              Every checked role installs together in a single{" "}
+              <Code>Install-WindowsFeature -Name @(...) -IncludeManagementTools</Code> call, not one call
+              per role, the same thing Server Manager's own "Add Roles and Features" wizard does — a
+              single DISM/CBS transaction, meaningfully faster than installing each one separately.{" "}
+              <Code>-IncludeManagementTools</Code> is always on: on a Desktop Experience (GUI) edition
+              this brings in the matching graphical console for whatever you checked (Active Directory
+              Users and Computers and Group Policy Management for AD DS, the DNS console, the DHCP
+              console, and so on), on Server Core it installs whatever's applicable instead (PowerShell
+              modules/CLI tools) and silently skips the GUI-only pieces rather than failing — matching
+              what installing through Server Manager's own GUI gives you by default either way, no
+              separate option needed. A verification pass (<Code>Get-WindowsFeature</Code>) confirms every
+              requested role actually ended up installed before anything else in post-install proceeds,
+              and one reboot happens automatically, before app installs, if any of them reported needing
+              one.
+            </P>
+            <P>
+              <strong>Important limitation:</strong> installing a role only installs that role's binaries
+              and management tools, nothing more. Checking "Active Directory Domain Services" installs the
+              AD DS role (and, per above, ADUC/GPMC if the edition has a GUI), it does{" "}
+              <strong>not</strong> promote the server to a domain controller and does{" "}
+              <strong>not</strong> create or configure any Group Policy Objects, OUs, or delegation. If you
+              actually need a domain controller, you still need to run <Code>Install-ADDSForest</Code>{" "}
+              (or the classic <Code>dcpromo</Code> flow, e.g. via a post-install script) and set up GPOs
+              through GPMC yourself afterward, nothing here is automated beyond the role install itself.
             </P>
             <P>
               Other things a template can do: <strong>Clone</strong> duplicates any visible template (your
@@ -1154,6 +1177,42 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   unusual character in a password, a role name, ...). <strong>View answer file</strong>{" "}
                   on the deployment's detail page shows the exact XML that shipped, compare it against
                   what you expected.</>,
+                <><strong>No auto-login yet, by design, for now.</strong> DeployCore doesn't currently log
+                  anyone in automatically after Windows Setup finishes (see "Unattended Windows Setup, in
+                  depth" for why - two different mechanisms tried were both found to reliably break Setup
+                  on real hardware, and were reverted rather than shipped broken). A deployment genuinely
+                  finishing installation will still sit at a plain login prompt, and{" "}
+                  <Code>FirstLogonCommands</Code> - which is what enables WinRM and sends the callback -
+                  only runs once a human physically logs in at the console. If a deployment seems stuck in{" "}
+                  <Code>installing_os</Code> for an unusually long time, check whether the VM is actually
+                  sitting at its login screen already; logging in once is often all it needs to continue.</>,
+                <><strong>Reached <Code>post_install</Code> but stuck on "waiting for guest IP
+                  address"?</strong> This only happens for a DHCP deployment whose guest never called back
+                  in the first place (it advanced via <Code>wait_for_callback</Code>'s WinRM-reachability
+                  fallback instead - see "Unattended Windows Setup, in depth"), and the hypervisor's own
+                  guest-IP lookup needs VMware Tools installed in the guest to report anything at all. A
+                  static deployment never hits this: its IP is already known outright. If this happens
+                  repeatedly on DHCP deployments, installing VMware Tools in the base image (or the
+                  template's own post-install scripts, though those run after this point so they can't
+                  help this specific case) is the actual fix; there isn't a hypervisor-side workaround for
+                  it today.</>,
+                <><strong>Static IP configured but the guest still shows DHCP after install?</strong>{" "}
+                  <Code>Microsoft-Windows-TCPIP</Code>'s <Code>Identifier</Code> matches the NIC by MAC
+                  address (assigned explicitly to the VM at creation time, see "Unattended Windows Setup,
+                  in depth"), not by interface name - matching by name turned out not to reliably match
+                  the real interface on real hardware, Setup wouldn't error, the static config would just
+                  silently never apply. If this ever recurs, <strong>View answer file</strong> and compare
+                  the <Code>Identifier</Code> value against the guest's actual NIC MAC address
+                  (Settings → Network & Internet → the adapter → Properties, in the guest) to see whether
+                  they still match.</>,
+                <><strong>The deployment's own log doesn't explain it at all?</strong> The UI log only
+                  shows what the code explicitly chose to report; a silent crash, an unexpected worker
+                  restart, or a job hitting an internal timeout won't show up there. On the DeployCore host
+                  itself: <Code>docker compose logs worker --tail 500</Code>, then search for the
+                  deployment's own id - this shows arq's own per-job start/finish/failure lines and full
+                  tracebacks, a strictly more complete picture than the curated deployment log, and was
+                  what actually found several real bugs during this project's own testing that the
+                  deployment log alone never surfaced.</>,
                 <><strong>Once you've found the cause</strong>, fix it (attach an ISO, correct the network
                   name, whatever it was) and use <strong>Retry</strong> on the deployment's detail page: it
                   always creates a completely fresh VM from <Code>pending</Code>, nothing from the failed
