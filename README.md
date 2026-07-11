@@ -715,7 +715,17 @@ pending → creating_vm → booting → installing_os → post_install → confi
   is deleted before the deployment is marked `failed`
 - Timeout: a background cron job force-fails any deployment stuck past its
   stage timeout (`os_install_timeout_minutes` setting, default 90, editable
-  per organization from Settings) and runs the same cleanup
+  per organization from Settings) and runs the same cleanup. This is
+  independent of, and a genuine safety net for, `worker/main.py`'s own
+  per-job `timeout` overrides on `run_deployment`/`wait_for_callback`
+  (arq's own default job timeout is 300 seconds, which silently killed
+  `wait_for_callback` mid-poll on real deployments before this was
+  caught and fixed - confirmed via the worker's own logs showing
+  `wait_for_callback failed, TimeoutError` at exactly 300.00s on a
+  deployment whose guest had, in fact, already called back successfully.
+  `run_post_install` runs inside `wait_for_callback`'s own job execution,
+  not a separately-enqueued one, so that ceiling has to cover both
+  phases combined)
 - Post-deploy health check: a cron job runs every 15 minutes against every
   completed deployment with a known VM, and checks a plain TCP connect to
   port 3389 (RDP, on by default on every Windows Server SKU) on its guest

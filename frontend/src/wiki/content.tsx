@@ -749,7 +749,15 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   the deployment completed.</>,
                 <>A stuck deployment (past its configured timeout, default 90 minutes, editable per
                   organization in Settings) is force-failed automatically by a background job, and cleaned
-                  up the same way a real failure would be.</>,
+                  up the same way a real failure would be. This is independent of, and a genuine safety
+                  net for, a separate fix: arq's own default per-job timeout is 300 seconds, which
+                  silently killed the worker job waiting on the callback mid-poll on real deployments
+                  before this was caught - a guest that had genuinely finished installing and called back
+                  successfully still sat in <Code>installing_os</Code> forever, because the job watching
+                  for that callback got forcibly cancelled five minutes in, every time, regardless of
+                  network conditions or anything else actually being wrong. That job (and the one it runs
+                  straight into once the callback lands, in the same execution, not a separately queued
+                  job) now has an explicit, much longer timeout of its own.</>,
                 <>A completed deployment gets a health check every 15 minutes, a TCP connect to port 3389
                   (RDP) on its guest IP, not WinRM, which is deliberately closed for good by this point, see
                   "Unattended Windows Setup, in depth." Up to 30 days of history is shown as a strip of

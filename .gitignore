@@ -11,3 +11,4 @@ data/isos/
 data/iso_build_tmp/
 .DS_Store
 ARCHITECTURE.md
+*.log
