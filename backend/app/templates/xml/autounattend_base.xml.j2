@@ -55,7 +55,18 @@
         <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
             <RunSynchronous>
 {% include "_specialize_enable_winrm.xml.j2" %}
-{% include "_specialize_install_vmware_tools.xml.j2" %}
+{#
+  _specialize_install_vmware_tools.xml.j2 temporarily NOT included:
+  a real deployment failed with "the computer was unexpectedly
+  restarted" (the classic specialize-pass-crashed-early signature)
+  immediately after this landed alongside _specialize_enable_winrm.xml.j2.
+  Isolating which of the two is actually responsible - this component
+  is the prime suspect (newest, most moving parts, and the only one
+  that deliberately triggers a Setup-level reboot via
+  WillReboot=Always, historically the source of this exact dialog in
+  this project). Re-include once a deployment confirms
+  _specialize_enable_winrm.xml.j2 alone is clean.
+#}
             </RunSynchronous>
         </component>
 {% if deployment.ip_mode == "static" and deployment.static_ip and static_prefix %}

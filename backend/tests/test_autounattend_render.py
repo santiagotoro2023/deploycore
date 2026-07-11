@@ -261,9 +261,12 @@ def test_specialize_pass_enables_winrm_without_a_login():
 
     # Off by default (no custom admin account configured): no need to set
     # LocalAccountTokenFilterPolicy, WinRM already authenticates fine as
-    # the built-in Administrator without it. 2 WinRM commands + 2 VMware
-    # Tools commands (install, then the WillReboot=Always trigger).
-    assert len(paths) == 4
+    # the built-in Administrator without it. _specialize_install_vmware_tools.xml.j2
+    # is temporarily not included (see autounattend_base.xml.j2's
+    # comment) while it's isolated as the suspect behind a real
+    # "computer was unexpectedly restarted" failure - just the 2 WinRM
+    # commands for now.
+    assert len(paths) == 2
 
 
 def test_specialize_pass_sets_token_filter_policy_for_custom_admin():
@@ -272,37 +275,19 @@ def test_specialize_pass_sets_token_filter_policy_for_custom_admin():
 
     deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
     paths = deployment_component.xpath(".//u:RunSynchronousCommand/u:Path/text()", namespaces=NS)
-    assert len(paths) == 5
+    assert len(paths) == 3
     assert any("LocalAccountTokenFilterPolicy" in p for p in paths)
 
 
-def test_specialize_pass_installs_vmware_tools_with_a_controlled_reboot():
-    """VMware Tools is what makes get_guest_ip (and so a DHCP deployment's
-    IP discovery, and the static-IP cross-check in run_post_install) work
-    at all - see esxi.py's create_vm/MountToolsInstaller and this file's
-    own comment. The installer's own exit code is deliberately never
-    trusted for WillReboot=OnRequest's 0/1/2 contract (anything else
-    terminates the whole Windows installation per that element's own
-    documented behavior) - forced to plain `exit /b 0` unconditionally
-    instead, with a separate, trivial, always-succeeding command right
-    after doing nothing but trigger the actual reboot via
-    WillReboot=Always, sequential Order with no gaps either way."""
-    template = _make_template()
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
-
-    deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
-    commands = deployment_component.xpath(".//u:RunSynchronousCommand", namespaces=NS)
-    orders = [int(c.xpath("string(u:Order)", namespaces=NS)) for c in commands]
-    assert orders == list(range(1, len(orders) + 1))  # sequential, no gaps
-
-    install_cmd, reboot_cmd = commands[-2], commands[-1]
-    install_path = install_cmd.xpath("string(u:Path)", namespaces=NS)
-    assert "setup64.exe" in install_path
-    assert "REBOOT=ReallySuppress" in install_path
-    assert install_path.rstrip().endswith("exit /b 0")
-    assert install_cmd.xpath("u:WillReboot", namespaces=NS) == []
-
-    assert reboot_cmd.xpath("string(u:WillReboot)", namespaces=NS) == "Always"
+# test_specialize_pass_installs_vmware_tools_with_a_controlled_reboot is
+# deliberately absent right now, not just skipped: _specialize_install_vmware_tools.xml.j2
+# isn't included in the rendered answer file at all while it's isolated
+# as the suspect behind a real "computer was unexpectedly restarted"
+# failure (see autounattend_base.xml.j2's comment). Re-add once a
+# deployment confirms _specialize_enable_winrm.xml.j2 alone is clean,
+# and either restore this file's original content once the tools
+# component is re-included, or dig further if it turns out to be
+# innocent too.
 
 
 def test_custom_admin_disabled_by_default_keeps_builtin_administrator():
