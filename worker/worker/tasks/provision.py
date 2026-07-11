@@ -45,6 +45,26 @@ CALLBACK_POLL_INTERVAL_SECONDS = 15
 # connection that often for nothing.
 FALLBACK_REACHABILITY_POLL_EVERY = 8  # ~2 minutes at CALLBACK_POLL_INTERVAL_SECONDS
 
+# Hard ceiling on a single WinRM reachability probe (_winrm_reachable
+# below). pywinrm has documented, long-standing gaps in its own timeout
+# handling (diyan/pywinrm#123, #274, #91 - operations and even the
+# initial connection can hang well past whatever read_timeout_sec is
+# configured, especially against a host with nothing listening on 5985
+# yet, exactly the normal state for most of a reachability-polling
+# loop's life, before FirstLogonCommands has run or after a reboot).
+# Without this, a single slow/hanging probe stalls whichever loop is
+# calling it for as long as pywinrm takes to give up, if it ever does -
+# for wait_for_callback's fallback specifically, that meant never
+# noticing a real callback landing while stuck on one probe, worse than
+# the network gap the fallback exists to work around in the first
+# place; for run_post_install's own reachability loops, it meant a
+# single stuck attempt silently defeating WINRM_REACHABILITY_MAX_ATTEMPTS
+# entirely instead of actually giving up after that many tries.
+# asyncio.to_thread + wait_for is what actually makes this enforceable:
+# a bare blocking call awaited directly can't be timed out at all once
+# started.
+WINRM_CHECK_TIMEOUT_SECONDS = 10
+
 # Phase 1: dismiss the "Press any key to boot from CD or DVD..." prompt,
 # which shows up once, early (around when set_boot_order's own 5s
 # bootDelay elapses, plus a couple seconds for the loader itself to read
@@ -314,6 +334,24 @@ async def run_deployment(ctx, deployment_id: str) -> None:
     await ctx["redis"].enqueue_job("wait_for_callback", deployment_id)
 
 
+async def _winrm_reachable(client: WinRMClient) -> bool:
+    """is_reachable() is synchronous/blocking (see WinRMClient's own
+    docstring: every method needs asyncio.to_thread), and pywinrm has
+    documented gaps in its own timeout handling (see
+    WINRM_CHECK_TIMEOUT_SECONDS) that can make even this hang well past
+    any configured read_timeout_sec against a host with nothing
+    listening yet. wait_for's timeout is what actually bounds this: the
+    awaiting task moves on within WINRM_CHECK_TIMEOUT_SECONDS regardless
+    of whether the background thread is still stuck. Any failure
+    (unreachable, a timeout, anything else) just means "not reachable
+    yet", same as pywinrm's own is_reachable() already treats its
+    failures - never raises."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(client.is_reachable), timeout=WINRM_CHECK_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 - a stuck or failed check just means "not reachable yet"
+        return False
+
+
 async def _guest_reachable_over_winrm(
     driver: HypervisorDriver, template: DeploymentTemplate, deployment: Deployment
 ) -> bool:
@@ -341,7 +379,7 @@ async def _guest_reachable_over_winrm(
         if not guest_ip:
             return False
         client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
-        return client.is_reachable()
+        return await _winrm_reachable(client)
     except Exception:  # noqa: BLE001 - best-effort fallback signal, any failure just means "not yet"
         return False
 
@@ -449,7 +487,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
             for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
-                if client.is_reachable():
+                if await _winrm_reachable(client):
                     break
                 await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
             else:
@@ -539,7 +577,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 pass
             await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
             for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
-                if client.is_reachable():
+                if await _winrm_reachable(client):
                     break
                 await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
             else:

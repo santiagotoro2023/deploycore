@@ -601,7 +601,17 @@ pending → creating_vm → booting → installing_os → post_install → confi
   report anything at all, and a static deployment already knows its own
   IP declaratively, no need to ask. If that fallback fires, a log entry
   says so explicitly rather than looking identical to a normal callback.
-  There is currently **no auto-logon mechanism at all**: two
+  The reachability check itself (`_winrm_reachable`, shared with
+  `run_post_install`'s own WinRM-wait loops below) always runs through
+  `asyncio.to_thread` with a hard `WINRM_CHECK_TIMEOUT_SECONDS` ceiling,
+  not a bare call: pywinrm has documented gaps in its own timeout
+  handling and can hang well past whatever it's configured with against
+  a host with nothing listening yet, the normal state for most of any of
+  these loops' lifetime - a real bug caught during testing, where a
+  single hanging check silently stalled `wait_for_callback` entirely
+  (never reacting to a callback that had, in fact, already landed) rather
+  than just failing that one attempt and moving on. There is currently
+  **no auto-logon mechanism at all**: two
   different attempts at it have each broken Setup outright on real
   hardware, both fully reverted. First, the declarative `AutoLogon`
   element (oobeSystem pass) - auto-logging in as whichever account

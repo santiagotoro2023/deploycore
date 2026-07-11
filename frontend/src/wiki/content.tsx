@@ -723,8 +723,15 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   else about the install succeeded). A static deployment's own declared IP is used
                   directly for that check rather than asking the hypervisor for one - that lookup needs
                   VMware Tools installed in the guest to report anything at all, and a static deployment
-                  already knows its address without asking. When the fallback is what actually advanced
-                  the deployment, the log says so explicitly.</>,
+                  already knows its address without asking. Every WinRM reachability check anywhere in
+                  this pipeline runs through <Code>asyncio.to_thread</Code> with a hard timeout, not a
+                  bare call - a real bug caught during testing: pywinrm has documented gaps in its own
+                  timeout handling and can hang well past whatever it's configured with against a host
+                  with nothing listening yet (the normal state for most of any reachability loop's
+                  lifetime), and a single hanging check was found silently stalling this exact fallback
+                  loop entirely - never reacting to a callback that had, in fact, already landed - rather
+                  than just failing that one attempt and moving on. When the fallback is what actually
+                  advanced the deployment, the log says so explicitly.</>,
                 <>A static deployment's IP/netmask/gateway/DNS are set declaratively in the answer file
                   itself (the specialize pass, before Windows Setup even finishes), not reconfigured
                   over WinRM afterward, that would mean connecting at whatever address DHCP handed out
