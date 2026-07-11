@@ -5,7 +5,7 @@ import winrm
 
 PS_HEADER = "$ProgressPreference = 'SilentlyContinue'; $ErrorActionPreference = 'Stop'; "
 
-# Delimits the machine-readable summary line install_feature appends
+# Delimits the machine-readable summary line install_features appends
 # after Install-WindowsFeature's own human-readable table output (which
 # still gets shown to the operator as-is): distinct enough that nothing
 # Windows itself would ever write to stdout could collide with it.
@@ -55,21 +55,34 @@ class WinRMClient:
             result.std_err.decode(errors="replace"),
         )
 
-    def install_feature(self, feature_name: str) -> FeatureInstallResult:
-        """Install-WindowsFeature's own table output is still shown to the
-        operator as-is (via the log line built from .stdout), but whether
-        it actually succeeded and whether it needs a restart to finish
-        weren't previously checked at all - $r.Success not being true
-        doesn't necessarily raise a terminating error on its own, so a
-        failed-but-non-throwing install could previously report .ok=True.
-        Appends a machine-readable marker line after the human table
-        (ConvertTo-Json -Compress, parsed back out below) to get both
-        Success and RestartNeeded reliably, and explicitly fails the
-        command (non-zero exit) when Success is false rather than relying
-        on Install-WindowsFeature to raise on its own."""
-        name = _ps_single_quote(feature_name)
+    def install_features(self, feature_names: list[str]) -> FeatureInstallResult:
+        """One Install-WindowsFeature call for every requested feature
+        together, not one call per feature: this is also what Server
+        Manager's own "Add Roles and Features" wizard does (select
+        several, click Install once), a single DISM/CBS transaction
+        rather than N separate ones with their own per-call overhead,
+        and it's what makes -IncludeManagementTools below actually mean
+        something across the whole set. -IncludeManagementTools is
+        always passed, not conditional on the edition having a GUI: on
+        Server Core it installs whatever's applicable (PowerShell
+        modules/CLI tools) and silently skips the GUI-only pieces that
+        can't run there rather than failing, confirmed - it's what
+        Server Manager's own wizard has checked by default either way.
+
+        Install-WindowsFeature's own table output is still shown to the
+        operator as-is (via the log line built from .stdout), but
+        whether it actually succeeded and whether it needs a restart to
+        finish weren't previously checked at all - $r.Success not being
+        true doesn't necessarily raise a terminating error on its own,
+        so a failed-but-non-throwing install could previously report
+        .ok=True. Appends a machine-readable marker line after the human
+        table (ConvertTo-Json -Compress, parsed back out below) to get
+        both Success and RestartNeeded reliably, and explicitly fails
+        the command (non-zero exit) when Success is false rather than
+        relying on Install-WindowsFeature to raise on its own."""
+        names_literal = ",".join(_ps_single_quote(name) for name in feature_names)
         script = f"""
-$r = Install-WindowsFeature -Name {name}
+$r = Install-WindowsFeature -Name @({names_literal}) -IncludeManagementTools
 $r
 $summary = [PSCustomObject]@{{ Success = $r.Success; RestartNeeded = [string]$r.RestartNeeded }} | ConvertTo-Json -Compress
 Write-Output "{_FEATURE_RESULT_MARKER}$summary"
@@ -154,6 +167,18 @@ if ($missing) {{
 
     def rename_computer(self, new_name: str) -> WinRMResult:
         return self.run_ps(f"Rename-Computer -NewName '{new_name}' -Force")
+
+    def enable_rdp(self) -> WinRMResult:
+        """fDenyTSConnections=0 alone doesn't open the firewall, and the
+        built-in "Remote Desktop" rule group is disabled by default
+        alongside it; both need doing, and neither needs a restart to
+        take effect - Terminal Services picks up the registry value on
+        the next connection attempt, not at boot."""
+        return self.run_ps(
+            "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' "
+            "-Name fDenyTSConnections -Value 0; "
+            "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'"
+        )
 
     def reboot(self) -> WinRMResult:
         return self.run_ps("Restart-Computer -Force")

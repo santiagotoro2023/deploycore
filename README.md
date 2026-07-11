@@ -697,31 +697,63 @@ pending → creating_vm → booting → installing_os → post_install → confi
   actual cause of a real deployment spinning here for the full
   `WINRM_REACHABILITY_MAX_ATTEMPTS` despite Setup and the callback having
   both already succeeded; authenticating as `template.local_admin_username`,
-  not the now-disabled built-in Administrator): install each configured
-  Windows feature (`WinRMClient.install_feature`, which now checks the
+  not the now-disabled built-in Administrator): install every configured
+  Windows feature in one call (`WinRMClient.install_features`, a single
+  `Install-WindowsFeature -Name @(...) -IncludeManagementTools`, not one
+  call per feature) - the same thing Server Manager's own "Add Roles and
+  Features" wizard does (select several, click Install once), a single
+  DISM/CBS transaction rather than N separate ones each with their own
+  overhead. `-IncludeManagementTools` is always on, not conditional on
+  the edition having a GUI: confirmed against Microsoft's own documented
+  behavior, on Server Core it installs whatever's applicable
+  (PowerShell/CLI tools) and silently skips the GUI-only pieces rather
+  than failing, so a Desktop Experience template gets ADUC, Group Policy
+  Management, the DNS/DHCP consoles, etc. right alongside whichever roles
+  pull them in, matching what installing through Server Manager's GUI
+  gives you by default. `install_features` also now checks the
   structured `Success`/`RestartNeeded` fields `Install-WindowsFeature`
   itself returns, not just whether the command ran without throwing -
-  those aren't the same thing, a feature can report `Success=False`
-  without ever raising a terminating error at all), then, once every
-  requested feature's own install has reported success,
-  `verify_windows_features_installed` runs one explicit `Get-WindowsFeature`
-  confirmation pass across all of them before anything else proceeds, and
-  if any feature reported needing a restart to finish, one reboot happens
-  right here (not per-feature: rebooting between every feature would mean
-  reconnecting over WinRM that many more times for no benefit) before
-  continuing to app installs. Then install each configured app asset in
+  those aren't the same thing, a feature set can report `Success=False`
+  without ever raising a terminating error at all - and once it reports
+  success, `verify_windows_features_installed` runs one explicit
+  `Get-WindowsFeature` confirmation pass across every requested feature
+  before anything else proceeds. If a restart was reported needed, one
+  reboot happens right here, before continuing to app installs. If
+  `template.enable_rdp` is on (the default: WinRM itself is deliberately
+  closed for good once post_install finishes, so leaving RDP off too
+  would mean no remote access at all afterward), `WinRMClient.enable_rdp`
+  sets `fDenyTSConnections=0` and enables the built-in "Remote Desktop"
+  firewall rule group - neither needs a restart to take effect. Then
+  install each configured app asset in
   order (the guest downloads each installer itself over
   `Invoke-WebRequest`, see the App Assets section above for the
   token/download flow, then runs it silently and deletes it), run each
   post-install script in order, join the domain here if configured for
   `post_install` timing, reboot, verify the guest comes back reachable.
-  Every one of those (feature installs, app installs, scripts, the
+  Every one of those (feature installs, RDP, app installs, scripts, the
   domain join) runs through `_run_with_heartbeat`, not a bare blocking
   WinRM call: a real Windows role install can legitimately take several
   minutes, and without a periodic "still running (Ns elapsed)" log line
   the deployment log otherwise goes completely silent for however long
   that takes, indistinguishable from a hang - confirmed as a real point
-  of confusion on an otherwise-successful deployment. Then, as the very
+  of confusion on an otherwise-successful deployment.
+- Feature installs and app installs both stay sequential, deliberately,
+  not parallelized across concurrent WinRM sessions: Windows Feature
+  installation already batches everything into one
+  `Install-WindowsFeature` call (above), which is the real, safe speedup
+  and the same one Server Manager's own wizard relies on - CBS
+  (Component-Based Servicing) itself only ever runs one feature
+  transaction at a time on a given machine regardless of how many
+  separate WinRM sessions tried to start one, so multiple concurrent
+  `Install-WindowsFeature` calls wouldn't actually run in parallel, they'd
+  just contend for the same lock. App installs have the same shape for
+  anything MSI-based: the Windows Installer service also only runs one
+  transaction at a time system-wide, a second concurrent `msiexec` just
+  fails with "another installation is already in progress" rather than
+  actually running alongside the first. Non-MSI EXE installers could
+  plausibly run concurrently, but not reliably enough across arbitrary,
+  operator-supplied installers to build automation around by default.
+  Then, as the very
   last WinRM action before
   marking `completed`: remove the WinRM firewall rule, `Disable-PSRemoting`,
   and stop+disable the WinRM service itself (the service stop runs in a

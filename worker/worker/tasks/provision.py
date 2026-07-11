@@ -374,7 +374,7 @@ async def _winrm_reachable(client: WinRMClient) -> bool:
 
 
 async def _run_with_heartbeat(db, deployment: Deployment, stage: str, description: str, blocking_call):
-    """Runs a blocking WinRMClient call (install_feature/install_app/
+    """Runs a blocking WinRMClient call (install_features/install_app/
     run_ps/join_domain - see WinRMClient's own docstring: every method is
     blocking, needs asyncio.to_thread) in a background thread, logging a
     "still running" heartbeat every HEARTBEAT_INTERVAL_SECONDS while it
@@ -572,16 +572,24 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             await _state_machine.transition(db, deployment, DeploymentState.POST_INSTALL)
 
-            # RestartNeeded is tracked across the whole loop, not acted on
-            # per-feature: rebooting between features would mean
-            # reconnecting over WinRM multiple times for no benefit, one
-            # reboot at the end covers every feature that asked for one.
-            features_need_restart = False
-            for feature in template.windows_features:
-                await log(db, deployment, "post_install", f"installing Windows feature {feature}")
+            if template.windows_features:
+                # One Install-WindowsFeature call for every requested
+                # feature together, not one call per feature (see
+                # WinRMClient.install_features): a single DISM/CBS
+                # transaction, meaningfully faster than N sequential ones,
+                # and what Server Manager's own "Add Roles and Features"
+                # wizard does. -IncludeManagementTools is always on inside
+                # that call, so a GUI edition gets ADUC, Group Policy
+                # Management, the DNS/DHCP consoles, etc. alongside
+                # whichever roles pull them in, matching what installing
+                # through Server Manager's GUI gives you by default.
+                await log(
+                    db, deployment, "post_install",
+                    f"installing Windows features: {', '.join(template.windows_features)}",
+                )
                 result = await _run_with_heartbeat(
-                    db, deployment, "post_install", f"installing Windows feature {feature}",
-                    lambda f=feature: client.install_feature(f),
+                    db, deployment, "post_install", "installing Windows features",
+                    lambda: client.install_features(template.windows_features),
                 )
                 await log(
                     db,
@@ -591,11 +599,8 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     level=LogLevel.INFO if result.ok else LogLevel.ERROR,
                 )
                 if not result.ok:
-                    raise RuntimeError(f"Install-WindowsFeature {feature} failed: {result.stderr}")
-                if result.restart_needed:
-                    features_need_restart = True
+                    raise RuntimeError(f"Install-WindowsFeature failed: {result.stderr}")
 
-            if template.windows_features:
                 await log(db, deployment, "post_install", "verifying installed Windows features")
                 verify_result = await _run_with_heartbeat(
                     db, deployment, "post_install", "verifying installed Windows features",
@@ -604,12 +609,23 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 if not verify_result.ok:
                     raise RuntimeError(f"feature verification failed: {verify_result.stderr}")
 
-            if features_need_restart:
-                await log(
-                    db, deployment, "post_install",
-                    "a feature install requires a restart, rebooting before continuing",
+                if result.restart_needed:
+                    await log(
+                        db, deployment, "post_install",
+                        "a feature install requires a restart, rebooting before continuing",
+                    )
+                    await _reboot_and_wait(
+                        client, "guest did not come back reachable after the feature-install reboot"
+                    )
+
+            if template.enable_rdp:
+                await log(db, deployment, "post_install", "enabling Remote Desktop")
+                rdp_result = await _run_with_heartbeat(
+                    db, deployment, "post_install", "enabling Remote Desktop",
+                    client.enable_rdp,
                 )
-                await _reboot_and_wait(client, "guest did not come back reachable after the feature-install reboot")
+                if not rdp_result.ok:
+                    raise RuntimeError(f"enabling Remote Desktop failed: {rdp_result.stderr}")
 
             if template.app_installs:
                 # Short-lived, cleared right after this block: authenticates

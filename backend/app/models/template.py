@@ -88,6 +88,14 @@ class DeploymentTemplate(UUIDPKMixin, TimestampMixin, Base):
         DomainJoinTiming, "domain_join_timing", default=DomainJoinTiming.ANSWER_FILE, nullable=False
     )
 
+    # On by default: most deployments are managed interactively at some
+    # point (even ones primarily driven over WinRM), and WinRM itself is
+    # deliberately closed for good once post_install finishes (see
+    # provision.py's run_post_install), so RDP left off by default would
+    # leave a freshly-deployed VM with no remote access at all once that
+    # happens.
+    enable_rdp: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
     windows_features: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     post_install_scripts: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     # Ordered list of {"app_asset_id": "<uuid str>", "install_args": "<str>"},

@@ -750,22 +750,48 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   genuine last resort the hypervisor's own guest-IP lookup, which needs VMware Tools
                   installed in the guest to report anything at all and was the actual cause, confirmed
                   live, of a real deployment spinning for a full ten minutes despite Setup and the
-                  callback having both already succeeded: install each selected Windows role, checking the
-                  structured <Code>Success</Code>/<Code>RestartNeeded</Code> fields{" "}
+                  callback having both already succeeded: install every selected Windows role in a{" "}
+                  <strong>single</strong> <Code>Install-WindowsFeature -Name @(...) -IncludeManagementTools</Code>{" "}
+                  call, not one call per role — the same thing Server Manager's own "Add Roles and
+                  Features" wizard does (select several, click Install once), a single DISM/CBS
+                  transaction rather than several separate ones. <Code>-IncludeManagementTools</Code> is
+                  always on, not conditional on the edition having a GUI: confirmed against Microsoft's
+                  own documented behavior, Server Core installs whatever's applicable (PowerShell/CLI
+                  tools) and silently skips the GUI-only pieces rather than failing, so a Desktop
+                  Experience template gets Active Directory Users and Computers, Group Policy Management,
+                  the DNS/DHCP consoles, and so on right alongside whichever roles pull them in — matching
+                  what installing through Server Manager's GUI gives you by default, on either edition.
+                  This also checks the structured <Code>Success</Code>/<Code>RestartNeeded</Code> fields{" "}
                   <Code>Install-WindowsFeature</Code> itself returns rather than just whether the command
-                  ran without throwing (not the same thing — a feature can report{" "}
-                  <Code>Success=False</Code> without ever raising a terminating error), then run one
+                  ran without throwing (not the same thing — a feature set can report{" "}
+                  <Code>Success=False</Code> without ever raising a terminating error), then runs one
                   explicit <Code>Get-WindowsFeature</Code> verification pass across every requested
-                  feature once they've all reported success, and reboot once — not per feature — if any
-                  of them asked for a restart, before moving on. Then install each attached app asset in
-                  order (see "App assets"), run post-install scripts in order, join the domain here if
-                  configured for that timing, reboot, verify it comes back reachable, then mark the
-                  deployment completed. Each of those steps — feature installs, app installs, scripts, the
-                  domain join — logs a "still running" heartbeat every 30 seconds while it hasn't finished
-                  yet, rather than the deployment log going silent for however long that guest-side
-                  command actually takes: a real Windows role install can legitimately run several
-                  minutes, and without this a genuinely-still-working deployment looked indistinguishable
-                  from a stuck one.</>,
+                  feature once installation reports success, and reboots once if a restart was reported
+                  needed, before moving on. If <Code>enable_rdp</Code> is on for the template (the
+                  default — WinRM itself is deliberately closed for good once post-install finishes, so
+                  leaving RDP off too would mean no remote access at all afterward), <Code>fDenyTSConnections</Code>{" "}
+                  gets set to <Code>0</Code> and the built-in "Remote Desktop" firewall rule group gets
+                  enabled here too, neither needing a restart to take effect. Then install each attached
+                  app asset in order (see "App assets"), run post-install scripts in order, join the
+                  domain here if configured for that timing, reboot, verify it comes back reachable, then
+                  mark the deployment completed. Each of those steps — the feature install, RDP, app
+                  installs, scripts, the domain join — logs a "still running" heartbeat every 30 seconds
+                  while it hasn't finished yet, rather than the deployment log going silent for however
+                  long that guest-side command actually takes: a real Windows role install can
+                  legitimately run several minutes, and without this a genuinely-still-working deployment
+                  looked indistinguishable from a stuck one.</>,
+                <>Role installs and app installs both stay sequential on purpose, not run in parallel
+                  across concurrent WinRM sessions: the single-call feature install above is the real,
+                  safe speedup, and it's already what Server Manager's own wizard does — Windows' own
+                  Component-Based Servicing only ever runs one feature transaction at a time on a given
+                  machine regardless of how many separate WinRM sessions tried to start one, so
+                  concurrent <Code>Install-WindowsFeature</Code> calls wouldn't actually install faster in
+                  parallel, they'd just contend for the same lock. App installs have the same shape for
+                  anything MSI-based: the Windows Installer service also only runs one transaction at a
+                  time system-wide, a second concurrent <Code>msiexec</Code> just fails with "another
+                  installation is already in progress" rather than actually running alongside the first.
+                  Non-MSI EXE installers could plausibly run concurrently, but not reliably enough across
+                  arbitrary, operator-supplied installers to build automation around by default.</>,
                 <>A stuck deployment (past its configured timeout, default 90 minutes, editable per
                   organization in Settings) is force-failed automatically by a background job, and cleaned
                   up the same way a real failure would be. This is independent of, and a genuine safety

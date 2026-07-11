@@ -269,6 +269,7 @@ function TemplateForm({
   const [timezone, setTimezone] = useState(existing?.timezone ?? "W. Europe Standard Time");
   const [keyboardLayout, setKeyboardLayout] = useState(existing?.keyboard_layout ?? "de-CH");
   const [customAdminEnabled, setCustomAdminEnabled] = useState(existing?.custom_admin_enabled ?? false);
+  const [enableRdp, setEnableRdp] = useState(existing?.enable_rdp ?? true);
   // When custom admin is off, the backend always stores "Administrator"
   // regardless of what was last typed here, that's not a useful starting
   // point if the operator flips the toggle on, offer the real default instead.
@@ -353,6 +354,7 @@ function TemplateForm({
       domain_fqdn: domainJoinEnabled ? domainFqdn : null,
       domain_join_account: domainJoinEnabled ? domainJoinAccount : null,
       domain_join_credential: domainJoinEnabled ? domainJoinCredential : null,
+      enable_rdp: enableRdp,
       windows_features: windowsFeatures,
       post_install_scripts: existing?.post_install_scripts ?? [],
       app_installs: appInstalls,
@@ -546,6 +548,11 @@ function TemplateForm({
             </label>
           ))}
         </div>
+
+        <label className="mb-3 flex items-center gap-1.5 text-xs text-neutral-700 dark:text-neutral-300">
+          <input type="checkbox" checked={enableRdp} onChange={(e) => setEnableRdp(e.target.checked)} />
+          Enable Remote Desktop during post-install
+        </label>
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Software to install</label>
         {appInstalls.length > 0 && (
