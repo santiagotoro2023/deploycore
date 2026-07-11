@@ -115,10 +115,11 @@ how many commits, refreshed automatically in the background every 5
 minutes; **Check for update** forces that check right now instead of
 waiting. Click **Update now** and DeployCore pulls the latest code from
 GitHub, rebuilds, runs any new database migrations, and restarts itself,
-automatically. The page shows live progress (Pulling → Building →
-Restarting → Done) and the app is only unreachable for the last part of that,
-usually under a minute. Nothing in your database is touched by an update
-itself.
+automatically. A modal opens with a progress bar tracking each stage
+(Pulling → Building → Restarting → Finalizing), and the page reloads
+itself automatically once the update reports done. The app is only
+unreachable for the last part of that, usually under a minute. Nothing in
+your database is touched by an update itself.
 
 This works because a small dedicated `updater` container in the stack has
 access to the Docker socket, i.e. it can tell your host's Docker daemon what
@@ -640,37 +641,41 @@ pending → creating_vm → booting → installing_os → post_install → confi
   specialize-pass step somehow didn't take for a given deployment) -
   redundant in the common case, harmless either way.
 
-  The same specialize pass also installs VMware Tools
-  (`_specialize_install_vmware_tools.xml.j2`), from the CD-ROM
-  `esxi.py`'s `create_vm` mounts via `vm.MountToolsInstaller()` right
-  after the VM is created (ESXi manages that device itself, no unit
-  number to track). This is what makes a **DHCP** deployment's guest IP
-  discoverable at all without VMware Tools already being present -
-  `HypervisorDriver.get_guest_ip()` has nothing to report without it, a
-  real deployment previously spun for the full
-  `WINRM_REACHABILITY_MAX_ATTEMPTS` on exactly that gap. The installer's
-  own exit code is deliberately never trusted for `WillReboot`'s
-  `OnRequest` 0/1/2 return-code contract (any other code terminates the
-  whole Windows installation per that element's own documented behavior);
-  instead the install command's exit code is unconditionally forced to 0
-  (best-effort, matching everything else in this pipeline that's "never
-  worth failing the whole deployment over"), and a separate, trivial,
-  always-succeeding command right after does nothing but trigger a
-  controlled reboot via `WillReboot=Always` - `REBOOT=ReallySuppress` on
-  the installer itself avoids Setup orchestrating an uncontrolled one
-  mid-install, but a real, documented VMXNET3 interaction means the
-  network driver update needs an actual restart to take effect cleanly or
-  the guest loses network access immediately ("RPC service unavailable").
-  Confirmed against Microsoft's own docs that Setup resumes any remaining
-  `RunSynchronousCommand` entries after a `WillReboot`-triggered restart.
-  For a **static** deployment, none of this is needed for IP discovery
-  (`deployment.static_ip` is already used directly, see `run_post_install`
-  above), but Tools gets installed anyway, and `run_post_install` uses it
-  for a one-time cross-check: if the guest-reported IP (once Tools is up)
-  doesn't match the configured static address, a `WARN`-level log line
-  says so - not a hard failure, a second NIC or Tools not having reported
-  yet aren't actually wrong, but worth an operator's attention if it
-  happens.
+  VMware Tools installs post-install, over WinRM, as the very first step
+  of `run_post_install` - before the static-IP cross-check, before any
+  Windows feature or app install, before the final reboot
+  (`WinRMClient.install_vmware_tools`). It used to run during the
+  specialize pass instead (`_specialize_install_vmware_tools.xml.j2`, a
+  `RunSynchronousCommand` pair), but that crashed Setup outright on a
+  real deployment ("the computer was unexpectedly restarted"); a WinRM
+  call after Setup has already finished and the OS is fully up carries
+  none of that risk, so that file is gone and the same install now runs
+  through the same channel already proven for `Install-WindowsFeature`.
+  It scans for `setup64.exe` on the CD-ROM `esxi.py`'s `create_vm` mounts
+  via `vm.MountToolsInstaller()` at VM creation (ESXi manages that device
+  itself, no unit number to track; Windows Setup's own install media
+  usually claims `D:`, so Tools typically lands on `E:` or `F:`), and
+  runs it with `REBOOT=ReallySuppress` - a real, documented VMXNET3
+  interaction means the network driver update needs an actual restart to
+  take effect cleanly, or the guest loses network access immediately
+  ("RPC service unavailable"). `run_post_install` does exactly one
+  controlled reboot right after, but only when something was actually
+  installed; if the ISO was never mounted (a non-ESXi host, say), it logs
+  that and moves on - always best-effort, never worth failing a
+  deployment over. This is what makes a **DHCP** deployment's guest IP
+  discoverable at all: `HypervisorDriver.get_guest_ip()` has nothing to
+  report without Tools present, and a real deployment previously spun for
+  the full `WINRM_REACHABILITY_MAX_ATTEMPTS` on exactly that gap (see the
+  IP-resolution note below - that gap is about the *earlier* step that
+  finds the guest's address in the first place, which still can't rely on
+  Tools, since Tools isn't installed until after it runs). For a
+  **static** deployment, none of this is needed for IP discovery
+  (`deployment.static_ip` is already used directly), but Tools gets
+  installed anyway, and the static-IP cross-check right after it runs
+  benefits from Tools now being up: if the guest-reported IP doesn't
+  match the configured static address, a `WARN`-level log line says so -
+  not a hard failure, a second NIC or Tools not having reported yet
+  aren't actually wrong, but worth an operator's attention if it happens.
 
   If `template.custom_admin_enabled` is on (off by default), two
   more commands render: `LocalAccountTokenFilterPolicy=1`
@@ -728,9 +733,13 @@ pending → creating_vm → booting → installing_os → post_install → confi
   Tools installed in the guest to report anything at all and was the
   actual cause of a real deployment spinning here for the full
   `WINRM_REACHABILITY_MAX_ATTEMPTS` despite Setup and the callback having
-  both already succeeded; authenticating as `template.local_admin_username`,
-  not the now-disabled built-in Administrator): install every configured
-  Windows feature in one call (`WinRMClient.install_features`, a single
+  both already succeeded - this fallback still can't rely on Tools, since
+  Tools isn't installed until the very next step, after a guest address is
+  already known one way or another; authenticating as
+  `template.local_admin_username`, not the now-disabled built-in
+  Administrator): install VMware Tools first, if present (see above), then
+  install every configured Windows feature in one call
+  (`WinRMClient.install_features`, a single
   `Install-WindowsFeature -Name @(...) -IncludeManagementTools`, not one
   call per feature) - the same thing Server Manager's own "Add Roles and
   Features" wizard does (select several, click Install once), a single
@@ -742,21 +751,38 @@ pending → creating_vm → booting → installing_os → post_install → confi
   than failing, so a Desktop Experience template gets ADUC, Group Policy
   Management, the DNS/DHCP consoles, etc. right alongside whichever roles
   pull them in, matching what installing through Server Manager's GUI
-  gives you by default. `install_features` also now checks the
-  structured `Success`/`RestartNeeded` fields `Install-WindowsFeature`
-  itself returns, not just whether the command ran without throwing -
-  those aren't the same thing, a feature set can report `Success=False`
-  without ever raising a terminating error at all - and once it reports
-  success, `verify_windows_features_installed` runs one explicit
-  `Get-WindowsFeature` confirmation pass across every requested feature
-  before anything else proceeds. If a restart was reported needed, one
-  reboot happens right here, before continuing to app installs. If
-  `template.enable_rdp` is on (the default: WinRM itself is deliberately
-  closed for good once post_install finishes, so leaving RDP off too
-  would mean no remote access at all afterward), `WinRMClient.enable_rdp`
-  sets `fDenyTSConnections=0` and enables the built-in "Remote Desktop"
-  firewall rule group - neither needs a restart to take effect. Then
-  install each configured app asset in
+  gives you by default. Before running it, `install_features` waits (up to
+  120s) for the `TrustedInstaller` service to go idle - a demand-start
+  service still busy right after first boot causes a transient
+  `0x80070020` (`ERROR_SHARING_VIOLATION`) that a bare retry can't
+  reliably outrun; `run_post_install` also keeps a 3-attempt/30s-apart
+  retry loop around the whole call as a safety net for that same error.
+  While it runs, the heartbeat that logs "still running (Ns elapsed)"
+  every 30s also polls `WinRMClient.get_feature_install_status` - over a
+  **separate** WinRM session, not the one running the install itself
+  (sharing one session corrupts NTLM's per-session sequence counters,
+  confirmed live as a `BadMICError` that crashed an entire install) - and
+  appends which of the requested roles have already finished, e.g.
+  `2/4 installed so far: DNS, AD-Domain-Services`. `install_features` also
+  checks the structured `Success`/`RestartNeeded` fields
+  `Install-WindowsFeature` itself returns, not just whether the command
+  ran without throwing - those aren't the same thing, a feature set can
+  report `Success=False` without ever raising a terminating error at all -
+  and once it reports success, `verify_windows_features_installed` runs
+  one explicit `Get-WindowsFeature` confirmation pass across every
+  requested feature before anything else proceeds. If a restart was
+  reported needed, one reboot happens right here, before continuing to app
+  installs. If `template.enable_rdp` is on (the default: WinRM itself is
+  deliberately closed for good once post_install finishes, so leaving RDP
+  off too would mean no remote access at all afterward),
+  `WinRMClient.enable_rdp` sets `fDenyTSConnections=0` and enables the
+  built-in Remote Desktop firewall rule group by its locale-independent
+  `Group` identifier (`@FirewallAPI.dll,-28752`), not the localized
+  `DisplayGroup` text - matching on the English display name ("Remote
+  Desktop") broke RDP enablement outright on non-English images, where
+  that group is named differently (e.g. "Remotedesktop" on German) -
+  neither needs a restart to take effect. Then install each configured app
+  asset in
   order (the guest downloads each installer itself over
   `Invoke-WebRequest`, see the App Assets section above for the
   token/download flow, then runs it silently and deletes it), run each
@@ -837,8 +863,22 @@ pending → creating_vm → booting → installing_os → post_install → confi
   always created
 - VM lifecycle (once a VM exists): live power state (read directly from the
   hypervisor, not cached), power on, shut down (graceful) or power off
-  (hard), delete VM (admin-only, deletes the VM on the hypervisor but
-  keeps the deployment record and its full history/log for audit)
+  (hard). There's no dedicated "delete just the VM" action in the UI -
+  remove it directly on the hypervisor if you want it gone without
+  deleting the deployment record too. **Delete deployment** (admin-only)
+  is a soft delete: it hides the deployment from lists/dashboard but
+  never touches the hypervisor, any VM that exists is simply left running,
+  untracked from that point on
+- On an actual deployment *failure*, cleanup is automatic: the VM that
+  failure's own deployment created is deleted on the hypervisor as part of
+  marking the deployment `failed` (`driver.delete_vm`, worker's `_fail()`).
+  ESXi's own `Destroy_Task` is supposed to remove the VM's datastore folder
+  along with everything else, but can leave an empty one behind on a
+  file-lock race right after power-off (a known class of ESXi/pyVmomi
+  issue, not specific to this project); `esxi.py`'s delete now follows up
+  with an explicit, best-effort `DeleteDatastoreFile_Task` on that folder
+  path, a no-op in the normal case where `Destroy_Task` already cleaned up
+  fully
 - List view: filter by state or hostname, paginated, and exportable to CSV
 
 ### Notifications

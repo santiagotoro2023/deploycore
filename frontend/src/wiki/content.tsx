@@ -623,11 +623,14 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   <Code>post_install</Code> (joined afterward over WinRM).</>,
                 "A curated list of Windows roles/features, picked as checkboxes: AD Domain Services, DNS, DHCP, Web Server (IIS), Print Services, Remote Desktop Session Host, DFS Namespaces, DFS Replication.",
                 <><strong>Enable Remote Desktop during post-install</strong>, on by default: sets{" "}
-                  <Code>fDenyTSConnections=0</Code> and enables the built-in "Remote Desktop" firewall
-                  rule group over WinRM, no restart needed. On by default deliberately — WinRM itself is
-                  closed for good once post-install finishes (see "Unattended Windows Setup, in depth"),
-                  so a deployment with this off too would end up with no remote access at all once it's
-                  done.</>,
+                  <Code>fDenyTSConnections=0</Code> and enables the built-in Remote Desktop firewall
+                  rule group over WinRM by its locale-independent <Code>Group</Code> identifier
+                  (<Code>@FirewallAPI.dll,-28752</Code>), not the localized <Code>DisplayGroup</Code>{" "}
+                  text — matching on the English display name broke RDP outright on non-English images,
+                  where that group is named differently (e.g. "Remotedesktop" on German). No restart
+                  needed. On by default deliberately — WinRM itself is closed for good once post-install
+                  finishes (see "Unattended Windows Setup, in depth"), so a deployment with this off too
+                  would end up with no remote access at all once it's done.</>,
                 <>An ordered list of <strong>app installs</strong>, App Assets to install automatically
                   (see that article), with an optional argument override per attachment. Installed after
                   roles, before post-install scripts.</>,
@@ -645,10 +648,18 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               console, and so on), on Server Core it installs whatever's applicable instead (PowerShell
               modules/CLI tools) and silently skips the GUI-only pieces rather than failing — matching
               what installing through Server Manager's own GUI gives you by default either way, no
-              separate option needed. A verification pass (<Code>Get-WindowsFeature</Code>) confirms every
-              requested role actually ended up installed before anything else in post-install proceeds,
-              and one reboot happens automatically, before app installs, if any of them reported needing
-              one.
+              separate option needed. Before the install call runs, DeployCore waits (up to 120s) for the
+              guest's <Code>TrustedInstaller</Code> service to go idle — right after first boot it can
+              still be busy from the image finishing up, and running into it mid-lock produces a transient{" "}
+              <Code>0x80070020</Code> error that a bare retry alone can't reliably outrun; a 3-attempt/
+              30s-apart retry stays in place as a safety net for that same error regardless. While the
+              install runs, the deployment log's periodic "still running" heartbeat also reports live
+              per-role progress (e.g. "2/4 installed so far: DNS, AD-Domain-Services"), polled over a{" "}
+              <em>separate</em> WinRM connection from the one actually running the install — sharing one
+              connection between the two corrupts NTLM's own message-signing state. A verification pass
+              (<Code>Get-WindowsFeature</Code>) confirms every requested role actually ended up installed
+              before anything else in post-install proceeds, and one reboot happens automatically, before
+              app installs, if any of them reported needing one.
             </P>
             <P>
               <strong>Important limitation:</strong> installing a role only installs that role's binaries
@@ -839,9 +850,14 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               is always created, nothing is reused, so this is always safe), or power the VM on/shut it
               down gracefully/power it off hard. There's no dedicated "delete just the VM" action, remove
               it directly on the hypervisor if you want it gone without deleting the deployment record
-              too. The <strong>Download full log</strong> button produces one plain-text file with the
-              deployment's details, full state history, and every log line, the fastest way to hand off a
-              failure to someone else or attach to a support ticket.
+              too - the one place a VM does get deleted automatically is on an actual deployment{" "}
+              <em>failure</em>, as part of marking it <Code>failed</Code>. On ESXi, that delete follows up{" "}
+              <Code>Destroy_Task</Code> with an explicit, best-effort cleanup of the VM's datastore
+              folder - <Code>Destroy_Task</Code> alone can occasionally leave an empty one behind on a
+              file-lock race right after power-off, a known class of ESXi/pyVmomi issue, not specific to
+              this project. The <strong>Download full log</strong> button produces one plain-text file
+              with the deployment's details, full state history, and every log line, the fastest way to
+              hand off a failure to someone else or attach to a support ticket.
             </P>
             <P>
               <strong>Delete deployment</strong> (admin only) is for cleaning up ones you don't need in
@@ -1069,35 +1085,36 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               the account that's actually used.
             </P>
             <P>
-              <strong>VMware Tools installs automatically too</strong>, in the same specialize pass (
-              <Code>_specialize_install_vmware_tools.xml.j2</Code>), from a CD-ROM{" "}
-              <Code>esxi.py</Code>'s <Code>create_vm</Code> mounts via vSphere's own{" "}
-              <Code>MountToolsInstaller()</Code> API right after the VM is created — no unit number to
-              track, ESXi manages that device itself. This is what makes a <strong>DHCP</strong> deployment's
-              guest IP discoverable at all without a human logging in: <Code>get_guest_ip()</Code> has
-              nothing to report without VMware Tools present, which is a real gap this session's own
-              testing hit directly (a deployment spinning for the full{" "}
-              <Code>WINRM_REACHABILITY_MAX_ATTEMPTS</Code> waiting on exactly that). The installer's exit
-              code is deliberately never trusted for <Code>WillReboot</Code>'s <Code>OnRequest</Code>{" "}
-              0/1/2 return-code contract — any other code terminates the entire Windows installation per
-              that element's own documented behavior, and mapping <Code>setup64.exe</Code>'s own exit
-              code correctly into that contract, in batch syntax, without a real test cycle to verify
-              against, was judged too risky. Instead the install command's own exit code is
-              unconditionally forced to <Code>0</Code> (best-effort, same philosophy as everything else in
-              this pipeline that's never worth failing the whole deployment over), and a separate,
-              trivial, always-succeeding command right after does nothing but trigger a controlled reboot
-              via <Code>WillReboot=Always</Code>. That reboot matters: <Code>REBOOT=ReallySuppress</Code>{" "}
-              on the installer itself avoids an uncontrolled restart mid-Setup, but a real, documented
-              VMXNET3 interaction means the network driver update needs an actual restart to take effect
-              cleanly, or the guest loses network access immediately ("RPC service unavailable") — exactly
-              why the follow-up command exists at all rather than leaving this for later. Confirmed against
-              Microsoft's own documentation that Setup resumes any remaining{" "}
-              <Code>RunSynchronousCommand</Code> entries after a <Code>WillReboot</Code>-triggered restart.
-              A static deployment doesn't need any of this for IP discovery (its address is already known
-              declaratively), but gets Tools installed anyway — <Code>run_post_install</Code> uses it for
-              a one-time cross-check afterward, comparing the guest-reported address against the
-              configured static one and logging a <Code>WARN</Code> (never a hard failure) if they don't
-              match.
+              <strong>VMware Tools installs automatically too</strong>, but over WinRM, post-install — as
+              the very first thing <Code>run_post_install</Code> does, before the static-IP cross-check,
+              before any role or app install. It used to run during the specialize pass instead (a{" "}
+              <Code>RunSynchronousCommand</Code> pair, since removed), but that crashed Setup outright on
+              a real deployment ("the computer was unexpectedly restarted") — a WinRM call, running only
+              once Setup has already finished and the OS is fully up, carries none of that risk, and
+              reuses the exact same channel already proven for role installs.{" "}
+              <Code>WinRMClient.install_vmware_tools</Code> scans for <Code>setup64.exe</Code> on whichever
+              CD-ROM <Code>esxi.py</Code>'s <Code>create_vm</Code> mounted the installer ISO on via
+              vSphere's own <Code>MountToolsInstaller()</Code> API at VM creation — no unit number to
+              track, ESXi manages that device itself; Windows Setup's own install media usually claims{" "}
+              <Code>D:</Code>, so Tools typically lands on <Code>E:</Code> or <Code>F:</Code>. This is what
+              makes a <strong>DHCP</strong> deployment's guest IP discoverable at all without a human
+              logging in: <Code>get_guest_ip()</Code> has nothing to report without VMware Tools present,
+              which is a real gap a deployment hit directly once (spinning for the full{" "}
+              <Code>WINRM_REACHABILITY_MAX_ATTEMPTS</Code> waiting on exactly that) — though the earlier
+              step that first resolves a guest address to open a WinRM connection at all still can't lean
+              on Tools either, since Tools isn't installed until after that step already has an address to
+              work with; the <Code>guest_reported_ip</Code> capture on the callback route is what actually
+              closed that particular gap. The installer runs with{" "}
+              <Code>REBOOT=ReallySuppress</Code>: a real, documented VMXNET3 interaction means its network
+              driver update needs an actual restart to take effect cleanly, or the guest loses network
+              access immediately ("RPC service unavailable"). <Code>run_post_install</Code> does exactly
+              one controlled reboot right after, but only when something was actually installed — if the
+              ISO was never mounted (a non-ESXi host, say), it logs that and moves straight on, always
+              best-effort, never worth failing a deployment over. A static deployment doesn't need any of
+              this for IP discovery (its address is already known declaratively), but gets Tools installed
+              anyway — the static-IP cross-check that runs right after benefits from Tools already being
+              up, comparing the guest-reported address against the configured static one and logging a{" "}
+              <Code>WARN</Code> (never a hard failure) if they don't match.
             </P>
             <P>
               A template's <strong>custom admin account</strong> toggle (Templates page, off by default)
@@ -1229,19 +1246,19 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   - logging in once should still make FirstLogonCommands run as a fallback), but the
                   common case no longer needs anyone to.</>,
                 <><strong>Reached <Code>post_install</Code> but stuck on "waiting for guest IP
-                  address"?</strong> DeployCore now installs VMware Tools automatically during the
-                  specialize pass specifically so this doesn't happen (a DHCP deployment's guest IP is
-                  only discoverable via VMware Tools reporting it, which needs Tools installed - a real
-                  deployment previously spun on exactly this gap before that existed). If it still
-                  happens: check whether VMware Tools actually finished installing in the guest (Programs
-                  and Features, or <Code>Get-Service VMTools</Code> once you can reach it another way) -
-                  the CD-ROM it installs from is mounted via ESXi's own <Code>MountToolsInstaller()</Code>{" "}
-                  API and the installer is run silently during specialize, both best-effort steps that log
-                  a failure but never block the deployment if either one didn't work for some reason (a
-                  datastore issue mounting the installer ISO, an unexpected drive letter, etc.). A static
-                  deployment never hits this at all: its IP is already known outright, VMware Tools isn't
-                  needed for discovery, only for the optional post-install cross-check against the
-                  configured address.</>,
+                  address"?</strong> This step tries <Code>deployment.static_ip</Code>, then{" "}
+                  <Code>guest_reported_ip</Code> (captured straight from the callback request's own
+                  source address the moment it lands, no VMware Tools needed), and only as a last resort
+                  asks the hypervisor via <Code>get_guest_ip()</Code> - which does need VMware Tools
+                  installed and running in the guest to report anything at all. Tools itself doesn't
+                  install until <em>after</em> this step already has an address to open a WinRM connection
+                  with, so it can't help this particular wait either way - a real deployment previously
+                  spun on exactly this gap, which is what the <Code>guest_reported_ip</Code> capture was
+                  actually added to close. If it still happens: it means neither a static IP nor a landed
+                  callback got you here, which usually points at a network path problem between the guest
+                  and DeployCore rather than anything about Tools - check that the guest can actually reach
+                  DeployCore's callback URL. A static deployment never hits this at all: its IP is already
+                  known outright.</>,
                 <><strong>Static IP configured but the guest still shows DHCP after install?</strong>{" "}
                   <Code>Microsoft-Windows-TCPIP</Code>'s <Code>Identifier</Code> matches the NIC by MAC
                   address (assigned explicitly to the VM at creation time, see "Unattended Windows Setup,
@@ -1477,10 +1494,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             </P>
             <P>
               Clicking <strong>Update now</strong> pulls the latest code from GitHub, rebuilds, runs any
-              new database migrations, and restarts, with a live staged progress indicator (Pulling →
-              Building → Restarting → Done). The app is only unreachable for the last part of that,
-              usually well under a minute, and nothing in your database is touched by the update process
-              itself beyond the migrations it's supposed to run.
+              new database migrations, and restarts. A modal opens over the page, matching the same style
+              used for ISO uploads, with a progress bar tracking each stage (Pulling → Building →
+              Restarting → Finalizing) - the page reloads itself automatically once it reports done, no
+              manual refresh needed. The app is only unreachable for the last part of that, usually well
+              under a minute, and nothing in your database is touched by the update process itself beyond
+              the migrations it's supposed to run.
             </P>
             <P>
               This works because a small dedicated <Code>updater</Code> container in the stack has access
