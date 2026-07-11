@@ -414,6 +414,29 @@ async def _run_with_heartbeat(db, deployment: Deployment, stage: str, descriptio
     return await task
 
 
+async def _run_post_install_scripts(db, deployment: Deployment, client: WinRMClient, scripts: list[dict]) -> None:
+    """Shared by DiskLayout.post_install_scripts and
+    DeploymentTemplate.post_install_scripts - same {name, script_text}
+    shape, same run-over-WinRM-in-order semantics, only the source
+    differs. Stops (raises) on the first failure: unlike app installs,
+    these commonly include disk/partition operations where continuing
+    past a failed step could make things worse, not just skip a step."""
+    for script in scripts:
+        await log(db, deployment, "post_install", f"running post-install script {script['name']}")
+        result = await _run_with_heartbeat(
+            db, deployment, "post_install", f"running post-install script {script['name']}",
+            lambda s=script["script_text"]: client.run_ps(s),
+        )
+        await log(
+            db, deployment, "post_install",
+            result.stdout or result.stderr,
+            level=LogLevel.INFO if result.ok else LogLevel.ERROR,
+        )
+        if not result.ok:
+            raise RuntimeError(f"post-install script {script['name']} failed: {result.stderr}")
+        await log(db, deployment, "post_install", f"post-install script {script['name']} completed")
+
+
 async def _reboot_and_wait(client: WinRMClient, failure_message: str) -> None:
     """Fire-and-forget the restart (the guest tearing down the WinRM
     connection mid-command is expected, not an error) then wait for it to
@@ -552,6 +575,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
         if template is None:
             await _fail(ctx, db, driver, deployment, "the template this deployment was created from has since been deleted")
             return
+        disk_layout = await db.get(DiskLayout, template.disk_layout_id)
 
         try:
             # Three sources, in order of how little they depend on
@@ -593,7 +617,15 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             await _state_machine.transition(db, deployment, DeploymentState.POST_INSTALL)
 
-            # First post-install step, ahead of roles/features/apps: makes
+            # Disk layout's own post-install scripts run before literally
+            # everything else, including VMware Tools: these exist for
+            # disk/partition fixups (diskpart, DISM, reagentc, bcdedit -
+            # see DiskLayout.post_install_scripts) that need a pristine,
+            # freshly-booted disk, before anything else (a Tools driver
+            # update and its reboot, a feature install) touches it.
+            await _run_post_install_scripts(db, deployment, client, disk_layout.post_install_scripts)
+
+            # First post-install step after that, ahead of roles/features/apps: makes
             # the static-IP cross-check below (and any future use of
             # driver.get_guest_ip) actually have something to report, and
             # gets VMware's own driver/integration updates in place before
@@ -702,6 +734,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 )
                 if not verify_result.ok:
                     raise RuntimeError(f"feature verification failed: {verify_result.stderr}")
+                await log(db, deployment, "post_install", "Windows features installed and verified")
 
                 if result.restart_needed:
                     await log(
@@ -720,6 +753,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 )
                 if not rdp_result.ok:
                     raise RuntimeError(f"enabling Remote Desktop failed: {rdp_result.stderr}")
+                await log(db, deployment, "post_install", "Remote Desktop enabled")
 
             if template.app_installs:
                 # Short-lived, cleared right after this block: authenticates
@@ -760,24 +794,11 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     )
                     if not result.ok:
                         raise RuntimeError(f"installing {app_asset.name} failed (exit {result.status_code}): {result.stderr}")
+                    await log(db, deployment, "post_install", f"{app_asset.name} installed")
                 deployment.app_asset_access_token = None
                 await db.commit()
 
-            for script in template.post_install_scripts:
-                await log(db, deployment, "post_install", f"running post-install script {script['name']}")
-                result = await _run_with_heartbeat(
-                    db, deployment, "post_install", f"running post-install script {script['name']}",
-                    lambda s=script["script_text"]: client.run_ps(s),
-                )
-                await log(
-                    db,
-                    deployment,
-                    "post_install",
-                    result.stdout or result.stderr,
-                    level=LogLevel.INFO if result.ok else LogLevel.ERROR,
-                )
-                if not result.ok:
-                    raise RuntimeError(f"post-install script {script['name']} failed: {result.stderr}")
+            await _run_post_install_scripts(db, deployment, client, template.post_install_scripts)
 
             await _state_machine.transition(db, deployment, DeploymentState.CONFIGURING)
 
@@ -792,6 +813,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 )
                 if not result.ok:
                     raise RuntimeError(f"domain join failed: {result.stderr}")
+                await log(db, deployment, "configuring", f"joined domain {template.domain_fqdn}")
 
             await log(db, deployment, "configuring", "rebooting to finalize configuration")
             await _reboot_and_wait(client, "guest did not come back reachable after the post-install reboot")

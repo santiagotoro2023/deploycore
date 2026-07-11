@@ -50,6 +50,7 @@ export interface DiskLayout {
   org_id: string | null;
   name: string;
   layout_json: DiskLayoutJson;
+  post_install_scripts: { name: string; script_text: string }[];
 }
 
 export type IsoKind = "windows_iso" | "virtio_iso";

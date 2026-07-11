@@ -3,7 +3,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict
 
 from app.models.template import DiskProvisioning, DomainJoinTiming, NetworkAdapterType
-from app.schemas.disk_layout import DiskLayoutJson
+from app.schemas.disk_layout import DiskLayoutJson, PostInstallScript
 
 # Windows reserves these local account names (the built-in Administrator
 # and Guest accounts, plus the two accounts newer Windows 10/11 SKUs also
@@ -13,11 +13,6 @@ from app.schemas.disk_layout import DiskLayoutJson
 # api/routes/templates.py, not here: whether it applies at all depends on
 # custom_admin_enabled, a sibling field a single-field validator can't see.
 RESERVED_LOCAL_ACCOUNT_NAMES = {"administrator", "guest", "defaultaccount", "wdagutilityaccount"}
-
-
-class PostInstallScript(BaseModel):
-    name: str
-    script_text: str
 
 
 class AppInstallEntry(BaseModel):

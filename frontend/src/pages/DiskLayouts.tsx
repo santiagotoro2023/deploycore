@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable from "../components/DataTable";
+import PostInstallScriptsEditor, { PostInstallScriptForm } from "../components/PostInstallScriptsEditor";
 import Select from "../components/Select";
 import { downloadJson, readJsonFile } from "../lib/jsonFile";
 import { DiskLayout } from "../api/types";
@@ -210,6 +211,7 @@ function DiskLayoutForm({
   const [extraVolumes, setExtraVolumes] = useState<ExtraVolumeForm[]>(existing?.layout_json.extra_volumes ?? []);
   const [recoveryEnabled, setRecoveryEnabled] = useState(!!existing?.layout_json.recovery_size_mb);
   const [recoverySizeMb, setRecoverySizeMb] = useState(existing?.layout_json.recovery_size_mb ?? 1000);
+  const [postInstallScripts, setPostInstallScripts] = useState<PostInstallScriptForm[]>(existing?.post_install_scripts ?? []);
   const [error, setError] = useState<string | null>(null);
 
   function addVolume() {
@@ -240,6 +242,7 @@ function DiskLayoutForm({
         os_volume: osVolumeMode === "remaining" ? "remaining" : { size_mb: osVolumeSizeMb },
         extra_volumes: extraVolumes,
       },
+      post_install_scripts: postInstallScripts,
     };
     try {
       if (isEdit) {
@@ -255,7 +258,7 @@ function DiskLayoutForm({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/30 py-8">
-      <form noValidate onSubmit={onSubmit} className="w-[28rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
+      <form noValidate onSubmit={onSubmit} className="w-[32rem] rounded-lg border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
         <h2 className="mb-4 text-sm font-semibold">{isEdit ? `Edit ${existing!.name}` : "New disk layout"}</h2>
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
         <input
@@ -370,6 +373,15 @@ function DiskLayoutForm({
               </button>
             </div>
           ))}
+        </div>
+
+        <div className="mb-3">
+          <PostInstallScriptsEditor scripts={postInstallScripts} onChange={setPostInstallScripts} />
+          <p className="mt-1 text-xs text-neutral-500">
+            Run over WinRM before anything else in post-install (VMware Tools, roles, apps) - for
+            disk/partition fixups (diskpart, DISM, reagentc, bcdedit) that need a pristine, freshly-booted
+            disk. A failure stops the deployment rather than continuing past it.
+          </p>
         </div>
 
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}

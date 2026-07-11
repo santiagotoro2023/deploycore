@@ -38,7 +38,12 @@ async def create_disk_layout(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DiskLayout:
-    layout = DiskLayout(org_id=org_id, name=body.name, layout_json=body.layout.model_dump())
+    layout = DiskLayout(
+        org_id=org_id,
+        name=body.name,
+        layout_json=body.layout.model_dump(),
+        post_install_scripts=[s.model_dump() for s in body.post_install_scripts],
+    )
     db.add(layout)
     await db.flush()
     audit.record(
@@ -74,6 +79,8 @@ async def update_disk_layout(
         layout.name = body.name
     if body.layout is not None:
         layout.layout_json = body.layout.model_dump()
+    if body.post_install_scripts is not None:
+        layout.post_install_scripts = [s.model_dump() for s in body.post_install_scripts]
     audit.record(
         db, action="disk_layout.update", target_type="disk_layout", org_id=org_id,
         user_id=current_user.id, target_id=layout.id,
@@ -126,7 +133,7 @@ async def export_disk_layout(
         user_id=current_user.id, target_id=layout.id,
     )
     await db.commit()
-    return {"name": layout.name, "layout": layout.layout_json}
+    return {"name": layout.name, "layout": layout.layout_json, "post_install_scripts": layout.post_install_scripts}
 
 
 @router.post(
@@ -141,7 +148,12 @@ async def import_disk_layout(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DiskLayout:
-    layout = DiskLayout(org_id=org_id, name=body.name, layout_json=body.layout.model_dump())
+    layout = DiskLayout(
+        org_id=org_id,
+        name=body.name,
+        layout_json=body.layout.model_dump(),
+        post_install_scripts=[s.model_dump() for s in body.post_install_scripts],
+    )
     db.add(layout)
     await db.flush()
     audit.record(
@@ -164,7 +176,12 @@ async def create_global_disk_layout(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DiskLayout:
-    layout = DiskLayout(org_id=None, name=body.name, layout_json=body.layout.model_dump())
+    layout = DiskLayout(
+        org_id=None,
+        name=body.name,
+        layout_json=body.layout.model_dump(),
+        post_install_scripts=[s.model_dump() for s in body.post_install_scripts],
+    )
     db.add(layout)
     await db.flush()
     audit.record(

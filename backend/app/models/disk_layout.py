@@ -15,3 +15,10 @@ class DiskLayout(UUIDPKMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     layout_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Same {name, script_text} shape as DeploymentTemplate.post_install_scripts,
+    # run over WinRM in list order - but as the very first thing
+    # run_post_install does, before VMware Tools/roles/apps/the template's
+    # own scripts, since these exist for disk/partition fixups (diskpart,
+    # DISM, reagentc, bcdedit) that need to happen before anything else
+    # touches the disk.
+    post_install_scripts: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)

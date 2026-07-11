@@ -4,6 +4,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 
+class PostInstallScript(BaseModel):
+    name: str
+    script_text: str
+
+
 class ExtraVolume(BaseModel):
     label: str
     drive_letter: str
@@ -30,11 +35,13 @@ class DiskLayoutJson(BaseModel):
 class DiskLayoutCreate(BaseModel):
     name: str
     layout: DiskLayoutJson
+    post_install_scripts: list[PostInstallScript] = []
 
 
 class DiskLayoutUpdate(BaseModel):
     name: str | None = None
     layout: DiskLayoutJson | None = None
+    post_install_scripts: list[PostInstallScript] | None = None
 
 
 class DiskLayoutRead(BaseModel):
@@ -44,3 +51,4 @@ class DiskLayoutRead(BaseModel):
     org_id: uuid.UUID | None
     name: str
     layout_json: dict
+    post_install_scripts: list[PostInstallScript]

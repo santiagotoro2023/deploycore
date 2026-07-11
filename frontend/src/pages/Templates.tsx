@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable from "../components/DataTable";
+import PostInstallScriptsEditor, { PostInstallScriptForm } from "../components/PostInstallScriptsEditor";
 import Select from "../components/Select";
 import { downloadJson, readJsonFile } from "../lib/jsonFile";
 import { AppAsset, AppInstallEntry, DeploymentTemplate, DiskLayout, DiskProvisioning, IsoAsset, NetworkAdapterType } from "../api/types";
@@ -287,6 +288,7 @@ function TemplateForm({
   const [domainJoinCredential, setDomainJoinCredential] = useState("");
   const [windowsFeatures, setWindowsFeatures] = useState<string[]>(existing?.windows_features ?? []);
   const [appInstalls, setAppInstalls] = useState<AppInstallEntry[]>(existing?.app_installs ?? []);
+  const [postInstallScripts, setPostInstallScripts] = useState<PostInstallScriptForm[]>(existing?.post_install_scripts ?? []);
   const [appToAdd, setAppToAdd] = useState(appAssets[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
 
@@ -360,7 +362,7 @@ function TemplateForm({
       domain_join_credential: domainJoinEnabled ? domainJoinCredential : null,
       enable_rdp: enableRdp,
       windows_features: windowsFeatures,
-      post_install_scripts: existing?.post_install_scripts ?? [],
+      post_install_scripts: postInstallScripts,
       app_installs: appInstalls,
     };
     try {
@@ -606,6 +608,13 @@ function TemplateForm({
           <button type="button" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700" onClick={addAppInstall} disabled={!appToAdd}>
             Add
           </button>
+        </div>
+
+        <div className="mb-3">
+          <PostInstallScriptsEditor scripts={postInstallScripts} onChange={setPostInstallScripts} />
+          <p className="mt-1 text-xs text-neutral-500">
+            Run over WinRM after Windows features and app installs, before the domain join below.
+          </p>
         </div>
 
         <label className="mb-2 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">

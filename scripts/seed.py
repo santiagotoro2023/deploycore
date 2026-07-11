@@ -49,7 +49,18 @@ async def seed() -> None:
         disk_layout = DiskLayout(
             org_id=org.id,
             name="Standard 100GB",
-            layout_json={"efi_size_mb": 500, "msr_size_mb": 128, "os_volume": "remaining", "extra_volumes": []},
+            # recovery_size_mb set (not None/omitted): places the WinRE
+            # recovery partition between MSR and the OS volume instead of
+            # leaving Windows Setup to append its own at the end of the
+            # disk - the "disk layout from hell" problem (a trailing
+            # recovery partition blocking C: from ever being extended
+            # later) never happens in the first place, since C: stays the
+            # last partition on disk. 1024 (1GB) matches current Windows
+            # Server WinRE image sizes with headroom.
+            layout_json={
+                "efi_size_mb": 500, "msr_size_mb": 128, "recovery_size_mb": 1024,
+                "os_volume": "remaining", "extra_volumes": [],
+            },
         )
         db.add(disk_layout)
         await db.flush()
