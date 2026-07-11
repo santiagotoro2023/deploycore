@@ -621,10 +621,18 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     db, deployment, "post_install",
                     f"installing Windows features: {', '.join(template.windows_features)}",
                 )
-                result = await _run_with_heartbeat(
-                    db, deployment, "post_install", "installing Windows features",
-                    lambda: client.install_features(template.windows_features),
-                )
+                # ponytail: 0x80070020 (ERROR_SHARING_VIOLATION) right after
+                # first boot is a well-known transient servicing-stack lock
+                # (TrustedInstaller/CBS still settling), not a real failure -
+                # 3 tries, 30s apart, before giving up for real.
+                for attempt in range(3):
+                    result = await _run_with_heartbeat(
+                        db, deployment, "post_install", "installing Windows features",
+                        lambda: client.install_features(template.windows_features),
+                    )
+                    if result.ok or "0x80070020" not in (result.stderr or ""):
+                        break
+                    await asyncio.sleep(30)
                 await log(
                     db,
                     deployment,
