@@ -93,7 +93,17 @@ async def _create_one(
         static_netmask=static_netmask,
         static_gateway=static_gateway,
         static_dns=static_dns,
-        callback_token=secrets.token_urlsafe(32),
+        # Lowercase hex, not token_urlsafe: this ends up needing to be
+        # manually read off a screen and typed in more often than most
+        # tokens in this codebase, debugging a stuck deployment on a
+        # console with no clipboard access being exactly when it matters
+        # most. hex has no case-sensitivity to get wrong and none of
+        # base64url's visually ambiguous pairs (0/O, 1/l/I). 8 bytes (64
+        # bits) is still far beyond brute-force reach for a single-use
+        # token that's only ever valid during one deployment's install
+        # window, just short enough to type by hand without every
+        # character being a fresh chance to transpose something.
+        callback_token=secrets.token_hex(8),
         created_by_user_id=current_user.id,
     )
     db.add(deployment)

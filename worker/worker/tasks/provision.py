@@ -13,7 +13,7 @@ from app.hypervisors import get_driver
 from app.hypervisors.base import HypervisorDriver, VmSpec
 from app.hypervisors.defaults import HYPERVISOR_DEFAULTS, generate_mac_address
 from app.models.app_asset import AppAsset
-from app.models.deployment import Deployment, DeploymentState, LogLevel
+from app.models.deployment import Deployment, DeploymentState, IpMode, LogLevel
 from app.models.disk_layout import DiskLayout
 from app.models.hypervisor import HypervisorHost
 from app.models.iso_asset import IsoAsset, IsoKind
@@ -324,9 +324,20 @@ async def _guest_reachable_over_winrm(
     never got through. Any failure here (no guest IP yet, unreachable,
     a hypervisor API hiccup) just means "not yet", same as the normal
     callback wait - this is a backup path, not the primary signal, and
-    should never itself raise or fail the deployment."""
+    should never itself raise or fail the deployment.
+
+    A static deployment's IP is already known outright (it's declarative,
+    set in the answer file, not learned from anything) - use it directly
+    rather than driver.get_guest_ip(), which depends on VMware Tools being
+    installed in the guest to report anything at all. If it isn't (this
+    fallback exists specifically for environments already showing signs
+    of that kind of gap), get_guest_ip() would otherwise make this
+    fallback silently useless for every deployment on that host, static
+    IP or not, without this check ever telling anyone why."""
     try:
-        guest_ip = await driver.get_guest_ip(deployment.vm_moref)
+        guest_ip = deployment.static_ip if deployment.ip_mode == IpMode.STATIC else None
+        if not guest_ip:
+            guest_ip = await driver.get_guest_ip(deployment.vm_moref)
         if not guest_ip:
             return False
         client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)

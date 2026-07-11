@@ -701,22 +701,30 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   progress inside WinPE/Setup at all, so this state simply covers that entire black-box
                   window rather than staying <Code>booting</Code> for it and jumping straight to done. The
                   guest calls back to DeployCore once Windows Setup actually finishes (a single-use token
-                  per deployment, <Code>callback_token_used</Code>, checked rather than the state itself,
-                  since the state was already <Code>installing_os</Code> before the callback exists to
-                  react to). That callback is the point DeployCore is sure Setup is done with the install
-                  media for good: it ejects the Windows/VirtIO ISOs, removes the floppy device, and deletes
-                  the per-deployment answer-file floppy from the datastore, all best-effort and never worth
-                  failing an otherwise-successful deployment over. Nothing from here on (post-install runs
-                  entirely over WinRM) needs any of it. The wait for that callback isn't all-or-nothing,
-                  though: every couple of minutes (far less often than the poll itself, no reason to
-                  check any more eagerly while Setup is still in its much longer earlier phases) it also
-                  checks whether the guest has become reachable over WinRM directly, which the very same{" "}
-                  <Code>FirstLogonCommands</Code> batch enables before it ever sends the callback - so a
-                  guest answering over WinRM is treated as equally good evidence the install finished,
-                  even if the callback's own outbound request never actually landed (a firewall or
-                  network-segmentation gap between the guest's network and DeployCore's, for instance,
-                  can block just that one call while everything else about the install succeeded). When
-                  that fallback is what actually advanced the deployment, the log says so explicitly.</>,
+                  per deployment - short, lowercase hex, deliberately: it's one of the few tokens here
+                  that realistically gets read off a screen and typed in by hand, debugging a stuck
+                  deployment from a hypervisor console with no clipboard access being exactly when that
+                  happens, and hex has no case to get wrong and none of the visually ambiguous character
+                  pairs a mixed-case/base64-style token would - <Code>callback_token_used</Code>, checked
+                  rather than the state itself, since the state was already <Code>installing_os</Code>{" "}
+                  before the callback exists to react to). That callback is the point DeployCore is sure
+                  Setup is done with the install media for good: it ejects the Windows/VirtIO ISOs,
+                  removes the floppy device, and deletes the per-deployment answer-file floppy from the
+                  datastore, all best-effort and never worth failing an otherwise-successful deployment
+                  over. Nothing from here on (post-install runs entirely over WinRM) needs any of it. The
+                  wait for that callback isn't all-or-nothing, though: every couple of minutes (far less
+                  often than the poll itself, no reason to check any more eagerly while Setup is still in
+                  its much longer earlier phases) it also checks whether the guest has become reachable
+                  over WinRM directly, which the very same <Code>FirstLogonCommands</Code> batch enables
+                  before it ever sends the callback - so a guest answering over WinRM is treated as
+                  equally good evidence the install finished, even if the callback's own outbound request
+                  never actually landed (a firewall or network-segmentation gap between the guest's
+                  network and DeployCore's, for instance, can block just that one call while everything
+                  else about the install succeeded). A static deployment's own declared IP is used
+                  directly for that check rather than asking the hypervisor for one - that lookup needs
+                  VMware Tools installed in the guest to report anything at all, and a static deployment
+                  already knows its address without asking. When the fallback is what actually advanced
+                  the deployment, the log says so explicitly.</>,
                 <>A static deployment's IP/netmask/gateway/DNS are set declaratively in the answer file
                   itself (the specialize pass, before Windows Setup even finishes), not reconfigured
                   over WinRM afterward, that would mean connecting at whatever address DHCP handed out

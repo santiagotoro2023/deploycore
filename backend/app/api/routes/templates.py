@@ -380,7 +380,9 @@ async def preview_template(
         static_netmask=body.static_netmask,
         static_gateway=body.static_gateway,
         static_dns=body.static_dns,
-        callback_token=uuid.uuid4().hex,
+        # Same shape as the real one (deployments.py's secrets.token_hex(8)),
+        # so a preview looks like what actually ships.
+        callback_token=secrets.token_hex(8),
         created_by_user_id=uuid.uuid4(),
     )
     # No real VM/NIC exists for a preview (hypervisor_host_id above is a
