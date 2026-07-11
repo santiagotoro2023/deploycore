@@ -123,17 +123,27 @@ async def _eject_install_media(db, driver: HypervisorDriver, deployment: Deploym
     per-deployment answer floppy image from the datastore, the same
     cleanup _fail() already did on the failure path, now also on success.
     Best-effort throughout: never worth failing an otherwise-successful
-    deployment over leftover media."""
+    deployment over leftover media. Each step logs a warning on failure
+    rather than silently passing, though - the unconditional "cleaned up"
+    line below used to run regardless of whether any of this actually
+    succeeded, which made a real detach_floppy failure invisible (the
+    device stayed attached, but the log still claimed success)."""
     if deployment.vm_moref:
         for unit in (WINDOWS_ISO_UNIT, VIRTIO_ISO_UNIT):
             try:
                 await driver.detach_iso(deployment.vm_moref, unit)
-            except Exception:  # noqa: BLE001 - best-effort
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort, but worth knowing about
+                await log(
+                    db, deployment, deployment.state.value,
+                    f"failed to eject ISO unit {unit}: {exc}", level=LogLevel.WARN,
+                )
         try:
             await driver.detach_floppy(deployment.vm_moref)
-        except Exception:  # noqa: BLE001 - best-effort
-            pass
+        except Exception as exc:  # noqa: BLE001 - best-effort, but worth knowing about
+            await log(
+                db, deployment, deployment.state.value,
+                f"failed to remove the answer-file floppy device: {exc}", level=LogLevel.WARN,
+            )
     await _cleanup_answer_floppy(driver, deployment)
     await log(db, deployment, deployment.state.value, "install media unmounted and cleaned up")
 
@@ -470,20 +480,34 @@ async def run_post_install(ctx, deployment_id: str) -> None:
             return
 
         try:
-            # A static deployment's IP is already live at this point (see
-            # autounattend_base.xml.j2/_static_network.xml.j2: it's set
-            # declaratively in the specialize pass, no DHCP involved at
-            # any point), so get_guest_ip reports it directly like it
-            # would a DHCP address, one connection is enough either way.
-            await log(db, deployment, "post_install", "waiting for guest IP address")
-            guest_ip = None
-            for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
-                guest_ip = await driver.get_guest_ip(deployment.vm_moref)
-                if guest_ip:
-                    break
-                await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
+            # Three sources, in order of how little they depend on
+            # anything: a static deployment's IP is already known outright
+            # (declarative, set in the specialize pass, live before Setup
+            # even finishes - see autounattend_base.xml.j2/
+            # _static_network.xml.j2). Otherwise, the callback itself
+            # already told us: the guest is, by definition, whoever made
+            # that HTTP connection (api/routes/callback.py captures
+            # request.client.host the moment it lands). Only fall through
+            # to driver.get_guest_ip() - which depends entirely on VMware
+            # Tools being installed in the guest to report anything at all
+            # - if neither of those is available (a DHCP deployment that
+            # advanced via wait_for_callback's WinRM-reachability fallback
+            # instead of a real callback landing, so there's no captured
+            # address to use). A real deployment got stuck for exactly
+            # this reason, an environment without VMware Tools installed
+            # spinning here for the full WINRM_REACHABILITY_MAX_ATTEMPTS
+            # despite Setup and the callback having both already
+            # succeeded.
+            guest_ip = deployment.static_ip or deployment.guest_reported_ip
             if not guest_ip:
-                raise RuntimeError("guest never reported an IP address")
+                await log(db, deployment, "post_install", "waiting for guest IP address")
+                for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
+                    guest_ip = await driver.get_guest_ip(deployment.vm_moref)
+                    if guest_ip:
+                        break
+                    await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
+                if not guest_ip:
+                    raise RuntimeError("guest never reported an IP address")
 
             client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
             for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):

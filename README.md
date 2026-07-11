@@ -686,11 +686,17 @@ pending → creating_vm → booting → installing_os → post_install → confi
   MAC explicitly to the VM's NIC at creation time (rather than letting the
   hypervisor generate one), and that same value goes into `Identifier`
   here - deterministic, no enumeration-order guesswork left
-- Post-install phase (over WinRM once the guest reports an IP, its static
-  address directly for a static deployment, authenticating as
-  `template.local_admin_username`, not the now-disabled built-in
-  Administrator): install each configured Windows feature, install each
-  configured app asset in order
+- Post-install phase (over WinRM once a guest address is known -
+  `deployment.static_ip` directly for a static deployment, otherwise
+  `deployment.guest_reported_ip`, captured from the callback request's own
+  source address the moment it lands, `api/routes/callback.py` - and only
+  as a last resort `HypervisorDriver.get_guest_ip()`, which needs VMware
+  Tools installed in the guest to report anything at all and was the
+  actual cause of a real deployment spinning here for the full
+  `WINRM_REACHABILITY_MAX_ATTEMPTS` despite Setup and the callback having
+  both already succeeded; authenticating as `template.local_admin_username`,
+  not the now-disabled built-in Administrator): install each configured
+  Windows feature, install each configured app asset in order
   (the guest downloads each installer itself over `Invoke-WebRequest`, see
   the App Assets section above for the token/download flow, then runs it
   silently and deletes it), run each post-install script in order, join

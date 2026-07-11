@@ -742,11 +742,16 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   silently never applied and the adapter stayed on its DHCP default — so DeployCore now
                   assigns the VM's NIC a MAC address explicitly at creation time and matches on that
                   instead, deterministic rather than depending on Windows' own enumeration order. Post-
-                  install then runs over WinRM once the guest reports an IP, its static one directly for
-                  a static deployment: install each selected Windows role, install each attached app
-                  asset in order (see "App assets"), run post-install scripts in order, join the domain
-                  here if configured for that timing, reboot, verify it comes back reachable, then mark
-                  the deployment completed.</>,
+                  install then runs over WinRM once a guest address is known - a static deployment's own
+                  declared IP directly, otherwise whatever address the callback request itself arrived
+                  from (captured the moment it lands, no need to separately ask anything), and only as a
+                  genuine last resort the hypervisor's own guest-IP lookup, which needs VMware Tools
+                  installed in the guest to report anything at all and was the actual cause, confirmed
+                  live, of a real deployment spinning for a full ten minutes despite Setup and the
+                  callback having both already succeeded: install each selected Windows role, install
+                  each attached app asset in order (see "App assets"), run post-install scripts in order,
+                  join the domain here if configured for that timing, reboot, verify it comes back
+                  reachable, then mark the deployment completed.</>,
                 <>A stuck deployment (past its configured timeout, default 90 minutes, editable per
                   organization in Settings) is force-failed automatically by a background job, and cleaned
                   up the same way a real failure would be. This is independent of, and a genuine safety

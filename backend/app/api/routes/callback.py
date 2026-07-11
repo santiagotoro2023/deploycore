@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +9,7 @@ router = APIRouter(prefix="/api/callback", tags=["callback"])
 
 
 @router.post("/{deployment_token}", status_code=status.HTTP_204_NO_CONTENT)
-async def deployment_callback(deployment_token: str, db: AsyncSession = Depends(get_db)) -> None:
+async def deployment_callback(deployment_token: str, request: Request, db: AsyncSession = Depends(get_db)) -> None:
     """Authenticated by the single-use per-deployment token itself, not by
     a user session, the caller is the guest VM's FirstLogonCommands step,
     not an operator. Doesn't transition state itself: run_deployment
@@ -33,4 +33,16 @@ async def deployment_callback(deployment_token: str, db: AsyncSession = Depends(
         )
 
     deployment.callback_token_used = True
+    # The caller of this endpoint IS the guest, by definition - no need
+    # to separately ask the hypervisor what its address is afterward.
+    # post_install prefers this over HypervisorDriver.get_guest_ip(),
+    # which depends entirely on VMware Tools being installed in the guest
+    # to report anything at all; a real deployment got stuck on exactly
+    # that gap even after Setup and this very callback had both already
+    # succeeded. APP_PUBLIC_URL is documented as the plain-HTTP origin
+    # (not the HTTPS reverse proxy), so this connection reaches the API
+    # directly - request.client.host is the guest's real address, not a
+    # proxy's.
+    if request.client is not None:
+        deployment.guest_reported_ip = request.client.host
     await db.commit()

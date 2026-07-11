@@ -71,6 +71,17 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
     )
     callback_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     callback_token_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Captured from the callback request's own source address (see
+    # api/routes/callback.py) the moment it lands - the guest is, by
+    # definition, whoever just made that HTTP connection, no need to ask
+    # the hypervisor separately. post_install prefers this over
+    # HypervisorDriver.get_guest_ip(), which depends entirely on VMware
+    # Tools being installed in the guest to report anything at all; a
+    # real deployment got stuck on exactly that gap even after Setup and
+    # the callback had both already succeeded. Null for a DHCP deployment
+    # that only ever advanced via wait_for_callback's WinRM-reachability
+    # fallback (no real callback landed to capture an address from).
+    guest_reported_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     vm_moref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Datastore path of the answer-file media (a floppy image, despite the
     # name, see floppy_builder.py) for this deployment; cleared once
