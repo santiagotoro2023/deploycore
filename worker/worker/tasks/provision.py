@@ -31,6 +31,20 @@ VIRTIO_ISO_UNIT = 1
 
 CALLBACK_POLL_INTERVAL_SECONDS = 15
 
+# The callback is FirstLogonCommands' own outbound HTTP POST reaching
+# DeployCore; if a firewall/network-segmentation gap sits between the
+# guest's network and DeployCore specifically (seen in practice: a lab
+# deployment VLAN with no route to the host's own network, callback POST
+# failing with a connection error while everything else - Setup, WinRM
+# enable, the static IP itself - worked fine), that one call never lands
+# and the deployment would otherwise wait out the full timeout despite
+# the install having genuinely finished. Checked far less often than the
+# callback poll itself: during the (usually much longer) WinPE/Setup
+# phase before FirstLogonCommands can even run, this would only ever
+# return False, no reason to hit the hypervisor API and attempt a guest
+# connection that often for nothing.
+FALLBACK_REACHABILITY_POLL_EVERY = 8  # ~2 minutes at CALLBACK_POLL_INTERVAL_SECONDS
+
 # Phase 1: dismiss the "Press any key to boot from CD or DVD..." prompt,
 # which shows up once, early (around when set_boot_order's own 5s
 # bootDelay elapses, plus a couple seconds for the loader itself to read
@@ -300,6 +314,27 @@ async def run_deployment(ctx, deployment_id: str) -> None:
     await ctx["redis"].enqueue_job("wait_for_callback", deployment_id)
 
 
+async def _guest_reachable_over_winrm(
+    driver: HypervisorDriver, template: DeploymentTemplate, deployment: Deployment
+) -> bool:
+    """Best-effort fallback signal for wait_for_callback: WinRM is enabled
+    by the same FirstLogonCommands batch that sends the callback, and
+    always ordered before it, so a guest answering over WinRM is strong
+    evidence Setup finished even if the callback's own outbound POST
+    never got through. Any failure here (no guest IP yet, unreachable,
+    a hypervisor API hiccup) just means "not yet", same as the normal
+    callback wait - this is a backup path, not the primary signal, and
+    should never itself raise or fail the deployment."""
+    try:
+        guest_ip = await driver.get_guest_ip(deployment.vm_moref)
+        if not guest_ip:
+            return False
+        client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
+        return client.is_reachable()
+    except Exception:  # noqa: BLE001 - best-effort fallback signal, any failure just means "not yet"
+        return False
+
+
 async def wait_for_callback(ctx, deployment_id: str) -> None:
     async with SessionLocal() as db:
         deployment = await db.get(Deployment, uuid.UUID(deployment_id))
@@ -308,6 +343,12 @@ async def wait_for_callback(ctx, deployment_id: str) -> None:
 
         host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
         driver = get_driver(host)
+        # Only needed for the WinRM-reachability fallback below; the
+        # callback path itself never touches it. None is a legitimate
+        # state (template deleted mid-install, see run_deployment's
+        # identical check) - the fallback just can't run without
+        # credentials to connect with, same as everywhere else it's used.
+        template = await db.get(DeploymentTemplate, deployment.template_id) if deployment.template_id else None
 
         # Deployment is already in installing_os by the time this job is
         # enqueued (run_deployment sets that itself, see above), so state
@@ -323,20 +364,40 @@ async def wait_for_callback(ctx, deployment_id: str) -> None:
             )
             deadline = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
 
+            poll_count = 0
+            fell_back = False
             while datetime.now(timezone.utc) < deadline:
                 await db.refresh(deployment)
                 if deployment.callback_token_used:
                     break
                 if deployment.state == DeploymentState.FAILED:
                     return  # failed elsewhere (e.g. the stale-deployment sweep) while this was polling
+
+                poll_count += 1
+                if template is not None and poll_count % FALLBACK_REACHABILITY_POLL_EVERY == 0:
+                    if await _guest_reachable_over_winrm(driver, template, deployment):
+                        fell_back = True
+                        break
+
                 await asyncio.sleep(CALLBACK_POLL_INTERVAL_SECONDS)
             else:
                 await _fail(ctx, db, driver, deployment, "timed out waiting for the guest OS install callback")
                 return
 
+            if fell_back:
+                await log(
+                    db, deployment, "installing_os",
+                    "guest OS install callback never arrived, but the guest answered over WinRM - "
+                    "treating the install as complete (likely a network path issue between the guest "
+                    "and DeployCore, not a failed install; FirstLogonCommands' own callback request "
+                    "just never landed)",
+                )
+
         # The callback only ever fires from FirstLogonCommands, i.e. Setup
         # is fully done and the guest has booted its installed OS, the one
-        # point we can be sure the install media is safe to unmount.
+        # point we can be sure the install media is safe to unmount. (Or,
+        # per the fallback above, the guest answering over WinRM - set up
+        # by that same FirstLogonCommands batch - is equally good evidence.)
         await _eject_install_media(db, driver, deployment)
 
     await run_post_install(ctx, deployment_id)

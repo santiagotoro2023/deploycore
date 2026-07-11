@@ -575,7 +575,21 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `/api/callback/{token}` (single-use per-deployment token, sets
   `callback_token_used`, which `wait_for_callback` polls for instead of a
   state change, since the state's already `installing_os` by the time this
-  fires). There is currently **no auto-logon mechanism at all**: two
+  fires). `wait_for_callback` doesn't depend solely on that one outbound
+  POST landing: every `FALLBACK_REACHABILITY_POLL_EVERY`th poll (roughly
+  every two minutes, not every 15-second poll, no reason to hit the
+  hypervisor API and attempt a guest connection that often while Setup is
+  still in its much longer WinPE/specialize/OOBE phase, before
+  `FirstLogonCommands` can even run) it also checks whether the guest has
+  become reachable over WinRM - the same `FirstLogonCommands` batch
+  enables WinRM before it sends the callback, so a guest answering over
+  WinRM is equally good evidence Setup finished, even if the callback
+  itself never got through (seen in practice: a firewall/network-
+  segmentation gap between an isolated deployment VLAN and DeployCore's
+  own network blocking just that one outbound call while everything else,
+  including the static IP itself, worked correctly). If that fallback
+  fires, a log entry says so explicitly rather than looking identical to
+  a normal callback. There is currently **no auto-logon mechanism at all**: two
   different attempts at it have each broken Setup outright on real
   hardware, both fully reverted. First, the declarative `AutoLogon`
   element (oobeSystem pass) - auto-logging in as whichever account

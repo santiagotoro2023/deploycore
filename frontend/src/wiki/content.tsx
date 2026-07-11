@@ -707,7 +707,16 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   media for good: it ejects the Windows/VirtIO ISOs, removes the floppy device, and deletes
                   the per-deployment answer-file floppy from the datastore, all best-effort and never worth
                   failing an otherwise-successful deployment over. Nothing from here on (post-install runs
-                  entirely over WinRM) needs any of it.</>,
+                  entirely over WinRM) needs any of it. The wait for that callback isn't all-or-nothing,
+                  though: every couple of minutes (far less often than the poll itself, no reason to
+                  check any more eagerly while Setup is still in its much longer earlier phases) it also
+                  checks whether the guest has become reachable over WinRM directly, which the very same{" "}
+                  <Code>FirstLogonCommands</Code> batch enables before it ever sends the callback - so a
+                  guest answering over WinRM is treated as equally good evidence the install finished,
+                  even if the callback's own outbound request never actually landed (a firewall or
+                  network-segmentation gap between the guest's network and DeployCore's, for instance,
+                  can block just that one call while everything else about the install succeeded). When
+                  that fallback is what actually advanced the deployment, the log says so explicitly.</>,
                 <>A static deployment's IP/netmask/gateway/DNS are set declaratively in the answer file
                   itself (the specialize pass, before Windows Setup even finishes), not reconfigured
                   over WinRM afterward, that would mean connecting at whatever address DHCP handed out
