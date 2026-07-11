@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.hypervisors import get_driver
 from app.hypervisors.base import HypervisorDriver, VmSpec
-from app.hypervisors.defaults import HYPERVISOR_DEFAULTS
+from app.hypervisors.defaults import HYPERVISOR_DEFAULTS, generate_mac_address
 from app.models.app_asset import AppAsset
 from app.models.deployment import Deployment, DeploymentState, LogLevel
 from app.models.disk_layout import DiskLayout
@@ -173,7 +173,16 @@ async def run_deployment(ctx, deployment_id: str) -> None:
             await _state_machine.transition(db, deployment, DeploymentState.CREATING_VM)
 
             current_step = "rendering autounattend.xml"
-            rendered_xml = render_autounattend(deployment, template, disk_layout)
+            # Generated once, up front, and used for both the VM's actual
+            # NIC (VmSpec.mac_address below, explicitly assigned rather
+            # than hypervisor-generated) and the answer file's
+            # static-network Identifier (mac_address_dashes in the
+            # template context): they have to be the exact same value, and
+            # the VM doesn't exist yet at this point to report one back.
+            # See hypervisors/defaults.py's generate_mac_address for why
+            # this replaced matching on interface alias.
+            mac_address = generate_mac_address(host.type.value)
+            rendered_xml = render_autounattend(deployment, template, disk_layout, mac_address)
             deployment.rendered_autounattend = rendered_xml
 
             current_step = "building and uploading the answer-file floppy"
@@ -208,6 +217,7 @@ async def run_deployment(ctx, deployment_id: str) -> None:
                 network_name=template.network_name,
                 network_adapter_type=template.network_adapter_type.value,
                 datastore=host.default_datastore,
+                mac_address=mac_address,
             )
             vm_ref = await driver.create_vm(spec)
             deployment.vm_moref = vm_ref

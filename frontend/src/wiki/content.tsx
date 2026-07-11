@@ -712,11 +712,17 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   itself (the specialize pass, before Windows Setup even finishes), not reconfigured
                   over WinRM afterward, that would mean connecting at whatever address DHCP handed out
                   first and reassigning it remotely, which can't work at all on a network with no DHCP
-                  server to hand out that first address. Post-install then runs over WinRM once the
-                  guest reports an IP, its static one directly for a static deployment: install each
-                  selected Windows role, install each attached app asset in order (see "App assets"),
-                  run post-install scripts in order, join the domain here if configured for that timing,
-                  reboot, verify it comes back reachable, then mark the deployment completed.</>,
+                  server to hand out that first address. The answer file targets the NIC by MAC address,
+                  not by interface name: matching by name ("Ethernet") turned out not to reliably match
+                  the real interface on real hardware — Setup didn't error, the static config just
+                  silently never applied and the adapter stayed on its DHCP default — so DeployCore now
+                  assigns the VM's NIC a MAC address explicitly at creation time and matches on that
+                  instead, deterministic rather than depending on Windows' own enumeration order. Post-
+                  install then runs over WinRM once the guest reports an IP, its static one directly for
+                  a static deployment: install each selected Windows role, install each attached app
+                  asset in order (see "App assets"), run post-install scripts in order, join the domain
+                  here if configured for that timing, reboot, verify it comes back reachable, then mark
+                  the deployment completed.</>,
                 <>A stuck deployment (past its configured timeout, default 90 minutes, editable per
                   organization in Settings) is force-failed automatically by a background job, and cleaned
                   up the same way a real failure would be.</>,

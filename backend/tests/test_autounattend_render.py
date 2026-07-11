@@ -61,7 +61,7 @@ def test_domain_join_present_when_enabled_at_answer_file_time():
         domain_join_account="svc-join",
         domain_target_ou="OU=Servers,DC=corp,DC=example,DC=com",
     )
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     join = root.xpath("//u:component[@name='Microsoft-Windows-UnattendedJoin']", namespaces=NS)
     assert len(join) == 1
@@ -71,7 +71,7 @@ def test_domain_join_present_when_enabled_at_answer_file_time():
 
 def test_domain_join_absent_when_disabled():
     template = _make_template(domain_join_enabled=False)
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     assert root.xpath("//u:component[@name='Microsoft-Windows-UnattendedJoin']", namespaces=NS) == []
 
@@ -83,7 +83,7 @@ def test_domain_join_absent_when_deferred_to_post_install():
         domain_fqdn="corp.example.com",
         domain_join_account="svc-join",
     )
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     # deferred to post-install WinRM join, so the answer file must still
     # produce a plain workgroup machine
@@ -92,7 +92,7 @@ def test_domain_join_absent_when_deferred_to_post_install():
 
 def test_disk_layout_remaining_os_volume():
     root = etree.fromstring(
-        render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout()).encode()
+        render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout(), "00:50:56:12:34:56").encode()
     )
     partitions = root.xpath("//u:CreatePartition", namespaces=NS)
     assert len(partitions) == 3
@@ -104,7 +104,7 @@ def test_disk_layout_fixed_os_volume_and_extra_volumes():
         os_volume={"size_mb": 102400},
         extra_volumes=[{"label": "Data", "drive_letter": "D", "size_mb": 51200}],
     )
-    root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), disk_layout).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), disk_layout, "00:50:56:12:34:56").encode())
 
     create_partitions = root.xpath("//u:CreatePartition", namespaces=NS)
     assert len(create_partitions) == 4
@@ -118,7 +118,7 @@ def test_disk_layout_fixed_os_volume_and_extra_volumes():
 
 def test_disk_layout_with_recovery_partition_mid_disk():
     disk_layout = _basic_disk_layout(recovery_size_mb=1000)
-    root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), disk_layout).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), disk_layout, "00:50:56:12:34:56").encode())
 
     create_partitions = root.xpath("//u:CreatePartition", namespaces=NS)
     assert len(create_partitions) == 4
@@ -138,7 +138,7 @@ def test_disk_layout_with_recovery_partition_mid_disk():
 def test_callback_url_and_token_in_first_logon_commands():
     deployment = _make_deployment()
     root = etree.fromstring(
-        render_autounattend(deployment, _make_template(), _basic_disk_layout()).encode()
+        render_autounattend(deployment, _make_template(), _basic_disk_layout(), "00:50:56:12:34:56").encode()
     )
     commands = root.xpath("//u:FirstLogonCommands", namespaces=NS)
     assert len(commands) == 1
@@ -157,7 +157,7 @@ def test_special_characters_in_password_are_escaped_not_corrupted():
         domain_join_account="svc-join",
     )
     template.local_admin_password = "P&ssw0rd<1>!"
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     password = root.xpath("string(//u:AdministratorPassword/u:Value)", namespaces=NS)
     assert password == "P&ssw0rd<1>!"
@@ -170,7 +170,7 @@ def test_ui_language_has_a_fallback():
     picker instead of guessing, exactly the screen this exists to
     suppress (every known-working real-world answer file sets it)."""
     template = _make_template(locale="de-CH", keyboard_layout="de-CH")
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     winpe_intl = root.xpath(
         "//u:component[@name='Microsoft-Windows-International-Core-WinPE']", namespaces=NS
@@ -198,7 +198,7 @@ def test_oobe_stays_at_the_last_confirmed_working_set():
     the six-element set last confirmed to actually complete a real
     install, so a future change doesn't silently reintroduce the other
     three without a real reason."""
-    root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     oobe = root.xpath("//u:component[@name='Microsoft-Windows-Shell-Setup']/u:OOBE", namespaces=NS)[0]
     assert [c.tag.split("}")[-1] for c in oobe] == [
@@ -226,7 +226,7 @@ def test_no_autologon_mechanism_at_all():
     whatever both of these did. FirstLogonCommands only run once a human
     physically logs in at the console until then."""
     template = _make_template()
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     assert root.xpath("//u:AutoLogon", namespaces=NS) == []
     assert root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS) == []
@@ -241,7 +241,7 @@ def test_custom_admin_disabled_by_default_keeps_builtin_administrator():
     keeps its password and is never touched by FirstLogonCommands, and
     only the two baseline commands (enable WinRM, callback) render."""
     template = _make_template()
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     assert root.xpath("//u:UserAccounts/u:LocalAccounts", namespaces=NS) == []
     assert root.xpath("string(//u:AdministratorPassword/u:Value)", namespaces=NS) == "P@ssw0rd1!"
@@ -257,7 +257,14 @@ def test_static_ip_configured_declaratively_not_over_dhcp():
     """The static IP has to be live before Windows Setup even finishes,
     set declaratively in the specialize pass, not reconfigured over WinRM
     afterward (that used to require a DHCP-assigned address to connect to
-    in the first place, which doesn't exist on a DHCP-less network)."""
+    in the first place, which doesn't exist on a DHCP-less network).
+    Identifier targets the NIC's MAC address, not the interface alias
+    ("Ethernet"): a real deployment ended up with this component silently
+    never applied at all (Setup didn't error, the adapter just kept its
+    DHCP default), consistent with Microsoft's own documented caveat that
+    interface alias/LUID matching isn't guaranteed reliable across
+    builds. MAC address is deterministic since DeployCore assigns it to
+    the NIC explicitly rather than letting the hypervisor generate one."""
     deployment = _make_deployment(
         ip_mode=IpMode.STATIC,
         static_ip="192.168.10.50",
@@ -265,23 +272,25 @@ def test_static_ip_configured_declaratively_not_over_dhcp():
         static_gateway="192.168.10.1",
         static_dns=["192.168.10.2", "8.8.8.8"],
     )
-    root = etree.fromstring(render_autounattend(deployment, _make_template(), _basic_disk_layout()).encode())
+    root = etree.fromstring(
+        render_autounattend(deployment, _make_template(), _basic_disk_layout(), "00:50:56:12:34:56").encode()
+    )
 
     tcpip = root.xpath("//u:component[@name='Microsoft-Windows-TCPIP']", namespaces=NS)[0]
-    assert tcpip.xpath("string(.//u:Identifier)", namespaces=NS) == "Ethernet"
+    assert tcpip.xpath("string(.//u:Identifier)", namespaces=NS) == "00-50-56-12-34-56"
     assert tcpip.xpath("string(.//u:DhcpEnabled)", namespaces=NS) == "false"
     assert tcpip.xpath("string(.//u:IpAddress)", namespaces=NS) == "192.168.10.50/24"
     assert tcpip.xpath("string(.//u:NextHopAddress)", namespaces=NS) == "192.168.10.1"
 
-    dns_addresses = root.xpath(
-        "//u:component[@name='Microsoft-Windows-DNS-Client']//u:IpAddress/text()", namespaces=NS
-    )
+    dns = root.xpath("//u:component[@name='Microsoft-Windows-DNS-Client']", namespaces=NS)[0]
+    assert dns.xpath("string(.//u:Identifier)", namespaces=NS) == "00-50-56-12-34-56"
+    dns_addresses = dns.xpath(".//u:IpAddress/text()", namespaces=NS)
     assert dns_addresses == ["192.168.10.2", "8.8.8.8"]
 
 
 def test_dhcp_deployment_has_no_static_network_component():
     root = etree.fromstring(
-        render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout()).encode()
+        render_autounattend(_make_deployment(), _make_template(), _basic_disk_layout(), "00:50:56:12:34:56").encode()
     )
     assert root.xpath("//u:component[@name='Microsoft-Windows-TCPIP']", namespaces=NS) == []
     assert root.xpath("//u:component[@name='Microsoft-Windows-DNS-Client']", namespaces=NS) == []
@@ -293,7 +302,7 @@ def test_local_accounts_creates_custom_admin_and_still_sets_builtin_password():
     disables it within seconds of first boot; the LocalAccounts-created
     account is the one meant to survive."""
     template = _make_template(custom_admin_enabled=True, local_admin_username="svcwinadmin")
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     local_account = root.xpath("//u:UserAccounts/u:LocalAccounts/u:LocalAccount", namespaces=NS)
     assert len(local_account) == 1
@@ -318,7 +327,7 @@ def test_input_locale_resolves_bare_locale_tag_to_named_keyboard():
     LCID hex with "0000" prefixed (e.g. "0807:00000807" for de-CH, per
     Microsoft's own sample answer files and the MS-LCID reference)."""
     template = _make_template(locale="de-CH", keyboard_layout="de-CH")
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     winpe_intl = root.xpath(
         "//u:component[@name='Microsoft-Windows-International-Core-WinPE']", namespaces=NS
@@ -333,7 +342,7 @@ def test_installed_os_locale_set_in_specialize_pass():
     oobeSystem, the *installed* OS silently keeps whatever locale/keyboard
     the base image defaults to."""
     template = _make_template(locale="de-CH", keyboard_layout="de-CH")
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     installed_intl = root.xpath("//u:component[@name='Microsoft-Windows-International-Core']", namespaces=NS)
     assert len(installed_intl) == 1
@@ -347,7 +356,7 @@ def test_input_locale_passes_through_explicit_lcid_klid_pair():
     known-name table, or a non-default keyboard on a supported one, and
     must not be second-guessed."""
     template = _make_template(keyboard_layout="0409:00020409")
-    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout()).encode())
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     winpe_intl = root.xpath(
         "//u:component[@name='Microsoft-Windows-International-Core-WinPE']", namespaces=NS

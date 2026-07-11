@@ -1,13 +1,24 @@
-<!-- "Ethernet" is the name Windows Setup assigns the first network
-     adapter on a fresh install; every deployment DeployCore creates has
-     exactly one NIC (a template has a single network_name/adapter_type,
-     no multi-NIC support exists), so this is reliable rather than a
-     guess. Configured here, in the specialize pass, rather than over
-     WinRM in post_install: that used to connect to whatever DHCP handed
-     out first, then reconfigure to the static address remotely, which
-     can't work at all on a network with no DHCP server to hand out that
-     first address in the first place. This way the static config is
-     live before Windows Setup even finishes, no DHCP involved anywhere.
+<!-- Identifier below is the NIC's MAC address, not the interface alias
+     ("Ethernet") this used to match on. A real deployment on real
+     hardware ended up with this component silently never applied at all:
+     Setup didn't error, the adapter simply stayed on its DHCP default,
+     exactly what Microsoft's own component reference warns alias/LUID
+     matching is prone to ("the LUID and interface aliases for each
+     interface are not guaranteed to be the same between different
+     builds"). MAC address is the deterministic alternative the same
+     reference documents Identifier as accepting, and DeployCore already
+     controls it: hypervisors/defaults.py's generate_mac_address()
+     assigns it explicitly to the VM's NIC at creation time (rather than
+     letting the hypervisor auto-generate one), before this file is ever
+     rendered, so the exact same value that's actually on the NIC is what
+     gets matched here - no enumeration-order guesswork left at all.
+
+     Configured here, in the specialize pass, rather than over WinRM in
+     post_install: that used to connect to whatever DHCP handed out
+     first, then reconfigure to the static address remotely, which can't
+     work at all on a network with no DHCP server to hand out that first
+     address in the first place. This way the static config is live
+     before Windows Setup even finishes, no DHCP involved anywhere.
 
      Element order below is load-bearing, not stylistic: Microsoft's own
      schema requires Interface's children in the exact order Ipv4Settings,
@@ -28,7 +39,7 @@
             <Ipv4Settings>
                 <DhcpEnabled>false</DhcpEnabled>
             </Ipv4Settings>
-            <Identifier>Ethernet</Identifier>
+            <Identifier>{{ mac_address_dashes }}</Identifier>
             <UnicastIpAddresses>
                 <IpAddress wcm:action="add" wcm:keyValue="1">{{ deployment.static_ip }}/{{ static_prefix }}</IpAddress>
             </UnicastIpAddresses>
@@ -49,7 +60,7 @@
 <component name="Microsoft-Windows-DNS-Client" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
     <Interfaces>
         <Interface wcm:action="add">
-            <Identifier>Ethernet</Identifier>
+            <Identifier>{{ mac_address_dashes }}</Identifier>
             <DNSServerSearchOrder>
 {% for dns in deployment.static_dns %}
                 <IpAddress wcm:action="add" wcm:keyValue="{{ loop.index }}">{{ dns }}</IpAddress>

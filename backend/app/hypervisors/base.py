@@ -27,6 +27,12 @@ class VmSpec(BaseModel):
     network_name: str
     network_adapter_type: str = "vmxnet3"
     datastore: str | None = None
+    # Explicitly assigned (not left to the hypervisor to auto-generate) so
+    # the same value can be baked into the answer file's static-network
+    # Identifier before the VM exists to report one back. See
+    # hypervisors/defaults.py's generate_mac_address for why matching by
+    # interface alias ("Ethernet") wasn't reliable enough to keep using.
+    mac_address: str | None = None
 
 
 class HypervisorDriver(ABC):

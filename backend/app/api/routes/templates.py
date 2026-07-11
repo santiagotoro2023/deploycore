@@ -6,6 +6,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
+from app.hypervisors.defaults import generate_mac_address
 from app.models.app_asset import AppAsset
 from app.models.deployment import Deployment
 from app.models.disk_layout import DiskLayout
@@ -382,5 +383,9 @@ async def preview_template(
         callback_token=uuid.uuid4().hex,
         created_by_user_id=uuid.uuid4(),
     )
-    xml = render_autounattend(draft, template, disk_layout)
+    # No real VM/NIC exists for a preview (hypervisor_host_id above is a
+    # throwaway placeholder), so this is illustrative only, same as
+    # callback_token above - the actual deployment generates and assigns
+    # its own value at creation time (see provision.py's run_deployment).
+    xml = render_autounattend(draft, template, disk_layout, generate_mac_address("esxi"))
     return AutounattendPreview(xml=xml)

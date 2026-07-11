@@ -67,12 +67,21 @@ _ENV = jinja2.Environment(
     lstrip_blocks=True,
 )
 
+
 def render_autounattend(
-    deployment: Deployment, template: DeploymentTemplate, disk_layout: DiskLayout
+    deployment: Deployment, template: DeploymentTemplate, disk_layout: DiskLayout, mac_address: str
 ) -> str:
     """The single rendering entry point, both the wizard's preview step and
     the actual ISO build call this, so what an operator reviews is
-    byte-identical to what ships."""
+    byte-identical to what ships.
+
+    mac_address must be the exact value the VM's NIC is (or, for a
+    preview, will be) actually assigned - see hypervisors/defaults.py's
+    generate_mac_address and _static_network.xml.j2's comment for why
+    this is required rather than optional: it's what the static-network
+    Identifier matches on now instead of the interface alias ("Ethernet"),
+    which turned out not to reliably match the real interface on this
+    project's actual target hardware."""
     tmpl = _ENV.get_template("autounattend_base.xml.j2")
     return tmpl.render(
         deployment=deployment,
@@ -80,6 +89,7 @@ def render_autounattend(
         disk_layout=disk_layout,
         callback_base_url=get_settings().app_public_url,
         input_locale=_resolve_input_locale(template.keyboard_layout),
+        mac_address_dashes=mac_address.replace(":", "-"),
         # Only meaningful (and only computed) for a static deployment: CIDR
         # prefix length Windows' own TCP/IP unattend component wants
         # (UnicastIpAddresses takes "<ip>/<prefix>", not a dotted netmask).

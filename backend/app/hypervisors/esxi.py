@@ -120,6 +120,9 @@ class ESXiDriver(HypervisorDriver):
             nic_spec.device.backing.deviceName = spec.network_name
             nic_spec.device.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
             nic_spec.device.connectable.startConnected = True
+            if spec.mac_address:
+                nic_spec.device.addressType = "manual"
+                nic_spec.device.macAddress = spec.mac_address
 
             config = vim.vm.ConfigSpec()
             config.name = spec.name

@@ -641,9 +641,15 @@ pending → creating_vm → booting → installing_os → post_install → confi
   used to mean connecting at whatever address DHCP handed out first, then
   reassigning it to the static address remotely, which simply can't work on
   a network with no DHCP server to hand out that first address at all.
-  `Identifier` targets the adapter by name (`Ethernet`, what Windows Setup
-  names the first NIC on a fresh install), reliable here since a template
-  only ever configures one network adapter, there's no multi-NIC support
+  `Identifier` targets the adapter by its MAC address, not by name: a real
+  deployment ended up with this component silently never applied at all
+  (Setup didn't error, the adapter just stayed on its DHCP default), which
+  turned out to match Microsoft's own documented caveat that interface
+  alias/LUID matching "is not guaranteed to be the same between different
+  builds." `hypervisors/defaults.py`'s `generate_mac_address` assigns a
+  MAC explicitly to the VM's NIC at creation time (rather than letting the
+  hypervisor generate one), and that same value goes into `Identifier`
+  here - deterministic, no enumeration-order guesswork left
 - Post-install phase (over WinRM once the guest reports an IP, its static
   address directly for a static deployment, authenticating as
   `template.local_admin_username`, not the now-disabled built-in
