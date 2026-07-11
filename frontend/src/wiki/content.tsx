@@ -914,49 +914,43 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               failing outright. First alongside the old declarative <Code>AutoLogon</Code> element,
               inconclusively (removing them alone, with <Code>AutoLogon</Code> still present, didn't fix
               that failure, so it was never confirmed whether they were involved at all). Second alongside
-              the current specialize-pass auto-logon mechanism below, more conclusively: Setup failed with
-              the exact same generic error code as the <Code>AutoLogon</Code>-era failures, and
-              setupact.log this time showed the specialize pass (auto-logon commands included) completing
-              cleanly before failing exactly at the Pre-OOBE → OOBE transition these three settings
-              govern. Reverted again pending an isolated test with them absent and auto-logon still
-              present — if that completes, they're the confirmed cause and need a different fix (probably
-              suppressing those two prompts via a <Code>FirstLogonCommand</Code> instead of these OOBE
-              flags) rather than being reintroduced as-is. The declarative <Code>AutoLogon</Code> element
-              itself was tried too, targeting whichever account{" "}
-              <Code>local_admin_username</Code>/<Code>local_admin_password</Code> resolve to — but it's{" "}
-              <strong>not in the answer file</strong>: every deployment on real hardware that included it
-              failed outright during Setup regardless of where in oobeSystem it was placed, isolated by
-              ruling out static-vs-DHCP networking and hostname length via controlled,
-              one-variable-at-a-time tests, and confirmed when a real deployment finally completed once{" "}
-              <Code>AutoLogon</Code> was removed entirely. Auto-logon is still configured, just
-              differently: four <Code>RunSynchronousCommand</Code> entries in
-              the specialize pass's <Code>Microsoft-Windows-Deployment</Code> component, each running one{" "}
-              <Code>reg.exe add</Code>, write the same registry values (<Code>AutoAdminLogon</Code>,{" "}
-              <Code>DefaultUserName</Code>, <Code>DefaultPassword</Code>, <Code>AutoLogonCount</Code>) a
-              working <Code>AutoLogon</Code> element would itself write — Winlogon reads those at
-              first-logon time the same way no matter which mechanism put them there, so the effect is
-              identical, just reached without whatever Setup-time processing of the declarative element
-              was breaking on this environment. The first attempt at this used a single{" "}
-              <Code>powershell.exe -Command</Code> one-liner instead of <Code>reg.exe</Code>, and that
-              broke Setup a different way: a hard crash immediately after landing in the specialize pass
-              ("the computer was unexpectedly restarted, or an unexpected error occurred"), consistent
-              with a real, documented failure mode where PowerShell cmdlets in{" "}
-              <Code>RunSynchronousCommand</Code> crash this early because WMI/CIM and other subsystems it
-              can depend on aren't fully initialized yet. <Code>reg.exe</Code> has no such startup
-              dependency, which is why it's what actually runs now; command lines are built with Python's{" "}
-              <Code>subprocess.list2cmdline</Code> for correct Win32 argv quoting (<Code>Path</Code>{" "}
-              launches the executable directly, no <Code>cmd.exe</Code> involved, so none of{" "}
-              <Code>cmd</Code>'s own <Code>%</Code>/<Code>^</Code>/<Code>&amp;</Code> metacharacter
-              handling applies — just the same quoting rules <Code>CreateProcess</Code> itself expects).
-              One side effect worth knowing, same as the element had:
-              this leaves that password in plaintext in the registry
-              (<Code>HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon</Code>) as an
-              implementation detail of how it works at all; the very first <Code>FirstLogonCommand</Code>,
-              before anything else including enabling WinRM, scrubs both values out again, keeping the
-              window that plaintext copy exists as short as possible. Setup always requires the built-in
-              Administrator account to have a password at this point too
-              (<Code>AdministratorPassword</Code>), so it always gets one regardless of which account
-              ends up being the one that's actually used.
+              a specialize-pass auto-logon mechanism (below), conclusively this time: a clean, isolated
+              test with them present and that mechanism as the only other variable failed with the exact
+              same generic error code as the <Code>AutoLogon</Code>-era failures. Reverted again, pending
+              a different way to suppress those two prompts — probably via a{" "}
+              <Code>FirstLogonCommand</Code> once auto-logon itself works, rather than these OOBE flags.
+            </P>
+            <P>
+              <strong>Auto-logon: two attempts, both reverted.</strong> There is currently{" "}
+              <strong>no auto-logon mechanism in the answer file at all</strong>. The declarative{" "}
+              <Code>AutoLogon</Code> element was tried first, targeting whichever account{" "}
+              <Code>local_admin_username</Code>/<Code>local_admin_password</Code> resolve to: every
+              deployment on real hardware that included it failed outright during Setup regardless of
+              where in oobeSystem it was placed, isolated by ruling out static-vs-DHCP networking and
+              hostname length via controlled, one-variable-at-a-time tests, and confirmed when a real
+              deployment finally completed once <Code>AutoLogon</Code> was removed entirely. Second, a
+              specialize-pass <Code>Microsoft-Windows-Deployment</Code>/<Code>RunSynchronousCommand</Code>{" "}
+              writing the same registry values (<Code>AutoAdminLogon</Code>, <Code>DefaultUserName</Code>,{" "}
+              <Code>DefaultPassword</Code>, <Code>AutoLogonCount</Code>) a working <Code>AutoLogon</Code>{" "}
+              element would itself write, on the theory that a different Setup code path — Winlogon reads
+              those registry values at first-logon time the same way no matter which mechanism wrote
+              them — would sidestep whatever the element itself was hitting. It didn't, and it took two
+              tries to even get a clean read on that: the first version ran a single{" "}
+              <Code>powershell.exe -Command</Code> one-liner and crashed Setup a completely different way
+              ("the computer was unexpectedly restarted, or an unexpected error occurred") immediately
+              after landing in the specialize pass — consistent with a real, documented failure mode
+              where PowerShell cmdlets in <Code>RunSynchronousCommand</Code> crash this early because
+              WMI/CIM and other subsystems they depend on aren't fully initialized yet. Switching to{" "}
+              <Code>reg.exe</Code> (no such startup dependency; command lines built with Python's{" "}
+              <Code>subprocess.list2cmdline</Code> for correct Win32 argv quoting) fixed <em>that</em>{" "}
+              crash, but a clean isolated test — OOBE settings already reverted, this component the only
+              variable left — still failed, with the exact same generic <Code>WINDEPLOY</Code> error code
+              the <Code>AutoLogon</Code> element produced. The one deployment that's actually completed
+              had neither mechanism present. Until something is found that avoids whatever both of these
+              hit, Setup leaves a plain login prompt at the console and a human has to log in once before{" "}
+              <Code>FirstLogonCommands</Code> runs. Setup always requires the built-in Administrator
+              account to have a password regardless (<Code>AdministratorPassword</Code>), so it always
+              gets one whether or not it ends up being the account that's actually used.
             </P>
             <P>
               A template's <strong>custom admin account</strong> toggle (Templates page, off by default)

@@ -52,7 +52,20 @@
             <UILanguage>{{ template.locale }}</UILanguage>
             <UserLocale>{{ template.locale }}</UserLocale>
         </component>
-{% include "_specialize_autologon.xml.j2" %}
+        <!-- No auto-logon mechanism at all right now - see the UserAccounts
+             comment below (oobeSystem pass) for the full history. Two
+             different mechanisms have each broken Setup outright on this
+             environment: the declarative <AutoLogon> element (oobeSystem),
+             and a specialize-pass Microsoft-Windows-Deployment/
+             RunSynchronousCommand writing the same registry values via
+             reg.exe (tried after the declarative element failed, on the
+             theory a different Setup code path would avoid whatever the
+             element was hitting - it didn't: same WINDEPLOY 0x80220005
+             failure the element produced, confirmed with a clean isolated
+             test, OOBE settings reverted, only the reg.exe component
+             present). The one deployment that's actually completed had
+             neither. Whatever comes next needs to avoid both oobeSystem's
+             <AutoLogon> and any specialize-pass RunSynchronousCommand. -->
 {% if deployment.ip_mode == "static" and deployment.static_ip and static_prefix %}
 {% include "_static_network.xml.j2" %}
 {% endif %}
