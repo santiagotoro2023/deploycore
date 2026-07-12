@@ -544,3 +544,22 @@ class ESXiDriver(HypervisorDriver):
 
     async def delete_iso_from_datastore(self, remote_path: str) -> None:
         await asyncio.to_thread(self._delete_iso_sync, remote_path)
+
+    def _list_datastores_sync(self) -> list[str]:
+        service_instance = self._connect_sync()
+        try:
+            # Same standalone-host-inventory traversal as
+            # _default_resource_pool_and_folder_sync above -
+            # ComputeResource.datastore is every datastore mounted on
+            # this host, not just the one default_datastore happens to
+            # point at.
+            content = service_instance.RetrieveContent()
+            datacenter = content.rootFolder.childEntity[0]
+            host_folder = datacenter.hostFolder
+            compute_resource = host_folder.childEntity[0]
+            return sorted(ds.name for ds in compute_resource.datastore)
+        finally:
+            connect.Disconnect(service_instance)
+
+    async def list_datastores(self) -> list[str]:
+        return await asyncio.to_thread(self._list_datastores_sync)

@@ -2,8 +2,27 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import Select from "../components/Select";
-import { Deployment, DeploymentTemplate, HypervisorHost, IpMode } from "../api/types";
+import TemplateFieldsForm, { TemplateFieldsBody } from "../components/TemplateFieldsForm";
+import { AppAsset, Deployment, DeploymentTemplate, DiskLayout, HypervisorHost, IpMode, IsoAsset } from "../api/types";
 import { useOrg } from "../state/org";
+
+// "Leave blank to keep unchanged" (see TemplateFieldsForm) doesn't
+// translate to an actual override here - an empty string would
+// overwrite the real, encrypted template secret with a blank one the
+// moment it's included in overrides at all, since the backend can't
+// distinguish "deliberately blank" from "not touched" once it's in the
+// dict. Stripped before overrides are ever sent, same rule the
+// template-edit PATCH route already enforces server-side.
+const BLANK_MEANS_UNCHANGED_FIELDS = ["local_admin_password", "domain_join_credential"] as const;
+
+function cleanOverrides(body: TemplateFieldsBody): Record<string, unknown> {
+  const overrides: Record<string, unknown> = { ...body };
+  for (const field of BLANK_MEANS_UNCHANGED_FIELDS) {
+    if (!overrides[field]) delete overrides[field];
+  }
+  delete overrides.name;
+  return overrides;
+}
 
 const STEPS = ["Template", "Hypervisor", "Hostname & network", "Review", "Deploy"];
 
@@ -36,6 +55,13 @@ export default function DeploymentWizard() {
   const [step, setStep] = useState(0);
   const [templates, setTemplates] = useState<DeploymentTemplate[]>([]);
   const [hosts, setHosts] = useState<HypervisorHost[]>([]);
+  const [diskLayouts, setDiskLayouts] = useState<DiskLayout[]>([]);
+  const [isoAssets, setIsoAssets] = useState<IsoAsset[]>([]);
+  const [appAssets, setAppAssets] = useState<AppAsset[]>([]);
+  const [datastores, setDatastores] = useState<string[]>([]);
+  const [datastore, setDatastore] = useState("");
+  const [showCustomize, setShowCustomize] = useState(false);
+  const [overrides, setOverrides] = useState<Record<string, unknown> | null>(null);
 
   const [templateId, setTemplateId] = useState("");
   const [hypervisorHostId, setHypervisorHostId] = useState("");
@@ -56,10 +82,31 @@ export default function DeploymentWizard() {
     if (!selectedOrgId) return;
     api.get<DeploymentTemplate[]>(`/organizations/${selectedOrgId}/templates`).then(setTemplates);
     api.get<HypervisorHost[]>(`/organizations/${selectedOrgId}/hypervisors`).then(setHosts);
+    api.get<DiskLayout[]>(`/organizations/${selectedOrgId}/disk-layouts`).then(setDiskLayouts);
+    api.get<IsoAsset[]>(`/organizations/${selectedOrgId}/iso-assets`).then((rows) =>
+      setIsoAssets(rows.filter((iso) => iso.kind === "windows_iso")),
+    );
+    api.get<AppAsset[]>(`/organizations/${selectedOrgId}/app-assets`).then(setAppAssets);
   }, [selectedOrgId]);
+
+  useEffect(() => {
+    setDatastore("");
+    if (!selectedOrgId || !hypervisorHostId) {
+      setDatastores([]);
+      return;
+    }
+    api
+      .get<string[]>(`/organizations/${selectedOrgId}/hypervisors/${hypervisorHostId}/datastores`)
+      .then(setDatastores)
+      .catch(() => setDatastores([])); // best-effort - the host's own default_datastore is always a fine fallback
+  }, [selectedOrgId, hypervisorHostId]);
 
   if (!orgLoaded) return null;
   if (!selectedOrgId) return <p className="text-sm text-neutral-500">Select an organization first.</p>;
+
+  const selectedTemplate = templates.find((t) => t.id === templateId);
+  const combinedOverrides = { ...(overrides ?? {}), ...(datastore ? { datastore } : {}) };
+  const hasOverrides = Object.keys(combinedOverrides).length > 0;
 
   const hostnameError = bulk
     ? computerNameError(hostname, "Hostname prefix", COMPUTERNAME_MAX_LENGTH - 2)
@@ -79,7 +126,7 @@ export default function DeploymentWizard() {
     try {
       const { xml } = await api.post<{ xml: string }>(
         `/organizations/${selectedOrgId}/templates/${templateId}/preview`,
-        networkFields,
+        { ...networkFields, overrides: overrides ?? undefined },
       );
       setPreviewXml(xml);
       setStep(3);
@@ -103,6 +150,7 @@ export default function DeploymentWizard() {
       } else {
         const deployment = await api.post<Deployment>(`/organizations/${selectedOrgId}/deployments`, {
           template_id: templateId,
+          overrides: hasOverrides ? combinedOverrides : undefined,
           hypervisor_host_id: hypervisorHostId,
           ...networkFields,
         });
@@ -138,7 +186,10 @@ export default function DeploymentWizard() {
             <Select
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
               value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
+              onChange={(e) => {
+                setTemplateId(e.target.value);
+                setOverrides(null); // tied to the previously selected template's own field set
+              }}
             >
               <option value="">Select a template...</option>
               {templates.map((t) => (
@@ -147,24 +198,70 @@ export default function DeploymentWizard() {
                 </option>
               ))}
             </Select>
+            {templateId && (
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  onClick={() => setShowCustomize(true)}
+                >
+                  Customize installation
+                </button>
+                {overrides && (
+                  <>
+                    <span className="text-xs text-blue-600 dark:text-blue-400">Customized for this deployment</span>
+                    <button
+                      type="button"
+                      className="text-xs text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+                      onClick={() => setOverrides(null)}
+                    >
+                      Reset
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            <p className="mt-1 text-xs text-neutral-400">
+              Change any of this template's settings for just this one deployment, without editing the
+              template itself.
+            </p>
           </div>
         )}
 
         {step === 1 && (
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Hypervisor</label>
-            <Select
-              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
-              value={hypervisorHostId}
-              onChange={(e) => setHypervisorHostId(e.target.value)}
-            >
-              <option value="">Select a hypervisor...</option>
-              {hosts.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.name} ({h.type})
-                </option>
-              ))}
-            </Select>
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Hypervisor</label>
+              <Select
+                className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+                value={hypervisorHostId}
+                onChange={(e) => setHypervisorHostId(e.target.value)}
+              >
+                <option value="">Select a hypervisor...</option>
+                {hosts.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name} ({h.type})
+                  </option>
+                ))}
+              </Select>
+            </div>
+            {hypervisorHostId && datastores.length > 1 && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Datastore</label>
+                <Select
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+                  value={datastore}
+                  onChange={(e) => setDatastore(e.target.value)}
+                >
+                  <option value="">Host default</option>
+                  {datastores.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
           </div>
         )}
 
@@ -319,6 +416,25 @@ export default function DeploymentWizard() {
           </button>
         )}
       </div>
+
+      {showCustomize && selectedTemplate && (
+        <TemplateFieldsForm
+          diskLayouts={diskLayouts}
+          isoAssets={isoAssets}
+          appAssets={appAssets}
+          existing={selectedTemplate}
+          title="Customize installation"
+          description="Changes apply to this deployment only - the template itself is untouched."
+          showName={false}
+          requirePassword={false}
+          submitLabel="Apply"
+          onClose={() => setShowCustomize(false)}
+          onSubmit={async (body) => {
+            setOverrides(cleanOverrides(body));
+            setShowCustomize(false);
+          }}
+        />
+      )}
     </div>
   );
 }

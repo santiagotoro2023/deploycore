@@ -78,6 +78,7 @@ async def _create_one(
     static_netmask: str | None,
     static_gateway: str | None,
     static_dns: list[str] | None,
+    overrides: dict | None = None,
 ) -> Deployment:
     """Adds a deployment (+ its audit/notification rows) to the session
     without committing or enqueueing the arq job, callers do both exactly
@@ -106,6 +107,8 @@ async def _create_one(
         callback_token=secrets.token_hex(8),
         created_by_user_id=current_user.id,
     )
+    if overrides:
+        deployment.overrides = overrides
     db.add(deployment)
     await db.flush()  # deployment.id must exist before the notification's FK references it
 
@@ -151,6 +154,7 @@ async def create_deployment(
         static_netmask=body.static_netmask,
         static_gateway=body.static_gateway,
         static_dns=body.static_dns,
+        overrides=body.overrides,
     )
     await db.commit()
     await db.refresh(deployment)

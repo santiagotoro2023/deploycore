@@ -1,12 +1,14 @@
 import enum
+import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPKMixin, enum_column, utcnow
+from app.security import crypto
 
 
 class IpMode(str, enum.Enum):
@@ -93,6 +95,16 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
     # should keep reflecting what actually ran, not what those would
     # produce now.
     rendered_autounattend: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "Customize installation" (deployment wizard, after picking a
+    # template): a subset of DeploymentTemplate's own fields, overridden
+    # for just this one deployment without touching the template itself.
+    # Encrypted at rest (same LargeBinary + property pattern as
+    # DeploymentTemplate.local_admin_password) since an override can
+    # include a plaintext admin password or domain-join credential -
+    # see services/template_effective.py for how this actually gets
+    # applied (a read-only view layered over the real template, not a
+    # copy of it).
+    overrides_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # Ephemeral, generated right before app installs start in post_install
     # and cleared right after (see provision.py): authenticates the guest's
     # own Invoke-WebRequest calls to GET .../app-assets/{id}/download,
@@ -122,6 +134,16 @@ class Deployment(UUIDPKMixin, TimestampMixin, Base):
     # those stay in place and reachable by the same endpoints as always,
     # see DELETE .../deployments/{deployment_id} in api/routes/deployments.py.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def overrides(self) -> dict:
+        if self.overrides_encrypted is None:
+            return {}
+        return json.loads(crypto.decrypt(self.overrides_encrypted))
+
+    @overrides.setter
+    def overrides(self, value: dict | None) -> None:
+        self.overrides_encrypted = crypto.encrypt(json.dumps(value)) if value else None
 
 
 class DeploymentStateTransition(UUIDPKMixin, Base):

@@ -42,6 +42,13 @@ class DeploymentCreate(BaseModel):
     static_netmask: str | None = None
     static_gateway: str | None = None
     static_dns: list[str] | None = None
+    # "Customize installation": a subset of DeploymentTemplate's own field
+    # names (plus "datastore", which isn't a template field at all - see
+    # services/template_effective.py), overridden for just this one
+    # deployment. Bulk create deliberately has no equivalent, same as it
+    # already has no per-VM static IP allocation - bulk stays the simple
+    # path, customize is single-deployment only.
+    overrides: dict | None = None
 
     @field_validator("hostname")
     @classmethod
@@ -72,6 +79,10 @@ class DeploymentPreviewRequest(BaseModel):
     static_netmask: str | None = None
     static_gateway: str | None = None
     static_dns: list[str] | None = None
+    # "Customize installation" - so the preview reflects what would
+    # actually render if the wizard's overrides were submitted as-is,
+    # not just what the unmodified template would produce.
+    overrides: dict | None = None
 
     @field_validator("hostname")
     @classmethod

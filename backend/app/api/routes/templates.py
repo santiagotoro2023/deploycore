@@ -26,6 +26,7 @@ from app.schemas.template import (
 )
 from app.security.rbac import get_current_user, require_role
 from app.services import audit
+from app.services.template_effective import resolve_template
 from app.services.template_render import render_autounattend
 
 router = APIRouter(tags=["templates"])
@@ -366,6 +367,7 @@ async def preview_template(
     db: AsyncSession = Depends(get_db),
 ) -> AutounattendPreview:
     template = await _get_visible_template(db, org_id, template_id)
+    template = resolve_template(template, body.overrides)
     disk_layout = await db.get(DiskLayout, template.disk_layout_id)
     if disk_layout is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "template's disk layout not found")

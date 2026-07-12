@@ -112,3 +112,10 @@ class HypervisorDriver(ABC):
 
     @abstractmethod
     async def delete_iso_from_datastore(self, remote_path: str) -> None: ...
+
+    @abstractmethod
+    async def list_datastores(self) -> list[str]:
+        """Every datastore visible to this host, for the deployment
+        wizard's per-deployment datastore override (VmSpec.datastore) -
+        a host's own default_datastore remains what's used when a
+        deployment doesn't override it."""

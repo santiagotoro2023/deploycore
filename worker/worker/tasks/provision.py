@@ -21,6 +21,7 @@ from app.models.template import DeploymentTemplate, DomainJoinTiming
 from app.services import notifications, settings_resolver, webhooks
 from app.services.deployment_service import DeploymentStateMachine, InvalidTransition, log
 from app.services.floppy_builder import build_and_upload_answer_floppy
+from app.services.template_effective import resolve_template
 from app.services.template_render import render_autounattend
 from app.winrm.client import WinRMClient
 
@@ -218,6 +219,7 @@ async def run_deployment(ctx, deployment_id: str) -> None:
         if template is None:
             await _fail(ctx, db, driver, deployment, "the template this deployment was created from has since been deleted")
             return
+        template = resolve_template(template, deployment.overrides)
         disk_layout = await db.get(DiskLayout, template.disk_layout_id)
 
         if template.iso_asset_id is None:
@@ -273,7 +275,13 @@ async def run_deployment(ctx, deployment_id: str) -> None:
                 scsi_controller=defaults["scsi_controller"],
                 network_name=template.network_name,
                 network_adapter_type=template.network_adapter_type.value,
-                datastore=host.default_datastore,
+                # "datastore" isn't a DeploymentTemplate field at all (it's
+                # host-specific, not template-specific), so it's read
+                # directly off the override dict rather than through
+                # `template` - "Customize installation"'s per-deployment
+                # datastore choice, falling back to the host's own default
+                # when it was never overridden.
+                datastore=deployment.overrides.get("datastore") or host.default_datastore,
                 mac_address=mac_address,
             )
             vm_ref = await driver.create_vm(spec)
@@ -502,6 +510,7 @@ async def wait_for_callback(ctx, deployment_id: str) -> None:
         # identical check) - the fallback just can't run without
         # credentials to connect with, same as everywhere else it's used.
         template = await db.get(DeploymentTemplate, deployment.template_id) if deployment.template_id else None
+        template = resolve_template(template, deployment.overrides)
 
         # Deployment is already in installing_os by the time this job is
         # enqueued (run_deployment sets that itself, see above), so state
@@ -574,6 +583,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
         if template is None:
             await _fail(ctx, db, driver, deployment, "the template this deployment was created from has since been deleted")
             return
+        template = resolve_template(template, deployment.overrides)
         disk_layout = await db.get(DiskLayout, template.disk_layout_id)
 
         try:
