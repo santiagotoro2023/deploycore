@@ -158,6 +158,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               creates that many deployments in one go (<Code>PREFIX01</Code>, <Code>PREFIX02</Code>, ...).
               Bulk deployments are DHCP only, there's no per-VM static IP allocation in bulk mode.
             </P>
+            <P>
+              Need this <em>one</em> deployment slightly different from the template it's based on -
+              a different disk size, an extra role, a one-off app - without touching the template
+              itself? Once you've picked a template in the wizard, <strong>Customize installation</strong>{" "}
+              opens the same fields as editing the template, pre-filled, just for this deployment. See
+              "Deployments" for the details.
+            </P>
           </>
         ),
       },
@@ -761,6 +768,20 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   OOBE. See <strong>"Unattended Windows Setup, in depth"</strong> for exactly how the boot
                   prompt, the answer-file delivery, and locale/keyboard get handled, and what the two
                   remaining synthetic-keypress fallbacks are actually for.</>,
+                <><strong>Customize installation</strong> (wizard, after picking a template, single
+                  deployment only - not bulk): opens the exact same fields as editing the template
+                  itself, pre-filled from it, but changes here apply to <em>this deployment only</em> -
+                  the template is never touched. Stored encrypted on the deployment row (same as a
+                  template's own secrets, since an override can include a plaintext admin password), and
+                  applied as a thin read-through layer over the real template at both preview and
+                  provisioning time - the exact same fields you didn't touch keep coming from the
+                  template as normal, only what you actually changed in the modal takes effect. Leaving
+                  a password field blank keeps the template's real one, exactly like editing a template
+                  does - it's never overridden with an empty value.</>,
+                <><strong>Datastore</strong> (wizard, hypervisor step - only shown when the selected host
+                  actually has more than one): defaults to the host's own configured default, pick a
+                  different one per deployment when you need to spread VMs across datastores or land a
+                  specific one somewhere particular.</>,
                 <>The deployment moves into <Code>installing_os</Code> right after the VM is powered on
                   and DeployCore has done everything it can from its side (boot-order, synthetic
                   keypresses), not when Windows Setup actually finishes: there's no way to observe real

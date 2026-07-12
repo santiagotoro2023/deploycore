@@ -538,6 +538,31 @@ pending → creating_vm → booting → installing_os → post_install → confi
   with a prefix and a count (1-50): creates that many deployments in one
   go, hostnamed `PREFIX01`, `PREFIX02`, etc. DHCP only, bulk doesn't attempt
   per-VM static IP allocation
+- **Customize installation** (single-deployment only, not bulk): once a
+  template is picked, a button opens the exact same fields as the
+  template's own edit modal (`TemplateFieldsForm`, shared by both), all
+  pre-filled from that template, editable for just this one deployment
+  without touching the template itself. Stored as `Deployment.
+  overrides_encrypted` (encrypted at rest, same as template secrets - an
+  override can include a plaintext admin password), applied via
+  `EffectiveTemplate` (`services/template_effective.py`), a thin
+  `__getattr__` wrapper layering the overrides dict over the real
+  `DeploymentTemplate` object: every existing `template.*` read
+  throughout `provision.py`/`template_render.py` works completely
+  unchanged whether a given deployment has overrides or not, no
+  per-field plumbing needed at any of those call sites. Leaving a
+  password/credential field blank in the modal is stripped before
+  submission rather than sent as an override (would otherwise overwrite
+  the template's real secret with an empty string) - same "blank means
+  unchanged" convention template editing already has, just enforced
+  client-side here since there's no PATCH endpoint's own logic to lean on
+- **Datastore** (hypervisor step, only shown when the selected host
+  actually has more than one): `VmSpec.datastore` already existed as a
+  per-VM override in the hypervisor abstraction, it just never had
+  anything upstream feeding it besides the host's own
+  `default_datastore`. `HypervisorDriver.list_datastores()` backs the
+  dropdown (ESXi: `ComputeResource.datastore`; Proxmox: stubbed, same as
+  everything else there)
 - **Hostname is capped at 15 characters** (13 for a bulk prefix, the 2-digit
   suffix takes the rest), enforced both client-side and by the API
   (`schemas/deployment.py`). This is a hard Windows constraint, not a
