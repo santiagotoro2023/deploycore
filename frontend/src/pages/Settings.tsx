@@ -345,6 +345,8 @@ interface UpdateStatus {
   checked_at: string | null;
   stage: string;
   error: string | null;
+  pending_changelog: string[];
+  last_update_changelog: string[];
 }
 
 const IN_PROGRESS_STAGES = new Set(["pulling", "building", "restarting", "finalizing"]);
@@ -363,6 +365,28 @@ const STAGE_ORDER = ["pulling", "building", "restarting", "finalizing", "done"];
 function stagePercent(stage: string): number {
   const idx = STAGE_ORDER.indexOf(stage);
   return idx === -1 ? 5 : Math.round(((idx + 1) / STAGE_ORDER.length) * 100);
+}
+
+function WhatsNewList({ title, entries, collapsedByDefault = false }: { title: string; entries: string[]; collapsedByDefault?: boolean }) {
+  const [open, setOpen] = useState(!collapsedByDefault);
+  return (
+    <div className="mb-3">
+      <button
+        type="button"
+        className="text-xs text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+        onClick={() => setOpen(!open)}
+      >
+        {open ? "▾" : "▸"} {title}
+      </button>
+      {open && (
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-xs text-neutral-600 dark:text-neutral-400">
+          {entries.map((entry, i) => (
+            <li key={i}>{entry}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function UpdatesPanel() {
@@ -475,6 +499,12 @@ function UpdatesPanel() {
           <p className="mb-3 text-xs text-neutral-400 dark:text-neutral-500">
             Last checked: {status.checked_at ? new Date(status.checked_at).toLocaleString() : "never"}
           </p>
+          {!upToDate && status.pending_changelog.length > 0 && (
+            <WhatsNewList title={`What's new (${status.pending_changelog.length})`} entries={status.pending_changelog} />
+          )}
+          {status.last_update_changelog.length > 0 && (
+            <WhatsNewList title="What the last update changed" entries={status.last_update_changelog} collapsedByDefault />
+          )}
           {inProgress && (
             <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-400">
               {STAGE_LABELS[status.stage] ?? status.stage}

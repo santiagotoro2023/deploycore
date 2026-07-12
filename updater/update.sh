@@ -159,6 +159,15 @@ echo "Using repo at (host path, symlinked to /repo inside this container): $REPO
 
 COMPOSE_ARGS=(--project-directory "$REPO_DIR" -f "$REPO_DIR/docker-compose.yml")
 
+commit_subjects_json() {
+  # %s (subject line only, not the full body): a "What's new" list reads
+  # better as one line per commit than a wall of full messages. jq -R -s
+  # (raw input, slurp) rather than manual quoting - a commit subject can
+  # contain quotes/backslashes that would break naive shell->JSON string
+  # building, jq's own string escaping handles that correctly.
+  git -C "$REPO_DIR" log --pretty=format:%s "$1" 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))'
+}
+
 refresh_commit_status() {
   local branch remote_ref latest behind now_iso
   branch=$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
@@ -172,12 +181,16 @@ refresh_commit_status() {
   [ -n "$latest" ] && upsert_setting latest_commit "\"$latest\""
   upsert_setting commits_behind "$behind"
   upsert_setting checked_at "\"$now_iso\""
+  # What update_now would bring in, viewable before actually clicking it -
+  # not just the count, the actual commit subjects.
+  upsert_setting pending_changelog "$(commit_subjects_json "HEAD..$remote_ref")"
 }
 
 run_update() {
   set_status pulling
-  local branch
+  local branch old_commit
   branch=$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)
+  old_commit=$(git -C "$REPO_DIR" rev-parse HEAD)
 
   if ! git -C "$REPO_DIR" fetch origin "$branch" > /tmp/update.log 2>&1; then
     set_status failed "git fetch failed: $(tail -c 500 /tmp/update.log)"
@@ -214,6 +227,10 @@ run_update() {
     return
   fi
 
+  # What this update actually brought in, persisted (not just transient
+  # output) so "What's new" still reads correctly whenever someone next
+  # opens Settings, not only in the instant the update finished.
+  upsert_setting last_update_changelog "$(commit_subjects_json "$old_commit..HEAD")"
   refresh_commit_status
   set_status done
 }

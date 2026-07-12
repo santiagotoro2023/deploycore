@@ -9,3 +9,10 @@ class UpdateStatusRead(BaseModel):
     checked_at: str | None
     stage: str
     error: str | None
+    # Commit subject lines, newest first as git log itself orders them.
+    # pending: what "Update now" would bring in, refreshed alongside
+    # commits_behind. last_update: what the most recently applied update
+    # actually contained, persisted so it's still readable days later,
+    # not just the instant the update finished.
+    pending_changelog: list[str]
+    last_update_changelog: list[str]

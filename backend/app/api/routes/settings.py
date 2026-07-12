@@ -534,6 +534,8 @@ async def get_update_status(db: AsyncSession = Depends(get_db)) -> UpdateStatusR
     commits_behind = await _get_setting_value(db, "commits_behind")
     checked_at = await _get_setting_value(db, "checked_at")
     update_status = await _get_setting_value(db, "update_status") or {}
+    pending_changelog = await _get_setting_value(db, "pending_changelog")
+    last_update_changelog = await _get_setting_value(db, "last_update_changelog")
     return UpdateStatusRead(
         git_available=git_available,
         current_commit=current_commit,
@@ -542,6 +544,8 @@ async def get_update_status(db: AsyncSession = Depends(get_db)) -> UpdateStatusR
         checked_at=checked_at,
         stage=update_status.get("stage", "idle"),
         error=update_status.get("error"),
+        pending_changelog=pending_changelog if isinstance(pending_changelog, list) else [],
+        last_update_changelog=last_update_changelog if isinstance(last_update_changelog, list) else [],
     )
 
 

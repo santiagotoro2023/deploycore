@@ -121,6 +121,17 @@ itself automatically once the update reports done. The app is only
 unreachable for the last part of that, usually under a minute. Nothing in
 your database is touched by an update itself.
 
+When you're behind, a collapsible **What's new** list shows the actual
+commit subjects the update would bring in, not just the count - the
+updater computes `git log HEAD..origin/<branch>` alongside its usual
+`commits_behind` check and stores the subject lines as a setting
+(`pending_changelog`). After an update runs, **What the last update
+changed** shows the same thing for what actually landed
+(`git log <old HEAD>..<new HEAD>` at the moment the update finished,
+stored as `last_update_changelog`) - persisted, so it's still there
+whenever you next open Settings, not just in the instant the update
+completed.
+
 This works because a small dedicated `updater` container in the stack has
 access to the Docker socket, i.e. it can tell your host's Docker daemon what
 to do, the same way tools like Portainer or Watchtower work. That's a real
