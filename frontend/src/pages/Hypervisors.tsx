@@ -233,16 +233,10 @@ function CreateHypervisorForm({
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Default datastore</label>
         <div className="mb-1 flex gap-2">
           <input
-            list="hypervisor-datastore-options"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
             value={defaultDatastore}
             onChange={(e) => setDefaultDatastore(e.target.value)}
           />
-          <datalist id="hypervisor-datastore-options">
-            {datastoreOptions.map((d) => (
-              <option key={d} value={d} />
-            ))}
-          </datalist>
           <button
             type="button"
             className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
@@ -252,6 +246,18 @@ function CreateHypervisorForm({
             {listingDatastores ? "Listing..." : "List datastores"}
           </button>
         </div>
+        {datastoreOptions.length > 0 && (
+          <Select
+            className="mb-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+            value=""
+            onChange={(e) => e.target.value && setDefaultDatastore(e.target.value)}
+          >
+            <option value="">{datastoreOptions.length} found, pick one...</option>
+            {datastoreOptions.map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </Select>
+        )}
         {listDatastoresError && <div className="mb-3 text-xs text-red-600">{listDatastoresError}</div>}
         {!listDatastoresError && <div className="mb-3" />}
         <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">

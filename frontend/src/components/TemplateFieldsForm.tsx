@@ -335,19 +335,13 @@ export default function TemplateFieldsForm({
         </div>
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Network name (port group)</label>
-        <div className="mb-3 grid grid-cols-2 gap-3">
+        <div className="mb-1 grid grid-cols-2 gap-3">
           <input
             required
-            list="template-fields-network-options"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
             value={networkName}
             onChange={(e) => setNetworkName(e.target.value)}
           />
-          <datalist id="template-fields-network-options">
-            {networkOptions.map((n) => (
-              <option key={n} value={n} />
-            ))}
-          </datalist>
           <Select
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm"
             value={browseNetworkHostId}
@@ -359,6 +353,19 @@ export default function TemplateFieldsForm({
             ))}
           </Select>
         </div>
+        {networkOptions.length > 0 && (
+          <Select
+            className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm"
+            value=""
+            onChange={(e) => e.target.value && setNetworkName(e.target.value)}
+          >
+            <option value="">{networkOptions.length} found, pick one...</option>
+            {networkOptions.map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </Select>
+        )}
+        {networkOptions.length === 0 && <div className="mb-3" />}
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Adapter type</label>
         <Select className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={networkAdapterType} onChange={(e) => setNetworkAdapterType(e.target.value as NetworkAdapterType)}>
@@ -370,19 +377,13 @@ export default function TemplateFieldsForm({
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
           Preferred datastore <span className="text-neutral-400">(optional, host default if blank)</span>
         </label>
-        <div className="mb-3 grid grid-cols-2 gap-3">
+        <div className="mb-1 grid grid-cols-2 gap-3">
           <input
-            list="template-fields-datastore-options"
             placeholder="Datastore name"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
             value={preferredDatastore}
             onChange={(e) => setPreferredDatastore(e.target.value)}
           />
-          <datalist id="template-fields-datastore-options">
-            {datastoreOptions.map((d) => (
-              <option key={d} value={d} />
-            ))}
-          </datalist>
           <Select
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm"
             value={browseHostId}
@@ -394,6 +395,19 @@ export default function TemplateFieldsForm({
             ))}
           </Select>
         </div>
+        {datastoreOptions.length > 0 && (
+          <Select
+            className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm"
+            value=""
+            onChange={(e) => e.target.value && setPreferredDatastore(e.target.value)}
+          >
+            <option value="">{datastoreOptions.length} found, pick one...</option>
+            {datastoreOptions.map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </Select>
+        )}
+        {datastoreOptions.length === 0 && <div className="mb-3" />}
 
         <div className="mb-3 grid grid-cols-3 gap-3">
           <div>
