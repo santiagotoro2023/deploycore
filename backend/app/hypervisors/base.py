@@ -114,7 +114,18 @@ class HypervisorDriver(ABC):
 
     @abstractmethod
     async def list_datastores(self) -> list[str]:
-        """Every datastore visible to this host, for the deployment
-        wizard's per-deployment datastore override (VmSpec.datastore) -
-        a host's own default_datastore remains what's used when a
-        deployment doesn't override it."""
+        """Every datastore visible to this host - backs the "Browse
+        datastores from..." picker next to DeploymentTemplate.
+        preferred_datastore (template create/edit and "Customize
+        installation"). A host's own default_datastore remains what's
+        used when a template/deployment doesn't set a preference."""
+
+    @abstractmethod
+    async def list_networks(self) -> list[str]:
+        """Every network/port group visible to this host - backs the
+        same "Browse from..." picker next to DeploymentTemplate.
+        network_name, a plain string like preferred_datastore, not a
+        foreign key: a template isn't bound to one host any more than
+        its datastore preference is, port group names are conventionally
+        similar across the hosts a given template might actually deploy
+        onto."""

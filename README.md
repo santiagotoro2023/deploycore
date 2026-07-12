@@ -468,7 +468,13 @@ org-scoped copy.
   zeroed), network name (an ESXi/vCenter port group, network segmentation
   is expected to already be handled by picking the right port group, not
   by a VLAN tag on the template) and network adapter type (VMXNET3, E1000,
-  or E1000E), locale/timezone/keyboard layout as Windows
+  or E1000E). Network name and preferred datastore (below) are both plain
+  text fields with a live autocomplete list: pick a hypervisor from the
+  small "Browse..." dropdown next to either one and `HypervisorDriver.
+  list_networks()`/`list_datastores()` fill in the actual port groups or
+  datastores that host can see - the stored value is always just the
+  name string either way, not a binding to whichever host you happened
+  to browse from. Also locale/timezone/keyboard layout as Windows
   identifiers not IETF/IANA ones (new templates default to `de-DE`/
   `W. Europe Standard Time`/`de-CH`), a local administrator password
   (write-only), and an off-by-default **custom admin account** toggle:

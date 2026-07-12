@@ -179,11 +179,30 @@ async def list_datastores(
 ) -> list[str]:
     """Live, not cached - a datastore added/removed on the host since
     default_datastore was set should show up immediately here, this is
-    what the deployment wizard's per-deployment datastore override
-    (see "Customize installation") populates its dropdown from."""
+    what the "Browse datastores from..." picker next to a template's
+    preferred_datastore field populates its options from."""
     host = await _get_host_or_404(db, org_id, host_id)
     driver = get_driver(host)
     try:
         return await driver.list_datastores()
-    except Exception as exc:  # noqa: BLE001 - surfaced to the wizard, not worth a 500 for an unreachable host
+    except Exception as exc:  # noqa: BLE001 - surfaced to the form, not worth a 500 for an unreachable host
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"could not list datastores: {exc}") from exc
+
+
+@router.get(
+    "/{host_id}/networks",
+    response_model=list[str],
+    dependencies=[Depends(require_role(Role.READONLY))],
+)
+async def list_networks(
+    org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> list[str]:
+    """Same shape and reasoning as list_datastores above, for the
+    "Browse port groups from..." picker next to a template's
+    network_name field."""
+    host = await _get_host_or_404(db, org_id, host_id)
+    driver = get_driver(host)
+    try:
+        return await driver.list_networks()
+    except Exception as exc:  # noqa: BLE001 - surfaced to the form, not worth a 500 for an unreachable host
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"could not list networks: {exc}") from exc

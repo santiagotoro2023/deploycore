@@ -96,6 +96,8 @@ export default function TemplateFieldsForm({
   const [diskProvisioning, setDiskProvisioning] = useState<DiskProvisioning>(existing?.disk_provisioning ?? "thin");
   const [networkName, setNetworkName] = useState(existing?.network_name ?? "");
   const [networkAdapterType, setNetworkAdapterType] = useState<NetworkAdapterType>(existing?.network_adapter_type ?? "vmxnet3");
+  const [browseNetworkHostId, setBrowseNetworkHostId] = useState("");
+  const [networkOptions, setNetworkOptions] = useState<string[]>([]);
   const [preferredDatastore, setPreferredDatastore] = useState(existing?.preferred_datastore ?? "");
   const [browseHostId, setBrowseHostId] = useState("");
   const [datastoreOptions, setDatastoreOptions] = useState<string[]>([]);
@@ -121,6 +123,17 @@ export default function TemplateFieldsForm({
   const [appToAdd, setAppToAdd] = useState(appAssets[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!browseNetworkHostId) {
+      setNetworkOptions([]);
+      return;
+    }
+    api
+      .get<string[]>(`/organizations/${orgId}/hypervisors/${browseNetworkHostId}/networks`)
+      .then(setNetworkOptions)
+      .catch(() => setNetworkOptions([]));
+  }, [orgId, browseNetworkHostId]);
 
   useEffect(() => {
     if (!browseHostId) {
@@ -321,15 +334,38 @@ export default function TemplateFieldsForm({
           </Select>
         </div>
 
-        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Network name</label>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Network name (port group)</label>
         <div className="mb-3 grid grid-cols-2 gap-3">
-          <input required className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={networkName} onChange={(e) => setNetworkName(e.target.value)} />
-          <Select className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={networkAdapterType} onChange={(e) => setNetworkAdapterType(e.target.value as NetworkAdapterType)}>
-            <option value="vmxnet3">VMXNET3</option>
-            <option value="e1000">E1000</option>
-            <option value="e1000e">E1000E</option>
+          <input
+            required
+            list="template-fields-network-options"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+            value={networkName}
+            onChange={(e) => setNetworkName(e.target.value)}
+          />
+          <datalist id="template-fields-network-options">
+            {networkOptions.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+          <Select
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm"
+            value={browseNetworkHostId}
+            onChange={(e) => setBrowseNetworkHostId(e.target.value)}
+          >
+            <option value="">Browse port groups from...</option>
+            {hosts.map((h) => (
+              <option key={h.id} value={h.id}>{h.name}</option>
+            ))}
           </Select>
         </div>
+
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Adapter type</label>
+        <Select className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm" value={networkAdapterType} onChange={(e) => setNetworkAdapterType(e.target.value as NetworkAdapterType)}>
+          <option value="vmxnet3">VMXNET3</option>
+          <option value="e1000">E1000</option>
+          <option value="e1000e">E1000E</option>
+        </Select>
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
           Preferred datastore <span className="text-neutral-400">(optional, host default if blank)</span>

@@ -563,3 +563,21 @@ class ESXiDriver(HypervisorDriver):
 
     async def list_datastores(self) -> list[str]:
         return await asyncio.to_thread(self._list_datastores_sync)
+
+    def _list_networks_sync(self) -> list[str]:
+        service_instance = self._connect_sync()
+        try:
+            # Same traversal as _list_datastores_sync - ComputeResource.
+            # network is every network/port group (standard vSwitch and
+            # distributed alike) visible to this host, not just whatever
+            # a template's network_name currently happens to be set to.
+            content = service_instance.RetrieveContent()
+            datacenter = content.rootFolder.childEntity[0]
+            host_folder = datacenter.hostFolder
+            compute_resource = host_folder.childEntity[0]
+            return sorted(net.name for net in compute_resource.network)
+        finally:
+            connect.Disconnect(service_instance)
+
+    async def list_networks(self) -> list[str]:
+        return await asyncio.to_thread(self._list_networks_sync)

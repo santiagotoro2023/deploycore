@@ -641,18 +641,22 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   as it appears in your hypervisor's networking configuration, not a Windows-side network
                   name, it's what the new VM's virtual NIC attaches to. There's no separate VLAN ID field:
                   network segmentation is expected to already be handled by picking the right port group
-                  (one per VLAN, set up on the hypervisor side), not by tagging the VM itself. Also its{" "}
-                  <strong>adapter type</strong> (VMXNET3, the paravirtualized default with the best
+                  (one per VLAN, set up on the hypervisor side), not by tagging the VM itself. Type it
+                  directly, or use the "Browse port groups from..." picker next to it to fill in a live
+                  list from whichever hypervisor you choose to check - same live-autocomplete treatment
+                  as preferred datastore below, and for the same reason: the stored value is always just
+                  the name string, not a binding to whichever host you happened to browse from, so it
+                  still means the right thing even if a deployment lands on a different host later. Also
+                  its <strong>adapter type</strong> (VMXNET3, the paravirtualized default with the best
                   performance and the one to use unless you have a specific reason not to; E1000/E1000E
                   emulate real Intel NICs, only needed for guest OS or driver compatibility). Also
                   locale/timezone/keyboard layout as Windows identifiers, not
                   IETF/IANA ones (new templates default to <Code>de-DE</Code>/<Code>W. Europe Standard
                   Time</Code>/<Code>de-CH</Code>; see "Unattended Windows Setup, in depth" for how keyboard
                   layout resolves to an exact physical layout rather than just a language). Also a{" "}
-                  <strong>preferred datastore</strong>, optional, a plain name rather than a binding to
-                  any specific hypervisor - type one directly, or use the "Browse datastores from..."
-                  picker to fill in a live list from whichever hypervisor you choose to check; left
-                  blank, the host's own configured default is used at deploy time.</>,
+                  <strong>preferred datastore</strong>, optional, same plain-name-with-live-browse
+                  treatment as network name above; left blank, the host's own configured default is used
+                  at deploy time.</>,
                 <>Local administrator password, always write-only, never shown again after saving. Off by
                   default, an optional <strong>custom admin account</strong> toggle: off just sets that
                   password on the built-in Administrator account, no other change. On adds a username field
