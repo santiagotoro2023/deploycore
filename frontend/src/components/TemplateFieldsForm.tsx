@@ -1,8 +1,9 @@
 import { Trash2 } from "lucide-react";
-import { FormEvent, ReactNode, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { api } from "../api/client";
 import PostInstallScriptsEditor, { PostInstallScriptForm } from "./PostInstallScriptsEditor";
 import Select from "./Select";
-import { AppAsset, AppInstallEntry, DeploymentTemplate, DiskLayout, DiskProvisioning, IsoAsset, NetworkAdapterType } from "../api/types";
+import { AppAsset, AppInstallEntry, DeploymentTemplate, DiskLayout, DiskProvisioning, HypervisorHost, IsoAsset, NetworkAdapterType } from "../api/types";
 
 const WINDOWS_FEATURES: { name: string; label: string }[] = [
   { name: "AD-Domain-Services", label: "Active Directory Domain Services" },
@@ -27,6 +28,7 @@ export interface TemplateFieldsBody {
   disk_provisioning: DiskProvisioning;
   network_name: string;
   network_adapter_type: NetworkAdapterType;
+  preferred_datastore: string | null;
   locale: string;
   timezone: string;
   keyboard_layout: string;
@@ -55,6 +57,8 @@ export interface TemplateFieldsBody {
  * whatever's already there" convention template editing already has:
  * true only for creating a brand new template from scratch. */
 export default function TemplateFieldsForm({
+  orgId,
+  hosts,
   diskLayouts,
   isoAssets,
   appAssets,
@@ -67,6 +71,8 @@ export default function TemplateFieldsForm({
   onClose,
   onSubmit,
 }: {
+  orgId: string;
+  hosts: HypervisorHost[];
   diskLayouts: DiskLayout[];
   isoAssets: IsoAsset[];
   appAssets: AppAsset[];
@@ -90,6 +96,9 @@ export default function TemplateFieldsForm({
   const [diskProvisioning, setDiskProvisioning] = useState<DiskProvisioning>(existing?.disk_provisioning ?? "thin");
   const [networkName, setNetworkName] = useState(existing?.network_name ?? "");
   const [networkAdapterType, setNetworkAdapterType] = useState<NetworkAdapterType>(existing?.network_adapter_type ?? "vmxnet3");
+  const [preferredDatastore, setPreferredDatastore] = useState(existing?.preferred_datastore ?? "");
+  const [browseHostId, setBrowseHostId] = useState("");
+  const [datastoreOptions, setDatastoreOptions] = useState<string[]>([]);
   const [locale, setLocale] = useState(existing?.locale ?? "de-DE");
   const [timezone, setTimezone] = useState(existing?.timezone ?? "W. Europe Standard Time");
   const [keyboardLayout, setKeyboardLayout] = useState(existing?.keyboard_layout ?? "de-CH");
@@ -112,6 +121,17 @@ export default function TemplateFieldsForm({
   const [appToAdd, setAppToAdd] = useState(appAssets[0]?.id ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!browseHostId) {
+      setDatastoreOptions([]);
+      return;
+    }
+    api
+      .get<string[]>(`/organizations/${orgId}/hypervisors/${browseHostId}/datastores`)
+      .then(setDatastoreOptions)
+      .catch(() => setDatastoreOptions([]));
+  }, [orgId, browseHostId]);
 
   function addAppInstall() {
     if (!appToAdd || appInstalls.some((e) => e.app_asset_id === appToAdd)) return;
@@ -171,6 +191,7 @@ export default function TemplateFieldsForm({
       disk_provisioning: diskProvisioning,
       network_name: networkName,
       network_adapter_type: networkAdapterType,
+      preferred_datastore: preferredDatastore || null,
       locale,
       timezone,
       keyboard_layout: keyboardLayout,
@@ -307,6 +328,34 @@ export default function TemplateFieldsForm({
             <option value="vmxnet3">VMXNET3</option>
             <option value="e1000">E1000</option>
             <option value="e1000e">E1000E</option>
+          </Select>
+        </div>
+
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+          Preferred datastore <span className="text-neutral-400">(optional, host default if blank)</span>
+        </label>
+        <div className="mb-3 grid grid-cols-2 gap-3">
+          <input
+            list="template-fields-datastore-options"
+            placeholder="Datastore name"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+            value={preferredDatastore}
+            onChange={(e) => setPreferredDatastore(e.target.value)}
+          />
+          <datalist id="template-fields-datastore-options">
+            {datastoreOptions.map((d) => (
+              <option key={d} value={d} />
+            ))}
+          </datalist>
+          <Select
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm"
+            value={browseHostId}
+            onChange={(e) => setBrowseHostId(e.target.value)}
+          >
+            <option value="">Browse datastores from...</option>
+            {hosts.map((h) => (
+              <option key={h.id} value={h.id}>{h.name}</option>
+            ))}
           </Select>
         </div>
 

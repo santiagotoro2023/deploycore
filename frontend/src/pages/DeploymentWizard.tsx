@@ -58,8 +58,6 @@ export default function DeploymentWizard() {
   const [diskLayouts, setDiskLayouts] = useState<DiskLayout[]>([]);
   const [isoAssets, setIsoAssets] = useState<IsoAsset[]>([]);
   const [appAssets, setAppAssets] = useState<AppAsset[]>([]);
-  const [datastores, setDatastores] = useState<string[]>([]);
-  const [datastore, setDatastore] = useState("");
   const [showCustomize, setShowCustomize] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, unknown> | null>(null);
 
@@ -89,24 +87,10 @@ export default function DeploymentWizard() {
     api.get<AppAsset[]>(`/organizations/${selectedOrgId}/app-assets`).then(setAppAssets);
   }, [selectedOrgId]);
 
-  useEffect(() => {
-    setDatastore("");
-    if (!selectedOrgId || !hypervisorHostId) {
-      setDatastores([]);
-      return;
-    }
-    api
-      .get<string[]>(`/organizations/${selectedOrgId}/hypervisors/${hypervisorHostId}/datastores`)
-      .then(setDatastores)
-      .catch(() => setDatastores([])); // best-effort - the host's own default_datastore is always a fine fallback
-  }, [selectedOrgId, hypervisorHostId]);
-
   if (!orgLoaded) return null;
   if (!selectedOrgId) return <p className="text-sm text-neutral-500">Select an organization first.</p>;
 
   const selectedTemplate = templates.find((t) => t.id === templateId);
-  const combinedOverrides = { ...(overrides ?? {}), ...(datastore ? { datastore } : {}) };
-  const hasOverrides = Object.keys(combinedOverrides).length > 0;
 
   const hostnameError = bulk
     ? computerNameError(hostname, "Hostname prefix", COMPUTERNAME_MAX_LENGTH - 2)
@@ -150,7 +134,7 @@ export default function DeploymentWizard() {
       } else {
         const deployment = await api.post<Deployment>(`/organizations/${selectedOrgId}/deployments`, {
           template_id: templateId,
-          overrides: hasOverrides ? combinedOverrides : undefined,
+          overrides: overrides ?? undefined,
           hypervisor_host_id: hypervisorHostId,
           ...networkFields,
         });
@@ -229,39 +213,20 @@ export default function DeploymentWizard() {
         )}
 
         {step === 1 && (
-          <div className="space-y-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Hypervisor</label>
-              <Select
-                className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
-                value={hypervisorHostId}
-                onChange={(e) => setHypervisorHostId(e.target.value)}
-              >
-                <option value="">Select a hypervisor...</option>
-                {hosts.map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.name} ({h.type})
-                  </option>
-                ))}
-              </Select>
-            </div>
-            {hypervisorHostId && datastores.length > 1 && (
-              <div>
-                <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Datastore</label>
-                <Select
-                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
-                  value={datastore}
-                  onChange={(e) => setDatastore(e.target.value)}
-                >
-                  <option value="">Host default</option>
-                  {datastores.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            )}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Hypervisor</label>
+            <Select
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+              value={hypervisorHostId}
+              onChange={(e) => setHypervisorHostId(e.target.value)}
+            >
+              <option value="">Select a hypervisor...</option>
+              {hosts.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.name} ({h.type})
+                </option>
+              ))}
+            </Select>
           </div>
         )}
 
@@ -419,6 +384,8 @@ export default function DeploymentWizard() {
 
       {showCustomize && selectedTemplate && (
         <TemplateFieldsForm
+          orgId={selectedOrgId}
+          hosts={hosts}
           diskLayouts={diskLayouts}
           isoAssets={isoAssets}
           appAssets={appAssets}

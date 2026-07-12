@@ -20,7 +20,7 @@ export interface User {
   org_roles: Record<string, Role>;
 }
 
-export type HypervisorType = "esxi" | "proxmox";
+export type HypervisorType = "esxi";
 export type ConnectionStatus = "unknown" | "ok" | "failed";
 
 export interface HypervisorHost {

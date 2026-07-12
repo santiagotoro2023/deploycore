@@ -12,7 +12,13 @@ from app.security import crypto
 
 class HypervisorType(str, enum.Enum):
     ESXI = "esxi"
-    PROXMOX = "proxmox"
+    # No Proxmox: it was never wired into any user-facing surface (the
+    # UI only ever offered ESXi), so ESXi is the only real driver. The
+    # Postgres enum type itself (migration 0002) still lists "proxmox"
+    # alongside "esxi" - Postgres has no DROP VALUE for enum types, only
+    # ADD, so removing it there would mean recreating the type/column
+    # rather than a plain migration; not worth it for a value
+    # application code never accepts or produces anyway.
 
 
 class ConnectionStatus(str, enum.Enum):

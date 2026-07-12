@@ -40,6 +40,7 @@ class DeploymentTemplateCreate(BaseModel):
     disk_provisioning: DiskProvisioning = DiskProvisioning.THIN
     network_name: str
     network_adapter_type: NetworkAdapterType = NetworkAdapterType.VMXNET3
+    preferred_datastore: str | None = None
     locale: str = "de-DE"
     timezone: str = "W. Europe Standard Time"
     keyboard_layout: str = "de-CH"
@@ -70,6 +71,7 @@ class DeploymentTemplateUpdate(BaseModel):
     disk_provisioning: DiskProvisioning | None = None
     network_name: str | None = None
     network_adapter_type: NetworkAdapterType | None = None
+    preferred_datastore: str | None = None
     locale: str | None = None
     timezone: str | None = None
     keyboard_layout: str | None = None
@@ -104,6 +106,7 @@ class DeploymentTemplateRead(BaseModel):
     disk_provisioning: DiskProvisioning
     network_name: str
     network_adapter_type: NetworkAdapterType
+    preferred_datastore: str | None
     locale: str
     timezone: str
     keyboard_layout: str
@@ -137,7 +140,9 @@ class DeploymentTemplateExport(BaseModel):
     informational only: an ISO or an app asset isn't portable across
     environments (a matching id may not exist, or may exist and mean
     something else), so import leaves iso_asset_id unset and
-    app_installs empty, the same reasoning for both."""
+    app_installs empty, the same reasoning for both. preferred_datastore
+    is dropped outright for the same reason, one environment's datastore
+    name means nothing (or worse, means something else) in another."""
 
     name: str
     disk_layout: TemplateExportDiskLayout

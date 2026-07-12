@@ -214,6 +214,7 @@ async def clone_template(
         disk_provisioning=source.disk_provisioning,
         network_name=source.network_name,
         network_adapter_type=source.network_adapter_type,
+        preferred_datastore=source.preferred_datastore,
         locale=source.locale,
         timezone=source.timezone,
         keyboard_layout=source.keyboard_layout,

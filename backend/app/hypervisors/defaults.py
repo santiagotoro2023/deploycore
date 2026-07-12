@@ -22,17 +22,6 @@ HYPERVISOR_DEFAULTS = {
         "mac_oui": "00:50:56",
         "mac_fourth_octet_max": 0x40,
     },
-    "proxmox": {
-        "firmware": "efi",
-        "scsi_controller": "virtio-scsi",
-        # VirtIO SCSI isn't a Windows Server 2025 in-box driver, the
-        # autounattend build must attach a VirtIO driver ISO and load it
-        # during the WindowsPE pass, or setup won't see the disk at all.
-        "requires_driver_injection": True,
-        # QEMU/Proxmox's own traditional prefix for guest NICs.
-        "mac_oui": "52:54:00",
-        "mac_fourth_octet_max": 0x100,
-    },
 }
 
 

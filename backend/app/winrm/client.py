@@ -272,47 +272,98 @@ if ($installer) {
         installed = "DEPLOYCORE_VMWARE_TOOLS_INSTALLED" in result.stdout
         return VmwareToolsInstallResult(result.status_code, result.stdout.strip(), result.stderr, installed)
 
+    # Fixed path, not $env:TEMP: get_feature_install_status-style progress
+    # polling (see provision.py) runs over a *separate* WinRM session/
+    # process than the one running install_windows_updates itself (same
+    # NTLM-session-corruption reason as the feature-install progress
+    # check), so the two need a location that resolves the same way
+    # regardless of which session touches it - a per-user %TEMP% would be
+    # consistent here too (both sessions authenticate as the same local
+    # admin account), but Windows\Temp is unambiguous and needs no
+    # profile to already be loaded.
+    _WINDOWS_UPDATE_STATUS_PATH = r"C:\Windows\Temp\deploycore_wu_status.txt"
+
     def install_windows_updates(self) -> WinRMResult:
         """Best-effort: searches Windows Update via the built-in WUA COM
         API (Microsoft.Update.Session) - no PSWindowsUpdate module or
         PSGallery/internet access needed beyond what Windows Update
         itself already requires - for every applicable, non-hidden
         update, not filtered down to only critical/security ones, so
-        this also picks up optional/recommended updates the interactive
-        Settings app would list separately. Downloads and installs
-        whatever it finds. A VM built from a months-old ISO can be
-        meaningfully behind day one; this catches it up in the same
-        pass rather than leaving it to whenever Windows' own automatic
-        update schedule gets to it - the caller (see provision.py) logs
-        a failure here as a WARN and continues the rest of post-install
-        regardless, never worth failing an otherwise-successful
-        deployment over an update server hiccup."""
-        script = """
+        this also picks up optional/recommended updates (including
+        drivers) the interactive Settings app would list separately.
+        Downloads and installs whatever it finds. A VM built from a
+        months-old ISO can be meaningfully behind day one; this catches
+        it up in the same pass rather than leaving it to whenever
+        Windows' own automatic update schedule gets to it - the caller
+        (see provision.py) logs a failure here as a WARN and continues
+        the rest of post-install regardless, never worth failing an
+        otherwise-successful deployment over an update server hiccup.
+
+        Clears ExcludeWUDriversInQualityUpdate first (best-effort, never
+        fatal if it can't): some Windows Server images have "Do not
+        include drivers with Windows Updates" set via local/group
+        policy, which makes the WUA search itself silently exclude every
+        Type='Driver' result - confirmed Microsoft-documented behavior
+        of that specific policy, not just a Settings-app-UI filter - so
+        a driver-inclusive search needs that value gone first or it
+        never sees drivers to begin with, no Type filter on the search
+        criteria itself would fix that.
+
+        Writes its current stage to a fixed status file throughout
+        (search/download/install), read back by get_windows_update_progress
+        for the deployment log's heartbeat - a single blocking WinRM call
+        has no other way to report live progress mid-run."""
+        script = f"""
+$marker = '{self._WINDOWS_UPDATE_STATUS_PATH}'
+"searching for updates" | Set-Content -Path $marker -Force
+try {{
+    Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU' -Name 'ExcludeWUDriversInQualityUpdate' -ErrorAction SilentlyContinue
+}} catch {{}}
 $Session = New-Object -ComObject Microsoft.Update.Session
 $Searcher = $Session.CreateUpdateSearcher()
 $SearchResult = $Searcher.Search("IsInstalled=0 and IsHidden=0")
-if ($SearchResult.Updates.Count -eq 0) {
+if ($SearchResult.Updates.Count -eq 0) {{
+    "no updates found" | Set-Content -Path $marker -Force
     Write-Output "No applicable updates found."
+    Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
     exit 0
-}
+}}
+"downloading $($SearchResult.Updates.Count) update(s)" | Set-Content -Path $marker -Force
 $ToDownload = New-Object -ComObject Microsoft.Update.UpdateColl
-foreach ($u in $SearchResult.Updates) { $ToDownload.Add($u) | Out-Null }
+foreach ($u in $SearchResult.Updates) {{ $ToDownload.Add($u) | Out-Null }}
 $Downloader = $Session.CreateUpdateDownloader()
 $Downloader.Updates = $ToDownload
 $Downloader.Download() | Out-Null
 $ToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
-foreach ($u in $SearchResult.Updates) { if ($u.IsDownloaded) { $ToInstall.Add($u) | Out-Null } }
-if ($ToInstall.Count -eq 0) {
+foreach ($u in $SearchResult.Updates) {{ if ($u.IsDownloaded) {{ $ToInstall.Add($u) | Out-Null }} }}
+if ($ToInstall.Count -eq 0) {{
+    "no updates downloaded successfully" | Set-Content -Path $marker -Force
     Write-Output "Found $($SearchResult.Updates.Count) update(s) but none downloaded successfully."
+    Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
     exit 1
-}
+}}
+"installing $($ToInstall.Count) update(s)" | Set-Content -Path $marker -Force
 $Installer = $Session.CreateUpdateInstaller()
 $Installer.Updates = $ToInstall
 $Result = $Installer.Install()
 Write-Output "Installed $($ToInstall.Count) of $($SearchResult.Updates.Count) found update(s), result code $($Result.ResultCode), reboot required: $($Result.RebootRequired)."
-if ($Result.ResultCode -ne 2 -and $Result.ResultCode -ne 3) { exit 1 }
+Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
+if ($Result.ResultCode -ne 2 -and $Result.ResultCode -ne 3) {{ exit 1 }}
 """.strip()
         return self.run_ps(script)
+
+    def get_windows_update_progress(self) -> str:
+        """Best-effort progress read for install_windows_updates, run
+        over a separate WinRM session while the main install call is
+        still in flight (see the module-level note on
+        _WINDOWS_UPDATE_STATUS_PATH for why it has to be a separate
+        session). Empty string once the marker is gone - either the
+        install hasn't started yet or it already finished - the caller
+        treats that as "nothing new to report" rather than an error."""
+        result = self.run_ps(
+            f"Get-Content -Path '{self._WINDOWS_UPDATE_STATUS_PATH}' -ErrorAction SilentlyContinue"
+        )
+        return result.stdout.strip() if result.ok else ""
 
     def reboot(self) -> WinRMResult:
         return self.run_ps("Restart-Computer -Force")

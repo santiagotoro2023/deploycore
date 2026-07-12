@@ -307,10 +307,8 @@ org-scoped copy.
   list; falls back to their initials if none is set
 
 ### Hypervisors
-- Per-organization. ESXi only for now, selectable in the UI. (A Proxmox
-  driver is stubbed in the codebase for possible future support, but it
-  isn't wired into any user-facing surface yet, every method it has raises
-  `NotImplementedError`.)
+- Per-organization. ESXi only - the only hypervisor driver this project
+  targets.
 - Fields: name, API endpoint, username, credential (write-only, never
   returned by the API after creation), TLS verification toggle, default
   datastore (used when creating a VM if nothing more specific is set). The
@@ -361,8 +359,9 @@ org-scoped copy.
 
 ### ISO Assets
 - Org-scoped or global. Windows Server ISOs only, uploaded through the UI
-  as `windows_iso`. (A `virtio_iso` kind also exists in the data model for
-  the stubbed Proxmox driver above, but nothing in the UI offers it today.)
+  as `windows_iso`. (A `virtio_iso` kind also exists in the data model,
+  for a hypervisor whose driver needs one injected during Setup - ESXi
+  doesn't, so nothing in the UI offers uploading one today.)
 - A global admin gets an "Available to" scope choice in the upload dialog
   (this organization only, or every organization); a global ISO is
   inherited read-only by every organization the same way global disk
@@ -556,13 +555,21 @@ pending → creating_vm → booting → installing_os → post_install → confi
   the template's real secret with an empty string) - same "blank means
   unchanged" convention template editing already has, just enforced
   client-side here since there's no PATCH endpoint's own logic to lean on
-- **Datastore** (hypervisor step, only shown when the selected host
-  actually has more than one): `VmSpec.datastore` already existed as a
-  per-VM override in the hypervisor abstraction, it just never had
-  anything upstream feeding it besides the host's own
-  `default_datastore`. `HypervisorDriver.list_datastores()` backs the
-  dropdown (ESXi: `ComputeResource.datastore`; Proxmox: stubbed, same as
-  everything else there)
+- **Preferred datastore** is a real `DeploymentTemplate` field
+  (`preferred_datastore`, nullable - just a name, not a foreign key to a
+  specific `HypervisorHost`, the same way `network_name` isn't bound to
+  one either), editable anywhere template fields are editable (template
+  create/edit, and "Customize installation" above) rather than being a
+  one-off wizard-only setting: same `EffectiveTemplate` mechanism as
+  every other field, no special-casing needed in `provision.py` beyond
+  `template.preferred_datastore or host.default_datastore` when building
+  `VmSpec`. The field itself is a text input with a live autocomplete
+  list (`<datalist>`) populated on demand: pick a hypervisor from a
+  small "Browse datastores from..." dropdown next to it and
+  `HypervisorDriver.list_datastores()` (ESXi: `ComputeResource.
+  datastore`) fills in the options, but the stored value is always just
+  a plain string, so it still means something even if the deployment
+  ultimately lands on a different host than the one you browsed from
 - **Hostname is capped at 15 characters** (13 for a bulk prefix, the 2-digit
   suffix takes the rest), enforced both client-side and by the API
   (`schemas/deployment.py`). This is a hard Windows constraint, not a
@@ -1304,9 +1311,8 @@ rm -rf deploycore
 
 ## Known limitations
 
-- ESXi is the only working hypervisor target. A Proxmox driver exists in
-  the codebase as a stub for possible future support (every method raises
-  `NotImplementedError`), but it isn't exposed anywhere in the UI.
+- ESXi is the only hypervisor target - the only one this project aims to
+  support.
 - Installing "Active Directory Domain Services" from a template only runs
   `Install-WindowsFeature AD-Domain-Services`, i.e. it installs the role
   binaries. It does **not** promote the server to a domain controller and

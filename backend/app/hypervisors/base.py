@@ -36,9 +36,8 @@ class VmSpec(BaseModel):
 
 
 class HypervisorDriver(ABC):
-    """Shared VM lifecycle contract for every hypervisor backend. `ESXiDriver`
-    is the fully-implemented driver for this MVP; `ProxmoxDriver` stubs the
-    same surface so adding Proxmox later is additive, not a rewrite."""
+    """Shared VM lifecycle contract for a hypervisor backend. `ESXiDriver`
+    is the only implementation - this project targets ESXi only."""
 
     def __init__(self, host) -> None:
         self.host = host

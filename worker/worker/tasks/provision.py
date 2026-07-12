@@ -275,13 +275,14 @@ async def run_deployment(ctx, deployment_id: str) -> None:
                 scsi_controller=defaults["scsi_controller"],
                 network_name=template.network_name,
                 network_adapter_type=template.network_adapter_type.value,
-                # "datastore" isn't a DeploymentTemplate field at all (it's
-                # host-specific, not template-specific), so it's read
-                # directly off the override dict rather than through
-                # `template` - "Customize installation"'s per-deployment
-                # datastore choice, falling back to the host's own default
-                # when it was never overridden.
-                datastore=deployment.overrides.get("datastore") or host.default_datastore,
+                # Same fallback chain a bare read of any other
+                # EffectiveTemplate-backed field gets for free: per-
+                # deployment override (Customize installation), else the
+                # template's own preferred_datastore, else the host's own
+                # default_datastore - no special-casing needed here since
+                # preferred_datastore is a real DeploymentTemplate field
+                # like any other, not a one-off VmSpec-only concept.
+                datastore=template.preferred_datastore or host.default_datastore,
                 mac_address=mac_address,
             )
             vm_ref = await driver.create_vm(spec)
@@ -831,10 +832,19 @@ async def run_post_install(ctx, deployment_id: str) -> None:
             # catches it up in the same pass. Never fails the deployment -
             # an update server hiccup is a WARN, not a reason to mark an
             # otherwise-successful deployment failed.
+            def _update_progress() -> str:
+                # Separate WinRMClient/session, not the one running the
+                # install - sharing one session corrupts NTLM's own
+                # message-signing state, same lesson learned the hard
+                # way with the feature-install progress check above.
+                progress_client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
+                return progress_client.get_windows_update_progress()
+
             await log(db, deployment, "configuring", "checking for Windows updates")
             update_result = await _run_with_heartbeat(
                 db, deployment, "configuring", "checking for Windows updates",
                 client.install_windows_updates,
+                progress_check=_update_progress,
             )
             await log(
                 db, deployment, "configuring",

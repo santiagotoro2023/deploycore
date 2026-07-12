@@ -19,13 +19,6 @@ def test_esxi_mac_stays_within_vmwares_manual_range():
         assert int(fourth, 16) < 0x40
 
 
-def test_proxmox_mac_uses_qemu_prefix():
-    for _ in range(20):
-        mac = generate_mac_address("proxmox")
-        assert _MAC_RE.match(mac), mac
-        assert mac.startswith("52:54:00:")
-
-
 def test_generated_macs_are_not_all_identical():
     """Sanity check against an accidentally-constant generator: 50 draws
     from a large enough random space shouldn't collide down to one value."""

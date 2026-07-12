@@ -18,7 +18,6 @@ dependencies = [
     "arq>=0.26",
     "python-multipart>=0.0.9",
     "pyvmomi>=8.0",
-    "proxmoxer>=2.0",
     "pywinrm>=0.4",
     "httpx>=0.27",
     "pyotp>=2.9",

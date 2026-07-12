@@ -62,6 +62,15 @@ class DeploymentTemplate(UUIDPKMixin, TimestampMixin, Base):
     network_adapter_type: Mapped[NetworkAdapterType] = enum_column(
         NetworkAdapterType, "network_adapter_type", default=NetworkAdapterType.VMXNET3, nullable=False
     )
+    # Just a name, not a foreign key to a specific HypervisorHost - a
+    # template isn't bound to one host any more than network_name's port
+    # group name is, both are conventionally similar across the hosts a
+    # given template might actually deploy onto. None (the default)
+    # means "use whichever host ends up selected at deploy time's own
+    # default_datastore" - see HypervisorDriver.list_datastores(), what
+    # the template/customize-installation form's own dropdown is
+    # populated from.
+    preferred_datastore: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     locale: Mapped[str] = mapped_column(String(20), default="en-US", nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)

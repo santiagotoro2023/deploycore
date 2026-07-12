@@ -6,7 +6,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable from "../components/DataTable";
 import TemplateFieldsForm, { TemplateFieldsBody } from "../components/TemplateFieldsForm";
 import { downloadJson, readJsonFile } from "../lib/jsonFile";
-import { AppAsset, DeploymentTemplate, DiskLayout, IsoAsset } from "../api/types";
+import { AppAsset, DeploymentTemplate, DiskLayout, HypervisorHost, IsoAsset } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
 
@@ -18,6 +18,7 @@ export default function Templates() {
   const [diskLayouts, setDiskLayouts] = useState<DiskLayout[]>([]);
   const [isoAssets, setIsoAssets] = useState<IsoAsset[]>([]);
   const [appAssets, setAppAssets] = useState<AppAsset[]>([]);
+  const [hosts, setHosts] = useState<HypervisorHost[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<DeploymentTemplate | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -28,16 +29,18 @@ export default function Templates() {
   async function load() {
     if (!selectedOrgId) return;
     try {
-      const [t, d, i, a] = await Promise.all([
+      const [t, d, i, a, h] = await Promise.all([
         api.get<DeploymentTemplate[]>(`/organizations/${selectedOrgId}/templates`),
         api.get<DiskLayout[]>(`/organizations/${selectedOrgId}/disk-layouts`),
         api.get<IsoAsset[]>(`/organizations/${selectedOrgId}/iso-assets`),
         api.get<AppAsset[]>(`/organizations/${selectedOrgId}/app-assets`),
+        api.get<HypervisorHost[]>(`/organizations/${selectedOrgId}/hypervisors`),
       ]);
       setTemplates(t);
       setDiskLayouts(d);
       setIsoAssets(i.filter((iso) => iso.kind === "windows_iso"));
       setAppAssets(a);
+      setHosts(h);
     } finally {
       setLoaded(true);
     }
@@ -187,6 +190,7 @@ export default function Templates() {
       {showCreate && (
         <TemplateForm
           orgId={selectedOrgId}
+          hosts={hosts}
           diskLayouts={diskLayouts}
           isoAssets={isoAssets}
           appAssets={appAssets}
@@ -200,6 +204,7 @@ export default function Templates() {
       {editing && (
         <TemplateForm
           orgId={selectedOrgId}
+          hosts={hosts}
           diskLayouts={diskLayouts}
           isoAssets={isoAssets}
           appAssets={appAssets}
@@ -235,6 +240,7 @@ export default function Templates() {
 
 function TemplateForm({
   orgId,
+  hosts,
   diskLayouts,
   isoAssets,
   appAssets,
@@ -243,6 +249,7 @@ function TemplateForm({
   onSaved,
 }: {
   orgId: string;
+  hosts: HypervisorHost[];
   diskLayouts: DiskLayout[];
   isoAssets: IsoAsset[];
   appAssets: AppAsset[];
@@ -267,6 +274,8 @@ function TemplateForm({
 
   return (
     <TemplateFieldsForm
+      orgId={orgId}
+      hosts={hosts}
       diskLayouts={diskLayouts}
       isoAssets={isoAssets}
       appAssets={appAssets}

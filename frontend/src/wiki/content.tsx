@@ -648,7 +648,11 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   locale/timezone/keyboard layout as Windows identifiers, not
                   IETF/IANA ones (new templates default to <Code>de-DE</Code>/<Code>W. Europe Standard
                   Time</Code>/<Code>de-CH</Code>; see "Unattended Windows Setup, in depth" for how keyboard
-                  layout resolves to an exact physical layout rather than just a language).</>,
+                  layout resolves to an exact physical layout rather than just a language). Also a{" "}
+                  <strong>preferred datastore</strong>, optional, a plain name rather than a binding to
+                  any specific hypervisor - type one directly, or use the "Browse datastores from..."
+                  picker to fill in a live list from whichever hypervisor you choose to check; left
+                  blank, the host's own configured default is used at deploy time.</>,
                 <>Local administrator password, always write-only, never shown again after saving. Off by
                   default, an optional <strong>custom admin account</strong> toggle: off just sets that
                   password on the built-in Administrator account, no other change. On adds a username field
@@ -778,10 +782,14 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   template as normal, only what you actually changed in the modal takes effect. Leaving
                   a password field blank keeps the template's real one, exactly like editing a template
                   does - it's never overridden with an empty value.</>,
-                <><strong>Datastore</strong> (wizard, hypervisor step - only shown when the selected host
-                  actually has more than one): defaults to the host's own configured default, pick a
-                  different one per deployment when you need to spread VMs across datastores or land a
-                  specific one somewhere particular.</>,
+                <><strong>Preferred datastore</strong> is one of the fields "Customize installation"
+                  above can override, same as any other template setting - it isn't a special wizard-only
+                  field, it's a real field on the template itself (Templates page, or "Customize
+                  installation"), same as network name or disk layout. Type a name directly, or use the
+                  small "Browse datastores from..." picker next to it to fill in a live list from a
+                  hypervisor of your choice - the stored value is always just a plain name string, so it
+                  still applies correctly even if a deployment lands on a different host later. Left
+                  blank, the host's own configured default is used at deploy time.</>,
                 <>The deployment moves into <Code>installing_os</Code> right after the VM is powered on
                   and DeployCore has done everything it can from its side (boot-order, synthetic
                   keypresses), not when Windows Setup actually finishes: there's no way to observe real
