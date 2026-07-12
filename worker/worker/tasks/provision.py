@@ -814,6 +814,24 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     raise RuntimeError(f"domain join failed: {result.stderr}")
                 await log(db, deployment, "configuring", f"joined domain {template.domain_fqdn}")
 
+            # Best-effort, deliberately last before the final reboot below
+            # (which already happens unconditionally, so no separate
+            # reboot-if-needed tracking is needed here): a VM built from a
+            # months-old ISO can be meaningfully behind on day one, this
+            # catches it up in the same pass. Never fails the deployment -
+            # an update server hiccup is a WARN, not a reason to mark an
+            # otherwise-successful deployment failed.
+            await log(db, deployment, "configuring", "checking for Windows updates")
+            update_result = await _run_with_heartbeat(
+                db, deployment, "configuring", "checking for Windows updates",
+                client.install_windows_updates,
+            )
+            await log(
+                db, deployment, "configuring",
+                update_result.stdout or update_result.stderr,
+                level=LogLevel.INFO if update_result.ok else LogLevel.WARN,
+            )
+
             await log(db, deployment, "configuring", "rebooting to finalize configuration")
             await _reboot_and_wait(client, "guest did not come back reachable after the post-install reboot")
 

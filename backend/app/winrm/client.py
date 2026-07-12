@@ -272,6 +272,48 @@ if ($installer) {
         installed = "DEPLOYCORE_VMWARE_TOOLS_INSTALLED" in result.stdout
         return VmwareToolsInstallResult(result.status_code, result.stdout.strip(), result.stderr, installed)
 
+    def install_windows_updates(self) -> WinRMResult:
+        """Best-effort: searches Windows Update via the built-in WUA COM
+        API (Microsoft.Update.Session) - no PSWindowsUpdate module or
+        PSGallery/internet access needed beyond what Windows Update
+        itself already requires - for every applicable, non-hidden
+        update, not filtered down to only critical/security ones, so
+        this also picks up optional/recommended updates the interactive
+        Settings app would list separately. Downloads and installs
+        whatever it finds. A VM built from a months-old ISO can be
+        meaningfully behind day one; this catches it up in the same
+        pass rather than leaving it to whenever Windows' own automatic
+        update schedule gets to it - the caller (see provision.py) logs
+        a failure here as a WARN and continues the rest of post-install
+        regardless, never worth failing an otherwise-successful
+        deployment over an update server hiccup."""
+        script = """
+$Session = New-Object -ComObject Microsoft.Update.Session
+$Searcher = $Session.CreateUpdateSearcher()
+$SearchResult = $Searcher.Search("IsInstalled=0 and IsHidden=0")
+if ($SearchResult.Updates.Count -eq 0) {
+    Write-Output "No applicable updates found."
+    exit 0
+}
+$ToDownload = New-Object -ComObject Microsoft.Update.UpdateColl
+foreach ($u in $SearchResult.Updates) { $ToDownload.Add($u) | Out-Null }
+$Downloader = $Session.CreateUpdateDownloader()
+$Downloader.Updates = $ToDownload
+$Downloader.Download() | Out-Null
+$ToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
+foreach ($u in $SearchResult.Updates) { if ($u.IsDownloaded) { $ToInstall.Add($u) | Out-Null } }
+if ($ToInstall.Count -eq 0) {
+    Write-Output "Found $($SearchResult.Updates.Count) update(s) but none downloaded successfully."
+    exit 1
+}
+$Installer = $Session.CreateUpdateInstaller()
+$Installer.Updates = $ToInstall
+$Result = $Installer.Install()
+Write-Output "Installed $($ToInstall.Count) of $($SearchResult.Updates.Count) found update(s), result code $($Result.ResultCode), reboot required: $($Result.RebootRequired)."
+if ($Result.ResultCode -ne 2 -and $Result.ResultCode -ne 3) { exit 1 }
+""".strip()
+        return self.run_ps(script)
+
     def reboot(self) -> WinRMResult:
         return self.run_ps("Restart-Computer -Force")
 
