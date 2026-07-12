@@ -146,6 +146,9 @@ function CreateHypervisorForm({
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [datastoreOptions, setDatastoreOptions] = useState<string[]>([]);
+  const [listingDatastores, setListingDatastores] = useState(false);
+  const [listDatastoresError, setListDatastoresError] = useState<string | null>(null);
 
   function currentValues() {
     return {
@@ -171,6 +174,20 @@ function CreateHypervisorForm({
       setTestResult({ ok: false, message: err instanceof ApiError ? err.message : "Test failed." });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function listDatastores() {
+    setListingDatastores(true);
+    setListDatastoresError(null);
+    try {
+      setDatastoreOptions(
+        await api.post<string[]>(`/organizations/${orgId}/hypervisors/list-datastores-adhoc`, currentValues()),
+      );
+    } catch (err) {
+      setListDatastoresError(err instanceof ApiError ? err.message : "Failed to list datastores.");
+    } finally {
+      setListingDatastores(false);
     }
   }
 
@@ -214,7 +231,29 @@ function CreateHypervisorForm({
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Password</label>
         <input type="password" autoComplete="new-password" className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={credential} onChange={(e) => setCredential(e.target.value)} />
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Default datastore</label>
-        <input className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={defaultDatastore} onChange={(e) => setDefaultDatastore(e.target.value)} />
+        <div className="mb-1 flex gap-2">
+          <input
+            list="hypervisor-datastore-options"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+            value={defaultDatastore}
+            onChange={(e) => setDefaultDatastore(e.target.value)}
+          />
+          <datalist id="hypervisor-datastore-options">
+            {datastoreOptions.map((d) => (
+              <option key={d} value={d} />
+            ))}
+          </datalist>
+          <button
+            type="button"
+            className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+            disabled={listingDatastores || !apiEndpoint || !username || !credential}
+            onClick={listDatastores}
+          >
+            {listingDatastores ? "Listing..." : "List datastores"}
+          </button>
+        </div>
+        {listDatastoresError && <div className="mb-3 text-xs text-red-600">{listDatastoresError}</div>}
+        {!listDatastoresError && <div className="mb-3" />}
         <label className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
           <input type="checkbox" checked={tlsVerify} onChange={(e) => setTlsVerify(e.target.checked)} />
           Verify TLS certificate

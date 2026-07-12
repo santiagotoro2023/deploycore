@@ -402,7 +402,7 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                 "API endpoint: the ESXi/vCenter host's IP address or hostname",
                 "Username and credential (the credential is write-only, it's never returned by the API again once saved)",
                 "TLS verification toggle (turn off only for a self-signed lab host you trust)",
-                "Default datastore, used when creating a VM if nothing more specific is set",
+                "Default datastore, used when creating a VM if the template being deployed doesn't set its own preferred datastore",
               ]}
             />
             <P>
@@ -414,8 +414,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               Use <strong>Test Connection</strong> two ways: against whatever is currently typed into the
               create form, before you've saved anything, or against an already-saved host, which stores
               and displays its last result (status, timestamp, message) so you can see connection health
-              at a glance later. Deleting a hypervisor only removes DeployCore's stored connection and
-              credentials, it never touches the hypervisor itself or any VMs already created on it.
+              at a glance later. <strong>List datastores</strong>, right next to Default datastore, works
+              the same "test what's currently typed in, nothing saved yet" way - it fills in that field's
+              own live autocomplete list from the endpoint/username/password you've typed so far, no need
+              to save the host first just to find out what its datastores are actually called. Deleting a
+              hypervisor only removes DeployCore's stored connection and credentials, it never touches the
+              hypervisor itself or any VMs already created on it.
             </P>
           </>
         ),

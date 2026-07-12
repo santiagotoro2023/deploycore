@@ -85,6 +85,35 @@ async def test_connection_adhoc(org_id: uuid.UUID, body: HypervisorHostCreate) -
         return ConnectionResult(ok=False, message="connection attempt timed out")
 
 
+@router.post(
+    "/list-datastores-adhoc",
+    response_model=list[str],
+    dependencies=[Depends(require_role(Role.ADMIN))],
+)
+async def list_datastores_adhoc(org_id: uuid.UUID, body: HypervisorHostCreate) -> list[str]:
+    """Same "credentials typed into the create form, nothing saved yet"
+    reasoning as test_connection_adhoc above, for the Default datastore
+    field's own "List datastores" convenience - there's no host id to
+    query by.list_datastores() (see GET .../{host_id}/datastores) until
+    this form is actually submitted."""
+    draft = HypervisorHost(
+        org_id=org_id,
+        name=body.name,
+        type=body.type,
+        api_endpoint=body.api_endpoint,
+        username=body.username,
+        tls_verify=body.tls_verify,
+    )
+    draft.credential = body.credential
+    driver = get_driver(draft)
+    try:
+        return await asyncio.wait_for(driver.list_datastores(), timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "connection attempt timed out")
+    except Exception as exc:  # noqa: BLE001 - surfaced to the form
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"could not list datastores: {exc}") from exc
+
+
 async def _get_host_or_404(db: AsyncSession, org_id: uuid.UUID, host_id: uuid.UUID) -> HypervisorHost:
     result = await db.execute(
         select(HypervisorHost).where(HypervisorHost.id == host_id, HypervisorHost.org_id == org_id)

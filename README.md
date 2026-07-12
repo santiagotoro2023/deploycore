@@ -311,9 +311,17 @@ org-scoped copy.
   targets.
 - Fields: name, API endpoint, username, credential (write-only, never
   returned by the API after creation), TLS verification toggle, default
-  datastore (used when creating a VM if nothing more specific is set). The
-  network a VM's NIC attaches to is defined per-template instead (see
-  Deployment Templates below), not on the hypervisor connection
+  datastore (used when creating a VM if a template doesn't set its own
+  `preferred_datastore`). The network a VM's NIC attaches to is defined
+  per-template instead (see Deployment Templates below), not on the
+  hypervisor connection
+- **List datastores**, next to Default datastore in the create form:
+  same "test the credentials you just typed in, nothing saved yet"
+  reasoning as Test Connection below, an ad-hoc `POST .../hypervisors/
+  list-datastores-adhoc` call using the form's current endpoint/
+  username/password to build a throwaway driver and list what it can
+  see, filling in the field's own live autocomplete - no need to save
+  the host first just to find out what it's called on the datastore side
 - Test Connection, two forms: an ad-hoc test against whatever is currently
   typed into the create form, before anything is saved, and a
   test-connection button on an already-saved host that updates and displays
