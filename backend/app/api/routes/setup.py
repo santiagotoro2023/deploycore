@@ -57,9 +57,13 @@ function Get-FreeLetter {
 
 $recoveryTypeGuid = '{de94bba4-06d1-4d40-a16a-bfd50179d6ac}'
 
-$osPartition = Get-Partition -DiskNumber 0 -DriveLetter C -ErrorAction SilentlyContinue
+$osPartition = Get-Partition -DriveLetter C -ErrorAction SilentlyContinue
 if (-not $osPartition) {
-    Info "no C: partition found on disk 0 - unexpected, stopping without changes."
+    Info "no C: partition found - unexpected, stopping without changes."
+    return
+}
+if ($osPartition.DiskNumber -ne 0) {
+    Info "C: is on disk $($osPartition.DiskNumber), not disk 0 - unexpected, stopping without changes."
     return
 }
 if ($osPartition.PartitionNumber -eq 3) {
