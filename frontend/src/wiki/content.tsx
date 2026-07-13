@@ -574,6 +574,24 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               several more minutes for something most apps don't strictly need to be usable.
             </P>
             <P>
+              <strong>Prefer an MSI package over an EXE installer whenever the vendor offers one.</strong>{" "}
+              Confirmed the hard way with Firefox: a generic vendor "download" link/button can silently
+              hand you the small stub installer (a bootstrapper that fetches the real payload over the
+              network <em>during</em> the silent install itself) rather than the self-contained full/offline
+              installer, with no obvious naming difference and no error at all if that runtime fetch fails
+              quietly under whatever network/proxy context the install actually runs in - it exits{" "}
+              <Code>0</Code> having installed nothing, and looks identical in the deployment log to a
+              genuinely finished install right up until the registry-diff verification above (correctly)
+              never sees a new entry appear. Mozilla's own enterprise/automation guidance is to use their
+              official MSI instead of either EXE variant, for exactly this reason. MSI sidesteps the whole
+              problem structurally: it's always a single self-contained package (no stub/full ambiguity to
+              accidentally pick the wrong one of), <Code>ALLUSERS=1</Code> is forced automatically without
+              needing to know a given vendor's own EXE conventions, and <Code>msiexec</Code>'s exit codes
+              are standardized rather than installer-framework-specific. If an app only ships as EXE,
+              prefer the vendor's explicitly-labeled "full"/"offline" installer over whatever a plain
+              "Download" button on their homepage serves by default.
+            </P>
+            <P>
               Deleting an app asset removes the file and the database row immediately, it isn't a foreign
               key the way <Code>iso_asset_id</Code> is: a template's attached apps are just a list of ids
               in a JSON column. A template that still lists a deleted app skips it at deploy time (logged
@@ -733,10 +751,14 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   finishes (see "Unattended Windows Setup, in depth"), so a deployment with this off too
                   would end up with no remote access at all once it's done.</>,
                 <>An ordered list of <strong>app installs</strong>, App Assets to install automatically
-                  (see that article), with an optional argument override per attachment. Installed after
-                  the final post-install reboot, Windows Update, and the domain join - last, not right
-                  after roles like earlier in this project's life.</>,
-                "Any number of post-install PowerShell scripts (name + script text), run in order after roles, before Windows Update/domain join/the final reboot, and well before app installs now.",
+                  (see that article), with an optional argument override per attachment. Installed right
+                  after roles and RDP, before post-install scripts, Windows Update, the domain join, and
+                  the final reboot - so an app that reports needing a reboot to finish actually gets one.</>,
+                "Any number of post-install PowerShell scripts (name + script text), run in order after app installs, before Windows Update, the domain join, and the final reboot.",
+                <>An on-by-default <strong>install Windows updates</strong> toggle. Off skips the Windows
+                  Update step entirely for deployments where speed matters more than shipping fully
+                  patched - see the Windows Update paragraph under "Deployments" below for what the step
+                  actually does and its size-skip trade-off.</>,
               ]}
             />
             <P>
@@ -927,7 +949,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   leaving RDP off too would mean no remote access at all afterward), <Code>fDenyTSConnections</Code>{" "}
                   gets set to <Code>0</Code> and the built-in "Remote Desktop" firewall rule group gets
                   enabled here too, neither needing a restart to take effect. Then install each attached
-                  app asset in order (see "App assets"), run post-install scripts in order, join the
+                  app asset in order (see "App assets"), run post-install scripts in order, check for
+                  Windows updates if enabled for this template/deployment (see below), join the
                   domain here if configured for that timing, reboot, verify it comes back reachable, then
                   mark the deployment completed. Each of those steps — the feature install, RDP, app
                   installs, scripts, the domain join — logs a "still running" heartbeat every 30 seconds
@@ -941,6 +964,32 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   reachable by every other means but this check won't agree" on a real deployment), and
                   logs the guest's own boot timestamp from before and after as proof a reboot actually
                   happened, rather than the guest simply having stayed reachable the whole time.</>,
+                <><strong>Windows Update</strong> is on by default, toggled off per template (an{" "}
+                  <Code>install_windows_updates</Code> checkbox, template create/edit and "Customize
+                  installation" both, same override mechanism as every other template field) for
+                  deployments where speed matters more than shipping fully patched. It searches via the
+                  built-in WUA COM API (<Code>Microsoft.Update.Session</Code>), no PSWindowsUpdate module
+                  or PSGallery access needed beyond what Windows Update itself already requires, and runs
+                  through the same one-shot SYSTEM-context Scheduled Task as app installs (see "App
+                  assets") rather than directly over the driving WinRM session — confirmed live that the
+                  WUA downloader COM object refuses a WinRM/NTLM network-logon token outright, there's no
+                  way to search/download/install updates over that kind of session at all. It skips any
+                  individual update over 150MB rather than downloading everything offered — a deliberate,
+                  explicitly requested speed trade-off: Windows Server 2019+ no longer ships a separate
+                  small "security-only" patch, the monthly Cumulative Update (usually the single largest
+                  item offered, often 500MB-1.5GB) <em>is</em> that month's security fix merged into one
+                  package, so this does mean skipping that month's OS security patch in favor of
+                  everything smaller (drivers, definitions, servicing stack updates) installing quickly.
+                  Progress shows up the same way feature-install progress does: a separate WinRM session
+                  polls a status file the scheduled task's own script updates while moving through
+                  search/download/install phases (e.g. "installing 3 update(s)"), read into the
+                  deployment log's heartbeat — an empty read just means the step hasn't started yet or
+                  already finished, and a transient failure on that separate polling connection means one
+                  heartbeat tick shows no extra detail, not that the install itself stalled, the actual
+                  install call is a normal synchronous COM call that can legitimately run for many minutes
+                  with nothing finer-grained to report meanwhile. Best-effort throughout: an update-server
+                  hiccup or a failed install is logged as a warning, never fails an otherwise-successful
+                  deployment.</>,
                 <>Role installs and app installs both stay sequential on purpose, not run in parallel
                   across concurrent WinRM sessions: the single-call feature install above is the real,
                   safe speedup, and it's already what Server Manager's own wizard does — Windows' own

@@ -494,6 +494,26 @@ org-scoped copy.
   approach Chocolatey (`Get-UninstallRegistryKey`) and the PowerShell
   App Deployment Toolkit both use, since there's no universal "did this
   arbitrary installer actually finish" API
+- **Prefer an MSI package over an EXE installer whenever the vendor
+  offers one.** Confirmed the hard way with Firefox: a generic vendor
+  "download" link/button can silently hand you the small stub installer
+  (a bootstrapper that fetches the real payload over the network *during*
+  the silent install itself) rather than the self-contained full/offline
+  installer, with no obvious naming difference and no error at all if
+  that runtime fetch fails quietly under whatever network/proxy context
+  the install actually runs in - it exits 0 having installed nothing, and
+  looks identical in the deployment log to a genuinely finished install
+  right up until the registry-diff verification above (correctly) never
+  sees a new entry appear. Mozilla's own enterprise/automation guidance
+  is to use their official MSI instead of either EXE variant for exactly
+  this reason. MSI sidesteps it structurally: it's always a single
+  self-contained package (no stub/full ambiguity to accidentally pick the
+  wrong one of), `ALLUSERS=1` is forced automatically for a machine-wide
+  install without needing to know a given vendor's own EXE conventions,
+  and `msiexec`'s exit codes are standardized rather than
+  installer-framework-specific. If an app only ships as EXE, prefer the
+  vendor's explicitly-labeled "full"/"offline" installer over whatever a
+  plain "Download" button on their homepage serves by default
 
 ### Deployment Templates
 - Org-scoped or global (global templates are inherited read-only by every
@@ -542,7 +562,10 @@ org-scoped copy.
   to install, with optional per-attachment argument overrides, run after
   roles and before post-install scripts, see the App Assets section above),
   and a list of post-install PowerShell scripts (name + script text, run in
-  order after both). Each role is installed
+  order after both), and an on-by-default **install Windows updates**
+  toggle (see the Deployments pipeline section below for what that step
+  actually does and its size-skip trade-off) - off for deployments where
+  speed matters more than shipping fully patched. Each role is installed
   with a plain `Install-WindowsFeature`, nothing more: AD Domain Services
   installs the role binaries only, not a forest/domain promotion or any
   GPO/OU/delegation setup, do that yourself afterward (`Install-ADDSForest`
@@ -906,7 +929,8 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `Invoke-WebRequest`, see the App Assets section above for the token/
   download flow and how each install actually runs and gets verified
   now), run each template post-install script in order, check Windows
-  Update, join the domain here if configured for `post_install` timing,
+  Update (if enabled for this template/deployment, see below), join the
+  domain here if configured for `post_install` timing,
   reboot, disable the built-in Administrator if a custom admin account
   is configured, verify the guest comes back reachable. Every one of
   those (feature installs, RDP, app installs, post-install scripts, the
@@ -917,6 +941,54 @@ pending → creating_vm → booting → installing_os → post_install → confi
   otherwise goes completely silent for however long that takes,
   indistinguishable from a hang - confirmed as a real point of confusion
   on an otherwise-successful deployment.
+- **Windows Update** (`WinRMClient.install_windows_updates`), on by default,
+  toggled off per template (`install_windows_updates`, template
+  create/edit and "Customize installation", same `EffectiveTemplate`
+  mechanism as every other overridable field) for deployments that need
+  to be quick: searches via the built-in WUA COM API
+  (`Microsoft.Update.Session`/`CreateUpdateSearcher().Search("IsInstalled=0
+  and IsHidden=0")`), no `PSWindowsUpdate` module or PSGallery/internet
+  access needed beyond what Windows Update itself already requires. Runs
+  through the same one-shot SYSTEM-context Scheduled Task mechanism as
+  app installs (`_run_as_system_task`, see the App Assets section above),
+  not directly over the driving WinRM session: confirmed live that
+  `CreateUpdateDownloader()` refuses a WinRM/NTLM network-logon token
+  outright (`E_ACCESSDENIED`) - there's no way to search/download/install
+  updates over that session at all without it. Skips any individual
+  update over 150MB (`MaxDownloadSize`, known before downloading, not
+  guessed) rather than downloading everything found - a deliberate,
+  explicitly requested speed trade-off, not a bug: on Windows Server
+  2019+ there's no separate small "security-only" patch anymore, the
+  monthly Cumulative Update (usually the single largest item offered,
+  often 500MB-1.5GB) *is* that month's security fix merged into one
+  package, so this trade-off does mean skipping that month's OS security
+  patch in favor of everything smaller (drivers, definitions, servicing
+  stack updates, individual small patches) installing quickly. Progress
+  is surfaced the same way feature installs are: a **separate** WinRM
+  session polls a status-marker file the scheduled task's script updates
+  as it moves through search/download/install phases (e.g. "installing 3
+  update(s)"), read back into the deployment log's "still running (Ns
+  elapsed)" heartbeat - an empty read means either the step hasn't
+  started yet or it already finished, not an error, and a transient
+  failure on that separate polling session just means one heartbeat tick
+  shows no extra detail, it doesn't mean the install itself stalled,
+  `Installer.Install()` inside the scheduled task's own script is a
+  normal synchronous COM call that can legitimately run for many minutes
+  with no way to report finer-grained progress than the phase marker
+  already does. Best-effort: an update server hiccup or a failed install
+  is logged as a WARN, never fails an otherwise-successful deployment.
+  `WinRMClient`'s underlying `pywinrm` session is built with explicit,
+  widened `operation_timeout_sec`/`read_timeout_sec` (60s/90s, not
+  pywinrm's own 20s/30s defaults): WinRM's Receive operation can
+  legitimately block server-side for up to the operation timeout waiting
+  for output before replying, and under real load (a guest mid-Windows-
+  Update is the confirmed case) that round trip can exceed a too-tight
+  client read-timeout, surfacing as a `requests.ReadTimeout` that looks
+  identical to the guest being unreachable but isn't - `_run_as_system_task`'s
+  own poll loop (shared with app installs) also tolerates one such
+  transient failure per iteration rather than aborting the whole
+  operation on it, since the loop's own attempt ceiling already bounds
+  how long a genuinely dead guest gets tolerated either way.
 - Every reboot in this pipeline (feature-install, VMware Tools, and the
   final one) goes through the same `_reboot_and_wait`, which does two
   things worth knowing about: it requires 3 consecutive successful
