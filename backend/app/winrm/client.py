@@ -417,7 +417,14 @@ if ($Result.ResultCode -ne 2 -and $Result.ResultCode -ne 3) {{ exit 1 }}
         return result.stdout.strip() if result.ok else ""
 
     def reboot(self) -> WinRMResult:
-        return self.run_ps("Restart-Computer -Force")
+        """shutdown.exe, not the Restart-Computer cmdlet: confirmed on a
+        real deployment that Restart-Computer -Force over this WinRM
+        remote-shell execution model can complete "successfully" without
+        ever actually restarting the guest - a known WinRS limitation,
+        the spawned process doesn't get the shutdown privilege enabled
+        even for an administrator account, unlike shutdown.exe itself
+        which reliably triggers a real restart in this same context."""
+        return self.run_ps("shutdown.exe /r /t 0 /f")
 
     def is_reachable(self) -> bool:
         try:
