@@ -468,7 +468,13 @@ org-scoped copy.
   specifically; running as SYSTEM sidesteps both, and empirically biases
   well-behaved installers toward a machine-wide install the same way
   `winget --scope machine` does, since there's no ambiguous "current
-  interactive user" profile to install into instead
+  interactive user" profile to install into instead. Task, its script
+  file, and its result file are all removed afterward regardless of how
+  the install ends - success, a timeout, or a WinRM hiccup mid-poll
+  (confirmed a real, not just theoretical, way to leave one behind
+  otherwise) - via `try`/`finally`, with `Stop-ScheduledTask` alongside
+  `Unregister-ScheduledTask` so a genuinely stuck task actually gets
+  killed rather than just deregistered while still running
 - MSI installs run through `msiexec /i "<path>" <args>`, with `ALLUSERS=1`
   forced automatically unless `install_args` already sets it (the one
   universal MSI property for a machine-wide install); EXE installs run
@@ -928,9 +934,21 @@ pending → creating_vm → booting → installing_os → post_install → confi
   plausibly run concurrently, but not reliably enough across arbitrary,
   operator-supplied installers to build automation around by default.
   Then, as the very
-  last WinRM action before
-  marking `completed`: remove the WinRM firewall rule, `Disable-PSRemoting`,
-  and stop+disable the WinRM service itself (the service stop runs in a
+  last WinRM action before marking `completed`, three things get cleaned
+  up, not just one - checked against Microsoft's own `Disable-PSRemoting`
+  docs, which explicitly list the other two as manual steps it does not
+  perform on its own: the custom `DeployCore WinRM` firewall rule
+  (deleted via `netsh`, the same tool that created it - `Get-NetFirewallRule
+  -DisplayName` isn't guaranteed to match a netsh-created rule); the
+  built-in "Windows Remote Management (HTTP-In)" firewall rule that
+  `winrm quickconfig` itself enables as a separate, documented side
+  effect (disabled by its stable internal `-Name`, not the localized
+  `-DisplayGroup`, the same lesson already learned for RDP); and
+  `LocalAccountTokenFilterPolicy`, set to `1` during the specialize pass
+  when a custom admin account is configured, removed here rather than
+  left weakening UAC's remote-token filtering for every local admin
+  account indefinitely. Only then: `Disable-PSRemoting`, and stop+disable
+  the WinRM service itself (the service stop runs in a
   detached process a few seconds later, not inline, so the command reporting
   success back doesn't get cut off by the very channel it's closing).
   WinRM is not reachable at all on a completed deployment from this point

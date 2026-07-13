@@ -544,7 +544,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               documented bug class around picking a per-machine-vs-per-user install mode correctly in
               silent mode. Running as SYSTEM sidesteps both, and empirically biases installers toward a
               machine-wide install the same way <Code>winget --scope machine</Code> does, since there's no
-              ambiguous "current interactive user" profile to install into instead. MSI installs run
+              ambiguous "current interactive user" profile to install into instead. The task, its script
+              file, and its result file are all removed afterward no matter how the install ends - success,
+              a timeout, or a WinRM hiccup mid-poll (confirmed a real, not just theoretical, way to leave
+              one behind otherwise) - via a <Code>try</Code>/<Code>finally</Code>, with{" "}
+              <Code>Stop-ScheduledTask</Code> alongside <Code>Unregister-ScheduledTask</Code> so a
+              genuinely stuck task actually gets killed rather than just deregistered while still running.
+              MSI installs run
               through <Code>msiexec /i "&lt;path&gt;" &lt;args&gt;</Code>, with <Code>ALLUSERS=1</Code> (the
               one universal MSI property for a machine-wide install) forced automatically unless{" "}
               <Code>install_args</Code> already sets it; EXE installs run the downloaded file directly with
@@ -1266,14 +1272,37 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               <strong>Closing WinRM once post-install is done.</strong> WinRM is only ever needed while
               DeployCore itself is actively configuring the guest; leaving it open indefinitely afterward
-              is unnecessary attack surface. The very last WinRM action of a deployment, right before it's
-              marked <Code>completed</Code>, removes the WinRM firewall rule, runs{" "}
-              <Code>Disable-PSRemoting -Force</Code>, and stops and disables the WinRM service itself. That
-              last part runs in a short-delayed detached process rather than inline, so the command doesn't
-              try to report its own success back over the exact channel it's in the middle of tearing down.
-              From this point on a completed deployment has no WinRM listener at all, by design: there's no
-              way for DeployCore (or anything else) to remotely reconfigure the guest again without an
-              operator opening it back up on the guest directly.
+              is unnecessary attack surface. Checked directly against Microsoft's own{" "}
+              <Code>Disable-PSRemoting</Code> documentation rather than assumed complete, since it
+              explicitly lists steps it does <em>not</em> perform on its own - three separate things get
+              cleaned up here, right before a deployment is marked <Code>completed</Code>, not just one:
+            </P>
+            <List
+              items={[
+                <><strong>The custom "DeployCore WinRM" firewall rule</strong> - created via{" "}
+                  <Code>netsh</Code> during the specialize pass, deleted with the same tool that made it
+                  (a real deployment showed <Code>Get-NetFirewallRule -DisplayName</Code> isn't guaranteed
+                  to match a rule netsh created).</>,
+                <><strong>The built-in "Windows Remote Management (HTTP-In)" firewall rule</strong> -{" "}
+                  <Code>winrm quickconfig</Code> (also specialize pass) enables this separately, as a
+                  documented side effect distinct from the custom rule above; disabled by its stable
+                  internal <Code>-Name</Code> (<Code>WINRM-HTTP-In-TCP</Code>/<Code>-PUBLIC</Code>), not
+                  the localized <Code>-DisplayGroup</Code> - the same DisplayGroup lesson already learned
+                  the hard way for RDP.</>,
+                <><strong><Code>LocalAccountTokenFilterPolicy</Code></strong> - set to <Code>1</Code> during
+                  the specialize pass when a custom admin account is configured, so WinRM gets a full admin
+                  token over a network logon; removed here rather than left weakening UAC's remote-token
+                  filtering for every local admin account on the machine indefinitely, well past the point
+                  WinRM access even still exists to need it.</>,
+              ]}
+            />
+            <P>
+              Only then: <Code>Disable-PSRemoting -Force</Code>, and stop and disable the WinRM service
+              itself. That last part runs in a short-delayed detached process rather than inline, so the
+              command doesn't try to report its own success back over the exact channel it's in the middle
+              of tearing down. From this point on a completed deployment has no WinRM listener at all, by
+              design: there's no way for DeployCore (or anything else) to remotely reconfigure the guest
+              again without an operator opening it back up on the guest directly.
             </P>
             <P>
               A consequence worth knowing: nothing in DeployCore checks on a completed deployment's guest
