@@ -872,6 +872,28 @@ async def run_post_install(ctx, deployment_id: str) -> None:
             await log(db, deployment, "configuring", "rebooting to finalize configuration")
             await _reboot_and_wait(client, "guest did not come back reachable after the post-install reboot")
 
+            if template.custom_admin_enabled:
+                # Deliberately this late, not in FirstLogonCommands
+                # (_first_logon_commands.xml.j2 still has a
+                # defense-in-depth copy of this for the rare case someone
+                # does log in manually, but FirstLogonCommands only ever
+                # runs on an actual interactive logon - which nothing in
+                # the normal unattended flow ever does now that WinRM
+                # access comes from the specialize pass instead of
+                # AutoLogon, so it was never actually running in
+                # practice). Doing it here, over WinRM, guarantees it
+                # actually happens, and only after every other
+                # post-install step (roles, apps, scripts, updates) has
+                # already run - some of those could plausibly still
+                # depend on Administrator being enabled.
+                await log(db, deployment, "configuring", "disabling built-in Administrator account")
+                disable_result = client.disable_builtin_administrator()
+                await log(
+                    db, deployment, "configuring",
+                    disable_result.stdout or disable_result.stderr,
+                    level=LogLevel.INFO if disable_result.ok else LogLevel.WARN,
+                )
+
             await log(db, deployment, "configuring", "closing WinRM access, post-install is finished")
             try:
                 # This command is itself the one thing that severs the

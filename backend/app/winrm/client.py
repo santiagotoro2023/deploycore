@@ -270,6 +270,16 @@ if ($missing) {{
     def rename_computer(self, new_name: str) -> WinRMResult:
         return self.run_ps(f"Rename-Computer -NewName '{new_name}' -Force")
 
+    def disable_builtin_administrator(self) -> WinRMResult:
+        """Only meaningful when a custom admin account exists to use
+        instead - see run_post_install, which only calls this when
+        template.custom_admin_enabled. Safe to run over this same
+        session at any point in post-install: it authenticates as the
+        custom account (template.local_admin_username), never
+        "Administrator", so disabling that account here doesn't cut off
+        the connection running the command."""
+        return self.run_ps("Disable-LocalUser -Name 'Administrator'")
+
     def enable_rdp(self) -> WinRMResult:
         """fDenyTSConnections=0 alone doesn't open the firewall, and the
         built-in "Remote Desktop" rule group is disabled by default
