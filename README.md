@@ -439,12 +439,16 @@ org-scoped copy.
   into a PowerShell array, specifically so a multi-flag string survives
   intact instead of becoming one glued-together quoted argument
 - Attached to a template's `app_installs` (ordered list of
-  `{app_asset_id, install_args}`), installed over WinRM during
-  post_install, after Windows features and before post-install scripts
-  (so a script can assume an app installed earlier in the list is already
-  there). Not a foreign key: `app_installs` is a JSONB column, a deleted
-  app asset is skipped with an error log line at deploy time rather than
-  blocking the delete or failing the whole deployment
+  `{app_asset_id, install_args}`), installed over WinRM **after the
+  final post-install reboot** (Windows Update, domain join, and template
+  post-install scripts have all already run and settled by then) - not
+  before it like earlier in this project's life. That also means
+  post-install scripts can no longer assume an app installed via
+  `app_installs` is already present; a script that depends on one now
+  needs to become its own app-install step or move later. Not a foreign
+  key: `app_installs` is a JSONB column, a deleted app asset is skipped
+  with an error log line at deploy time rather than blocking the delete
+  or failing the whole deployment
 - Delivery is guest-initiated, not worker-pushed: the guest's own
   `Invoke-WebRequest` downloads the installer directly from DeployCore's
   API (`GET /api/deployments/{id}/app-assets/{app_id}/download`), the
@@ -454,9 +458,35 @@ org-scoped copy.
   (`deployments.app_asset_access_token`), generated right before the
   first app install and cleared right after (or on failure), not a user
   session, there isn't one to authenticate the guest with
-- MSI installs run through `msiexec /i "<path>" <args>`; EXE installs run
-  the downloaded file directly with `<args>` passed straight through.
-  Exit code 3010 (success, reboot required) counts as success alongside 0
+- Each install actually runs inside a one-shot SYSTEM-context Scheduled
+  Task on the guest (`WinRMClient._run_as_system_task`, shared with
+  Windows Update), not directly over the WinRM session driving it - a
+  network-logon WinRM token is refused by some COM APIs (confirmed for
+  Windows Update) and several installer frameworks (NSIS, which
+  Firefox's own installer uses, among them) have documented bugs picking
+  a per-machine-vs-per-user install mode correctly in silent mode
+  specifically; running as SYSTEM sidesteps both, and empirically biases
+  well-behaved installers toward a machine-wide install the same way
+  `winget --scope machine` does, since there's no ambiguous "current
+  interactive user" profile to install into instead
+- MSI installs run through `msiexec /i "<path>" <args>`, with `ALLUSERS=1`
+  forced automatically unless `install_args` already sets it (the one
+  universal MSI property for a machine-wide install); EXE installs run
+  the downloaded file directly with `<args>` passed straight through -
+  there's no equivalent single flag that works across every EXE
+  installer framework, that still has to live in that asset's own
+  `install_args`. Exit code 3010 (success, reboot required) counts as
+  success alongside 0 for both
+- Verified, not just trusted to have exited cleanly: `-Wait -PassThru`
+  only waits for the process directly launched, and a self-relaunching
+  or detached-child installer can report a clean exit code without the
+  app actually being there yet (confirmed on a real deployment). Each
+  install snapshots the registry Uninstall key set (HKLM + WOW6432Node,
+  plus HKCU as cheap defense in depth) before running, then polls for a
+  new entry to appear afterward for up to 10 minutes - the same
+  approach Chocolatey (`Get-UninstallRegistryKey`) and the PowerShell
+  App Deployment Toolkit both use, since there's no universal "did this
+  arbitrary installer actually finish" API
 
 ### Deployment Templates
 - Org-scoped or global (global templates are inherited read-only by every
@@ -854,8 +884,8 @@ pending → creating_vm → booting → installing_os → post_install → confi
   and once it reports success, `verify_windows_features_installed` runs
   one explicit `Get-WindowsFeature` confirmation pass across every
   requested feature before anything else proceeds. If a restart was
-  reported needed, one reboot happens right here, before continuing to app
-  installs. If `template.enable_rdp` is on (the default: WinRM itself is
+  reported needed, one reboot happens right here, before continuing. If
+  `template.enable_rdp` is on (the default: WinRM itself is
   deliberately closed for good once post_install finishes, so leaving RDP
   off too would mean no remote access at all afterward),
   `WinRMClient.enable_rdp` sets `fDenyTSConnections=0` and enables the
@@ -864,20 +894,23 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `DisplayGroup` text - matching on the English display name ("Remote
   Desktop") broke RDP enablement outright on non-English images, where
   that group is named differently (e.g. "Remotedesktop" on German) -
-  neither needs a restart to take effect. Then install each configured app
-  asset in
-  order (the guest downloads each installer itself over
-  `Invoke-WebRequest`, see the App Assets section above for the
-  token/download flow, then runs it silently and deletes it), run each
-  post-install script in order, join the domain here if configured for
-  `post_install` timing, reboot, verify the guest comes back reachable.
-  Every one of those (feature installs, RDP, app installs, scripts, the
-  domain join) runs through `_run_with_heartbeat`, not a bare blocking
-  WinRM call: a real Windows role install can legitimately take several
-  minutes, and without a periodic "still running (Ns elapsed)" log line
-  the deployment log otherwise goes completely silent for however long
-  that takes, indistinguishable from a hang - confirmed as a real point
-  of confusion on an otherwise-successful deployment.
+  neither needs a restart to take effect. Then run each template
+  post-install script in order, check Windows Update, join the domain
+  here if configured for `post_install` timing, reboot, and only *then*
+  - after that reboot, not before it like earlier in this project's
+  life - install each configured app asset in order (the guest downloads
+  each installer itself over `Invoke-WebRequest`, see the App Assets
+  section above for the token/download flow and how each install
+  actually runs and gets verified now), disable the built-in
+  Administrator if a custom admin account is configured, verify the
+  guest comes back reachable. Every one of those (feature installs, RDP,
+  post-install scripts, the domain join, app installs) runs through
+  `_run_with_heartbeat`, not a bare blocking WinRM call: a real Windows
+  role install can legitimately take several minutes, and without a
+  periodic "still running (Ns elapsed)" log line the deployment log
+  otherwise goes completely silent for however long that takes,
+  indistinguishable from a hang - confirmed as a real point of confusion
+  on an otherwise-successful deployment.
 - Feature installs and app installs both stay sequential, deliberately,
   not parallelized across concurrent WinRM sessions: Windows Feature
   installation already batches everything into one
@@ -901,8 +934,7 @@ pending → creating_vm → booting → installing_os → post_install → confi
   detached process a few seconds later, not inline, so the command reporting
   success back doesn't get cut off by the very channel it's closing).
   WinRM is not reachable at all on a completed deployment from this point
-  on, by design, see the health check entry below for what that means for
-  ongoing monitoring
+  on, by design - ongoing monitoring is left to the operator's own tooling
 - Error tracing: every major pipeline step (rendering the answer file,
   uploading the Windows ISO and the answer-file floppy, creating the VM,
   attaching media, setting boot order, powering on, each post-install
@@ -926,24 +958,21 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `run_post_install` runs inside `wait_for_callback`'s own job execution,
   not a separately-enqueued one, so that ceiling has to cover both
   phases combined)
-- Post-deploy health check: a cron job runs every 15 minutes against every
-  completed deployment with a known VM, and checks a plain TCP connect to
-  port 3389 (RDP, on by default on every Windows Server SKU) on its guest
-  IP, not WinRM: WinRM is deliberately closed for good once a deployment
-  completes (see above), so this only proves the guest OS is up and
-  reachable on the network, not that remote management still works,
-  nothing does, on purpose. Records the latest reachable/unreachable
-  status, keeps a 30-day append-only history shown as a strip of badges on
-  the deployment detail page (a deployment that goes from healthy to
-  unreachable also triggers a notification/webhook, see below)
 - Detail view: live pipeline-stage visualization, full state-transition
   history, streaming log output (Server-Sent Events, ~1s poll interval),
-  health status + history, and a "Download full log" button producing a
-  plain-text file with the deployment's details, full state history, and
-  every log line
-- Retry: full retry from `pending` (any state, any stage), available once
-  a deployment is `failed`; safe because nothing is reused, a fresh VM is
-  always created
+  and a "Download full log" button producing a plain-text file with the
+  deployment's details, full state history, and every log line
+- Retry, two forms: full retry from `pending` (any state, any stage),
+  which always builds a fresh VM (the previous one, if any, is deleted
+  first) - available once a deployment is `failed`. Post-install-only
+  retry re-enters the pipeline directly against the *same* VM instead,
+  and is only offered when there is one: `_fail` (provision.py) only
+  deletes the VM for a failure before `post_install`/`configuring` -
+  Windows Setup itself already succeeded by either of those stages, so
+  there's a perfectly good, bootable install worth keeping rather than
+  building an entire new VM to retry what's usually a one-line script or
+  app-install fix (`POST .../deployments/{id}/retry-post-install`,
+  `deployment_service.retry_post_install`)
 - VM lifecycle (once a VM exists): live power state (read directly from the
   hypervisor, not cached), power on, shut down (graceful) or power off
   (hard). There's no dedicated "delete just the VM" action in the UI -
@@ -992,18 +1021,17 @@ pending → creating_vm → booting → installing_os → post_install → confi
   set up right, rather than silently doing nothing
 - Notification content itself - subject/body for email, message text for
   Teams - is fully editable per event (Settings → Notification content),
-  not fixed strings: `{hostname}`/`{error}`/`{checked_at}` placeholders
-  (whichever apply to that event) get substituted in, an unknown or
-  misspelled placeholder is left as literal text rather than breaking the
-  send. `NotificationTemplate` rows are seeded with today's previously-
+  not fixed strings: `{hostname}`/`{error}` placeholders (whichever apply
+  to that event) get substituted in, an unknown or misspelled placeholder
+  is left as literal text rather than breaking the send.
+  `NotificationTemplate` rows are seeded with today's previously-
   hardcoded text so behavior doesn't change until someone edits one
 - Per-user preferences (Account page): independently toggle email and Teams
-  delivery, per channel, for deployment started / completed / failed / a
-  completed deployment going unreachable. Defaults to complete and failed
-  only on both channels, not every start or every health check, to avoid
-  notification noise. Either channel works without the other being
-  configured; both need the user to have an email address set (doubles as
-  the Teams UPN)
+  delivery, per channel, for deployment started / completed / failed.
+  Defaults to complete and failed only on both channels, not every start,
+  to avoid notification noise. Either channel works without the other
+  being configured; both need the user to have an email address set
+  (doubles as the Teams UPN)
 - Both channels always send through a background job, never inline in a
   request or the provisioning pipeline, so a slow or failing Graph API call
   can never affect deployment outcome or page load time
@@ -1201,9 +1229,9 @@ minimum effective role for the request's organization unless marked
 | GET | `.../deployments/{deployment_id}/history` | readonly | state transitions |
 | GET | `.../deployments/{deployment_id}/logs` | readonly | |
 | GET | `.../deployments/{deployment_id}/answer-file` | readonly | the exact autounattend.xml this deployment shipped with; `404` if not rendered yet |
-| GET | `.../deployments/{deployment_id}/health-history` | readonly | last 200 health checks |
 | GET | `.../deployments/{deployment_id}/events` | readonly | SSE stream |
-| POST | `.../deployments/{deployment_id}/retry` | operator | only from `failed` |
+| POST | `.../deployments/{deployment_id}/retry` | operator | only from `failed`, always builds a fresh VM |
+| POST | `.../deployments/{deployment_id}/retry-post-install` | operator | only from `failed` with a preserved VM (see Retry above) |
 | GET | `.../deployments/{deployment_id}/power` | readonly | live hypervisor query |
 | POST | `.../deployments/{deployment_id}/power/on` | operator | |
 | POST | `.../deployments/{deployment_id}/power/off` | operator | body `{hard: bool}` |
@@ -1346,7 +1374,6 @@ rm -rf deploycore
   2FA).
 - Notifications: in-app is always on; email requires configuring Microsoft
   365/Graph yourself, no other provider is supported.
-- The post-deploy health check keeps a 30-day history, not indefinite.
 - Self-update has no automatic rollback: if a migration or restart fails
   partway through, the containers already running keep running on whatever
   they had, check the Settings page's error message and the container logs.

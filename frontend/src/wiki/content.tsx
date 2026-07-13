@@ -520,9 +520,12 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               A template attaches any number of app assets in an ordered list (Templates page, the
               "Software to install" section), each with its own optional argument override, blank means
-              "use the asset's own default." Installed over WinRM during post_install, after Windows
-              features and before post-install scripts, so a script can assume an app installed earlier in
-              the list is already there by the time it runs.
+              "use the asset's own default." Installed over WinRM <strong>after the final post-install
+              reboot</strong> - Windows Update, the domain join, and the template's own post-install
+              scripts have all already run and settled by then, not before it like earlier in this
+              project's life. That also means a post-install script can no longer assume an app installed
+              via this list is already present by the time it runs; a script that depends on one needs to
+              become its own app-install step, or move to running later, instead.
             </P>
             <P>
               Delivery is guest-initiated: the guest's own <Code>Invoke-WebRequest</Code> downloads each
@@ -532,9 +535,36 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               limits). That download endpoint is authenticated by a random, single-deployment token
               generated right before the first app install and cleared right after (or on failure), there's
               no user session to authenticate the guest with, the same pattern as the callback token itself.
-              MSI installs run through <Code>msiexec /i "&lt;path&gt;" &lt;args&gt;</Code>; EXE installs run
-              the downloaded file directly with the arguments passed straight through. Either way, exit
-              code <Code>3010</Code> (success, reboot required) counts as success alongside <Code>0</Code>.
+            </P>
+            <P>
+              Each install actually runs inside a one-shot, SYSTEM-context Scheduled Task on the guest, not
+              directly over the WinRM session driving it: a WinRM/NTLM session is a network logon, which
+              some installer frameworks refuse to fully cooperate with (confirmed for Windows Update's own
+              COM API), and NSIS-based installers specifically (Firefox's own installer among them) have a
+              documented bug class around picking a per-machine-vs-per-user install mode correctly in
+              silent mode. Running as SYSTEM sidesteps both, and empirically biases installers toward a
+              machine-wide install the same way <Code>winget --scope machine</Code> does, since there's no
+              ambiguous "current interactive user" profile to install into instead. MSI installs run
+              through <Code>msiexec /i "&lt;path&gt;" &lt;args&gt;</Code>, with <Code>ALLUSERS=1</Code> (the
+              one universal MSI property for a machine-wide install) forced automatically unless{" "}
+              <Code>install_args</Code> already sets it; EXE installs run the downloaded file directly with
+              the arguments passed straight through - there's no equivalent single flag that works across
+              every EXE installer framework, that still has to live in that asset's own{" "}
+              <Code>install_args</Code>. Either way, exit code <Code>3010</Code> (success, reboot required)
+              counts as success alongside <Code>0</Code>.
+            </P>
+            <P>
+              Verified, not just trusted to have exited cleanly: <Code>-Wait -PassThru</Code> only waits
+              for the process directly launched, and a self-relaunching or detached-child installer stub
+              can report a clean exit code without the app actually being there yet (confirmed on a real
+              deployment). Each install snapshots the registry Uninstall key set (HKLM +{" "}
+              <Code>WOW6432Node</Code>, plus HKCU as cheap defense in depth) before running, then polls for
+              a new entry to appear afterward for up to 10 minutes - the same approach Chocolatey (
+              <Code>Get-UninstallRegistryKey</Code>) and the PowerShell App Deployment Toolkit both use,
+              since there's no universal "did this arbitrary installer actually finish" API. If at least
+              one installed app reports needing a reboot, that's logged as a warning rather than triggering
+              an automatic reboot - forcing one after every deployment with apps installed would cost
+              several more minutes for something most apps don't strictly need to be usable.
             </P>
             <P>
               Deleting an app asset removes the file and the database row immediately, it isn't a foreign
@@ -575,31 +605,44 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               fine until you try to expand the disk later in your hypervisor, since the recovery partition
               sitting right after C: blocks it from ever being extended into that new space, the "disk
               layout from hell" a lot of Windows Server 2022+ admins run into. With a recovery size set,
-              DeployCore's own <Code>&lt;DiskConfiguration&gt;</Code> declares the recovery partition{" "}
+              DeployCore's own <Code>&lt;DiskConfiguration&gt;</Code> pre-creates a partition for it{" "}
               <em>before</em> the OS volume instead (EFI, MSR, Recovery, then OS last) - the OS volume
-              stays the last partition on disk and can always be extended, no post-install partition
-              surgery ever needed. The demo layout (<Code>scripts/seed.py</Code>) sets EFI 500&nbsp;MB, MSR
-              128&nbsp;MB, recovery 1024&nbsp;MB, OS volume remaining, for exactly this reason - worth
-              matching on any layout you expect to expand later.
+              stays the last partition on disk and can always be extended.
             </P>
             <P>
-              <strong>Post-install scripts</strong> run over WinRM, same as a template's own, but as the{" "}
-              <em>very first thing</em> post-install does for a deployment using this layout - before
-              VMware Tools, before any Windows feature or app install, before the template's own
-              post-install scripts. That's deliberate: disk/partition fixups (diskpart, DISM, reagentc,
-              bcdedit) need a pristine, freshly-booted disk before anything else has a chance to touch it.
-              A failure here stops the deployment rather than continuing past it, unlike app installs -
-              partition operations are exactly the kind of step where continuing past a failure could make
-              things worse, not just skip a step.
+              That partition is created deliberately <strong>raw</strong> during Setup - no format, no
+              label, no WinRE type - and only actually turned into the real recovery partition afterward,
+              by a post-install script (see below): formatting or typing it as WinRE during Setup's own
+              <Code>&lt;DiskConfiguration&gt;</Code> pass, before Windows even exists on the disk, made a
+              real deployment's Setup fail its own BCD creation outright. The default global layout ships
+              with a "Recovery partition relocation" post-install script that captures whatever recovery
+              image Windows Setup ends up creating on its own (usually a separate partition at the end of
+              the disk, since it doesn't know about the pre-created one until this script points it there),
+              applies it into the pre-created partition, repoints <Code>reagentc</Code> at the new
+              location, hides the relocated partition, deletes Setup's own leftover one, and extends C:
+              into the freed space - replicating a technique documented in the "Windows disk layout from
+              hell" writeups this feature is modeled on, adapted to run automatically instead of by hand
+              over a live console session.
+            </P>
+            <P>
+              <strong>Post-install scripts</strong> (this default recovery-relocation one included) run
+              over WinRM, same as a template's own, but as the <em>very first thing</em> post-install does
+              for a deployment using this layout - before VMware Tools, before any Windows feature install,
+              before the template's own post-install scripts. That's deliberate: disk/partition fixups
+              (diskpart, DISM, reagentc, bcdedit) need a pristine, freshly-booted disk before anything else
+              has a chance to touch it. A failure here stops the deployment rather than continuing past it,
+              unlike app installs - partition operations are exactly the kind of step where continuing past
+              a failure could make things worse, not just skip a step.
             </P>
             <P>
               This is rendered directly into the generated <Code>autounattend.xml</Code>'s{" "}
-              <Code>&lt;DiskConfiguration&gt;</Code> block at deploy time. Layouts can be exported to a
-              JSON file (post-install scripts included) and imported again (as a new org-scoped copy),
-              handy for keeping a layout consistent across organizations or instances. Create and edit
-              (including the post-install scripts editor) are available for org-scoped layouts; a global
-              layout can be created by a global admin but not edited or deleted through the UI yet, the
-              same limitation templates have.
+              <Code>&lt;DiskConfiguration&gt;</Code> block at deploy time - the Disk Layouts page has a
+              "Preview generated partition XML" toggle on the edit form showing exactly what that block
+              would look like for the values currently entered, before saving. Layouts can be exported to
+              a JSON file (post-install scripts included) and imported again (as a new org-scoped copy),
+              handy for keeping a layout consistent across organizations or instances. Create, edit, and
+              delete are all available for both org-scoped layouts and global ones, the latter restricted
+              to global admins.
             </P>
           </>
         ),
@@ -684,8 +727,9 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   would end up with no remote access at all once it's done.</>,
                 <>An ordered list of <strong>app installs</strong>, App Assets to install automatically
                   (see that article), with an optional argument override per attachment. Installed after
-                  roles, before post-install scripts.</>,
-                "Any number of post-install PowerShell scripts (name + script text), run in order after roles and app installs.",
+                  the final post-install reboot, Windows Update, and the domain join - last, not right
+                  after roles like earlier in this project's life.</>,
+                "Any number of post-install PowerShell scripts (name + script text), run in order after roles, before Windows Update/domain join/the final reboot, and well before app installs now.",
               ]}
             />
             <P>
@@ -709,8 +753,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               <em>separate</em> WinRM connection from the one actually running the install — sharing one
               connection between the two corrupts NTLM's own message-signing state. A verification pass
               (<Code>Get-WindowsFeature</Code>) confirms every requested role actually ended up installed
-              before anything else in post-install proceeds, and one reboot happens automatically, before
-              app installs, if any of them reported needing one.
+              before anything else in post-install proceeds, and one reboot happens automatically right
+              here, before continuing, if any of them reported needing one.
             </P>
             <P>
               <strong>Important limitation:</strong> installing a role only installs that role's binaries
@@ -907,24 +951,27 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   network conditions or anything else actually being wrong. That job (and the one it runs
                   straight into once the callback lands, in the same execution, not a separately queued
                   job) now has an explicit, much longer timeout of its own.</>,
-                <>A completed deployment gets a health check every 15 minutes, a TCP connect to port 3389
-                  (RDP) on its guest IP, not WinRM, which is deliberately closed for good by this point, see
-                  "Unattended Windows Setup, in depth." Up to 30 days of history is shown as a strip of
-                  badges on its detail page; going from healthy to unreachable also fires a
-                  notification/webhook.</>,
               ]}
             />
             <P>
-              From the deployment's detail page you can retry a failed deployment from scratch (a fresh VM
-              is always created, nothing is reused, so this is always safe), or power the VM on/shut it
-              down gracefully/power it off hard. There's no dedicated "delete just the VM" action, remove
-              it directly on the hypervisor if you want it gone without deleting the deployment record
-              too - the one place a VM does get deleted automatically is on an actual deployment{" "}
-              <em>failure</em>, as part of marking it <Code>failed</Code>. On ESXi, that delete follows up{" "}
-              <Code>Destroy_Task</Code> with an explicit, best-effort cleanup of the VM's datastore
-              folder - <Code>Destroy_Task</Code> alone can occasionally leave an empty one behind on a
-              file-lock race right after power-off, a known class of ESXi/pyVmomi issue, not specific to
-              this project. The <strong>Download full log</strong> button produces one plain-text file
+              From the deployment's detail page you can retry, or power the VM on/shut it down
+              gracefully/power it off hard. Retry comes in two forms: a full retry from scratch always
+              builds a fresh VM (deleting the previous one first, if any) - available once a deployment is{" "}
+              <Code>failed</Code>. A post-install-only retry re-enters the pipeline directly against the{" "}
+              <em>same</em> VM instead, and is only offered when there is one to reuse: a failure before
+              Windows Setup itself has finished (before reaching <Code>post_install</Code>/
+              <Code>configuring</Code>) still deletes the VM the same as always - nothing usable exists yet
+              at that point - but a failure after Setup already succeeded (a bad post-install script, a
+              feature install error, an app that wouldn't verify) now keeps the VM instead of throwing it
+              away, since it's usually just a one-line fix away from finishing rather than a reason to
+              build an entire new VM and sit through Setup again. There's no dedicated "delete just the VM"
+              action, remove it directly on the hypervisor if you want it gone without deleting the
+              deployment record too - the one place a VM does get deleted automatically is on a failure
+              before that Setup-succeeded point, as part of marking it <Code>failed</Code>. On ESXi, that
+              delete follows up <Code>Destroy_Task</Code> with an explicit, best-effort cleanup of the VM's
+              datastore folder - <Code>Destroy_Task</Code> alone can occasionally leave an empty one behind
+              on a file-lock race right after power-off, a known class of ESXi/pyVmomi issue, not specific
+              to this project. The <strong>Download full log</strong> button produces one plain-text file
               with the deployment's details, full state history, and every log line, the fastest way to
               hand off a failure to someone else or attach to a support ticket.
             </P>
@@ -1229,11 +1276,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               operator opening it back up on the guest directly.
             </P>
             <P>
-              This is also why the post-deploy health check (see the Deployments article) doesn't use
-              WinRM: it can't, by the time a deployment reaches <Code>completed</Code> nothing is listening
-              on 5985 anymore. It checks a plain TCP connect to port 3389 (RDP, on by default on every
-              Windows Server SKU) instead, proof the guest OS is up and reachable on the network, not that
-              remote management still works, since deliberately nothing does.
+              A consequence worth knowing: nothing in DeployCore checks on a completed deployment's guest
+              afterward, by design - by the time a deployment reaches <Code>completed</Code>, nothing is
+              even listening on 5985 anymore to check. Ongoing reachability/health monitoring is left to
+              whatever tooling you already use for that.
             </P>
           </>
         ),
@@ -1451,8 +1497,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             </P>
             <P>
               <strong>Per-user preferences</strong> (Account page) cover both channels independently for
-              each event - deployment started/completed/failed/became unreachable - complete and failed are
-              on by default for both, start and health checks are off by default to avoid noise. Delivery
+              each event - deployment started/completed/failed - complete and failed are on by default for
+              both, start is off by default to avoid noise. Delivery
               for either channel needs that user to have an email address set (used as both the mailbox and
               the Teams UPN - true for the overwhelming majority of M365 tenants, where they match) as well
               as their own preference being on and the corresponding integration configured and enabled.
@@ -1462,8 +1508,7 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               event, for both channels - Edit next to any event opens the email subject, email body, and
               Teams message, each with the exact <Code>{"{placeholder}"}</Code> fields available for that
               event listed above the fields (e.g. <Code>{"{hostname}"}</Code> everywhere,{" "}
-              <Code>{"{error}"}</Code> only on failure, <Code>{"{checked_at}"}</Code> only on the
-              unreachable check). An unknown or misspelled placeholder is left as literal text in the sent
+              <Code>{"{error}"}</Code> only on failure). An unknown or misspelled placeholder is left as literal text in the sent
               message rather than breaking the notification - a typo in a custom template can never block a
               real deployment event from reaching anyone.
             </P>

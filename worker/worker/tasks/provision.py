@@ -821,49 +821,13 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     raise RuntimeError(f"enabling Remote Desktop failed: {rdp_result.stderr}")
                 await log(db, deployment, "post_install", "Remote Desktop enabled")
 
-            if template.app_installs:
-                # Short-lived, cleared right after this block: authenticates
-                # the guest's own Invoke-WebRequest calls back to DeployCore
-                # for each app it downloads (see api/routes/app_assets.py's
-                # download_app_asset), there's no user session to
-                # authenticate those with, same reasoning as callback_token.
-                deployment.app_asset_access_token = secrets.token_urlsafe(32)
-                await db.commit()
-                callback_base_url = get_settings().app_public_url
-                for entry in template.app_installs:
-                    app_asset = await db.get(AppAsset, uuid.UUID(entry["app_asset_id"]))
-                    if app_asset is None:
-                        await log(
-                            db, deployment, "post_install",
-                            f"skipping app install: asset {entry['app_asset_id']} no longer exists",
-                            level=LogLevel.ERROR,
-                        )
-                        continue
-                    install_args = entry.get("install_args") or app_asset.default_install_args
-                    await log(db, deployment, "post_install", f"installing {app_asset.name}")
-                    download_url = (
-                        f"{callback_base_url}/api/deployments/{deployment.id}/app-assets/{app_asset.id}/download"
-                        f"?token={deployment.app_asset_access_token}"
-                    )
-                    remote_path = f"C:\\Windows\\Temp\\{app_asset.id}-{app_asset.filename}"
-                    result = await _run_with_heartbeat(
-                        db, deployment, "post_install", f"installing {app_asset.name}",
-                        lambda u=download_url, p=remote_path, k=app_asset.kind.value, a=install_args:
-                            client.install_app(u, p, k, a),
-                    )
-                    await log(
-                        db,
-                        deployment,
-                        "post_install",
-                        result.stdout or result.stderr,
-                        level=LogLevel.INFO if result.ok else LogLevel.ERROR,
-                    )
-                    if not result.ok:
-                        raise RuntimeError(f"installing {app_asset.name} failed (exit {result.status_code}): {result.stderr}")
-                    await log(db, deployment, "post_install", f"{app_asset.name} installed")
-                deployment.app_asset_access_token = None
-                await db.commit()
-
+            # Software installs (template.app_installs) run later now, after
+            # the final reboot below - see that reboot's own comment for why.
+            # template.post_install_scripts no longer has an installed app to
+            # assume is already present by the time it runs (it used to run
+            # after app_installs); if a script depends on an app, it needs to
+            # move to running after this deployment completes, or the app
+            # needs converting to a post_install_script itself.
             await _run_post_install_scripts(db, deployment, client, template.post_install_scripts)
 
             await _state_machine.transition(db, deployment, DeploymentState.CONFIGURING)
@@ -915,6 +879,78 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             await log(db, deployment, "configuring", "rebooting to finalize configuration")
             await _reboot_and_wait(client, "guest did not come back reachable after the post-install reboot")
+
+            if template.app_installs:
+                # Deliberately after the final reboot, not before it (where
+                # this used to run): a fresh guest that's just applied
+                # Windows Update and/or joined a domain is a more stable,
+                # more representative target for whatever install-detection
+                # logic an installer runs (some genuinely behave differently
+                # pre- vs post-domain-join), and it means no app install ever
+                # gets silently undone or left half-settled by a reboot that
+                # happens after it for an unrelated reason. See
+                # WinRMClient.install_app for how each install actually runs
+                # and gets verified now (a SYSTEM-context Scheduled Task,
+                # not directly over this session) and why.
+                #
+                # Short-lived, cleared right after this block: authenticates
+                # the guest's own Invoke-WebRequest calls back to DeployCore
+                # for each app it downloads (see api/routes/app_assets.py's
+                # download_app_asset), there's no user session to
+                # authenticate those with, same reasoning as callback_token.
+                deployment.app_asset_access_token = secrets.token_urlsafe(32)
+                await db.commit()
+                callback_base_url = get_settings().app_public_url
+                any_reboot_requested = False
+                for entry in template.app_installs:
+                    app_asset = await db.get(AppAsset, uuid.UUID(entry["app_asset_id"]))
+                    if app_asset is None:
+                        await log(
+                            db, deployment, "configuring",
+                            f"skipping app install: asset {entry['app_asset_id']} no longer exists",
+                            level=LogLevel.ERROR,
+                        )
+                        continue
+                    install_args = entry.get("install_args") or app_asset.default_install_args
+                    await log(db, deployment, "configuring", f"installing {app_asset.name}")
+                    download_url = (
+                        f"{callback_base_url}/api/deployments/{deployment.id}/app-assets/{app_asset.id}/download"
+                        f"?token={deployment.app_asset_access_token}"
+                    )
+                    remote_path = f"C:\\Windows\\Temp\\{app_asset.id}-{app_asset.filename}"
+                    result = await _run_with_heartbeat(
+                        db, deployment, "configuring", f"installing {app_asset.name}",
+                        lambda u=download_url, p=remote_path, k=app_asset.kind.value, a=install_args:
+                            client.install_app(u, p, k, a),
+                    )
+                    await log(
+                        db,
+                        deployment,
+                        "configuring",
+                        result.stdout or result.stderr,
+                        level=LogLevel.INFO if result.ok else LogLevel.ERROR,
+                    )
+                    if not result.ok:
+                        raise RuntimeError(f"installing {app_asset.name} failed (exit {result.status_code}): {result.stderr}")
+                    if "reboot required" in (result.stdout or ""):
+                        any_reboot_requested = True
+                    await log(db, deployment, "configuring", f"{app_asset.name} installed")
+                deployment.app_asset_access_token = None
+                await db.commit()
+
+                # Not an automatic reboot: forcing one after every deployment
+                # with apps installed would cost several more minutes on top
+                # of an already-long pipeline for something most apps don't
+                # strictly need to be usable. Surfaced clearly instead, so
+                # it's a deliberate operator choice rather than a silently
+                # skipped requirement.
+                if any_reboot_requested:
+                    await log(
+                        db, deployment, "configuring",
+                        "at least one installed app reported it needs a reboot to finish - "
+                        "consider rebooting this VM once it's in use",
+                        level=LogLevel.WARN,
+                    )
 
             if template.custom_admin_enabled:
                 # Deliberately this late, not in FirstLogonCommands

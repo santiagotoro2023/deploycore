@@ -127,6 +127,67 @@ class WinRMClient:
                 return result
         return WinRMResult(0, "", "")
 
+    def _run_as_system_task(self, script_body: str, task_name: str, max_attempts: int = 240, poll_seconds: int = 10) -> WinRMResult:
+        """Writes script_body to a remote temp file and runs it via a
+        one-shot SYSTEM-context Scheduled Task, polling for completion
+        and returning the parsed result - shared by install_app and
+        install_windows_updates, both of which need to escape this WinRM
+        session's own restrictions (a network-logon token WUA's COM API
+        refuses for real downloads/installs; NSIS/installer
+        per-machine-vs-per-user ambiguity that isn't a concern once
+        nothing needs to negotiate UAC elevation, because it's already
+        running as the most privileged account there is; see each
+        method's own docstring for the specifics and research behind
+        each). script_body must write its own outcome to the literal
+        placeholder path {RESULT_PATH} (substituted here with the actual
+        temp path used) as 'OK:<message>' or 'FAIL:<message>' - there's
+        no way for a Scheduled Task to hand its stdout back to this
+        session directly."""
+        script_path = f"C:\\Windows\\Temp\\deploycore_{task_name}.ps1"
+        result_path = f"C:\\Windows\\Temp\\deploycore_{task_name}_result.txt"
+        full_script = script_body.replace("{RESULT_PATH}", result_path)
+
+        write_result = self._write_remote_script(full_script, script_path, wrap_header=False)
+        if not write_result.ok:
+            return write_result
+
+        register_result = self._run_ps_direct(
+            PS_HEADER
+            + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
+            + "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "
+            + f"'-NoProfile -ExecutionPolicy Bypass -File \"{script_path}\"'; "
+            + "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date); "
+            + f"Register-ScheduledTask -TaskName '{task_name}' -Action $action -Trigger $trigger "
+            + "-User 'SYSTEM' -RunLevel Highest -Force | Out-Null; "
+            + f"Start-ScheduledTask -TaskName '{task_name}'"
+        )
+        if not register_result.ok:
+            return register_result
+
+        for _ in range(max_attempts):
+            state_result = self._run_ps_direct(
+                PS_HEADER + f"(Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue).State"
+            )
+            if state_result.ok and state_result.stdout.strip() not in ("Running", ""):
+                break
+            time.sleep(poll_seconds)
+        else:
+            return WinRMResult(1, "", f"scheduled task {task_name} did not finish within the expected time.")
+
+        result = self._run_ps_direct(PS_HEADER + f"Get-Content -Path '{result_path}' -ErrorAction SilentlyContinue")
+        self._run_ps_direct(
+            PS_HEADER
+            + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
+            + f"Remove-Item -Path '{script_path}','{result_path}' -Force -ErrorAction SilentlyContinue"
+        )
+
+        output = result.stdout.strip()
+        if output.startswith("OK:"):
+            return WinRMResult(0, output[3:], "")
+        if output.startswith("FAIL:"):
+            return WinRMResult(1, "", output[5:])
+        return WinRMResult(1, "", output or f"scheduled task {task_name} produced no result.")
+
     def install_features(self, feature_names: list[str]) -> FeatureInstallResult:
         """One Install-WindowsFeature call for every requested feature
         together, not one call per feature: this is also what Server
@@ -256,59 +317,56 @@ if ($missing) {{
         Invoke-WebRequest (not pushed by the worker, same reasoning as the
         Setup-complete callback: the guest already reaches DeployCore's
         API, so there's no need to chunk the file through WinRM itself)
-        and runs it silently. kind "msi" goes through msiexec, anything
-        else runs the downloaded file directly with install_args passed
-        straight through, whatever that installer's own silent-install
-        convention is. Exit code 3010 (success, reboot required) counts as
-        success alongside 0, the same convention MSI and many EXE
-        installers both use for "done, but you should reboot".
+        and runs it silently, then verifies it actually finished by
+        polling the registry Uninstall key set for a new entry - the same
+        approach Chocolatey (Get-UninstallRegistryKey) and the PowerShell
+        App Deployment Toolkit both use for exactly this, since there's
+        no universal "did this arbitrary EXE/MSI actually finish" API.
+        Exit code 3010 (success, reboot required) counts as success
+        alongside 0, the same convention MSI and many EXE installers use.
 
-        -Wait -PassThru only waits for the process it directly launched -
-        a "stub"/"online" installer that relaunches itself (elevation) or
-        hands off to a detached child and exits can report a clean exit
-        code seconds later while the real install is still running
-        unobserved, or never actually happened at all (confirmed on a
-        real deployment: an installer "succeeded" in under 15 seconds and
-        the app wasn't actually there). Verified generically, without
-        needing to know the installed app's exact name in advance: snapshot
-        the registry Uninstall key set before running, then poll for a new
-        entry to appear afterward - what every real installer (MSI or a
-        normal EXE installer) registers on completion, regardless of
-        whether the process that reports it is the one originally
-        launched or a child/relaunch.
+        Runs via a one-shot SYSTEM-context Scheduled Task (see
+        _run_as_system_task, shared with install_windows_updates), not
+        directly over this WinRM session - three concrete, researched
+        reasons, not just consistency with the Windows Update fix:
 
-        Checks HKCU as well as HKLM (+ WOW6432Node): several installers,
-        Firefox's stub/online installer among them, default to a
-        per-user install (no elevation, %LocalAppData%) rather than a
-        system-wide one, registering only under the current user's own
-        Uninstall key - HKLM-only would never see that as a false
-        negative regardless of how long it polled. Only a genuinely
-        portable/no-install "app" that never registers anything in
-        either hive would still be missed - not a concern for the
-        installer catalog this project targets.
+        1) A WinRM/NTLM session is a network logon - already confirmed
+        for WUA's CreateUpdateDownloader() (E_ACCESSDENIED), and several
+        installer frameworks are known to behave differently or fail
+        silently outside a normal interactive/service logon.
 
-        The process itself already runs with a full, unfiltered admin
-        token regardless of kind: the built-in Administrator (RID 500)
-        is exempt from UAC token filtering entirely, and a custom admin
-        account gets the same via LocalAccountTokenFilterPolicy, set
-        during the specialize pass specifically so every WinRM-driven
-        action - this one included - has real admin rights, not a
-        filtered/standard-user-like token. No -Verb RunAs here: that
-        triggers an actual UAC consent prompt, which would just hang
-        forever with no one at the console to click it - the opposite
-        of what an unattended pipeline needs, and unnecessary given the
-        token this session already has.
+        2) NSIS-based installers (Firefox's own installer among them)
+        have a documented bug class around per-machine-vs-per-user
+        install-mode detection in silent mode specifically: a fresh
+        silent (/S) install can pick a mode it doesn't actually have
+        clean privileges for, without prompting or erroring - it just
+        silently doesn't do what a real elevated interactive run would
+        (electron-builder issue #9644, NSIS forums). Running as SYSTEM
+        sidesteps this entirely: there's no UAC negotiation to get wrong
+        when the process is already at the ceiling privilege level, ever.
 
-        For kind "msi", ALLUSERS=1 (the standardized MSI property for a
-        machine-wide install) is forced unless install_args already sets
-        it - this is universal across every MSI, not installer-specific.
-        There's no equivalent single universal flag for generic EXE
-        installers (NSIS/Inno Setup/InstallShield/a vendor's own stub
-        each have their own convention, if any, e.g. Firefox's stub
-        accepts its own /AllUsers switch) - forcing consistent
-        machine-wide behavior for a specific EXE installer belongs in
-        that AppAsset's own install_args, which already supports
-        whatever flags that particular installer needs."""
+        3) Confirmed independently for winget: installs launched under
+        the SYSTEM account default to machine-wide (Program Files, the
+        global Start Menu) the same way --scope machine does, since
+        there's no ambiguous "current interactive user" profile to
+        install into instead - this is the closest thing to a universal
+        "force machine-wide" lever that generalizes across installer
+        frameworks, MSI's own ALLUSERS=1 (still forced below) aside.
+
+        Firefox specifically: contrary to an earlier assumption here,
+        Mozilla's own docs don't actually document any /AllUsers-style
+        switch on either their stub or full .exe installer - their own
+        enterprise/automation guidance is to use the official MSI
+        package instead (mozilla.org/firefox/enterprise), precisely
+        because the EXE installers carry exactly this kind of ambiguity.
+        Worth switching that AppAsset to the MSI if these apps keep
+        being a problem; DeployCore's own kind="msi" path already forces
+        ALLUSERS=1 and doesn't depend on any installer-specific behavior.
+
+        Checks HKLM + WOW6432Node primarily (SYSTEM-context installs
+        should land there); HKCU is still checked too as cheap defense
+        in depth, though it's no longer the primary expected signal now
+        that nothing installs "as a particular interactive user" here."""
         url = _ps_single_quote(download_url)
         path = _ps_single_quote(remote_path)
         if kind == "msi":
@@ -323,6 +381,7 @@ if ($missing) {{
         else:
             arg_list = _ps_single_quote(install_args)
             run_line = f"$p = Start-Process -FilePath {path} -ArgumentList {arg_list} -Wait -PassThru"
+        task_name = f"AppInstall_{uuid.uuid4().hex[:12]}"
         script = f"""
 function Get-UninstallEntries {{
     Get-ItemProperty @(
@@ -332,26 +391,31 @@ function Get-UninstallEntries {{
     ) -ErrorAction SilentlyContinue |
         Where-Object {{ $_.DisplayName }} | ForEach-Object {{ "$($_.PSDrive.Name):$($_.PSChildName)" }}
 }}
-$before = @(Get-UninstallEntries)
-Invoke-WebRequest -Uri {url} -OutFile {path} -UseBasicParsing
-{run_line}
-Remove-Item {path} -Force -ErrorAction SilentlyContinue
-if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {{ exit $p.ExitCode }}
-
-$confirmed = $false
-for ($i = 0; $i -lt 120; $i++) {{
-    $after = @(Get-UninstallEntries)
-    if (@($after | Where-Object {{ $before -notcontains $_ }}).Count -gt 0) {{ $confirmed = $true; break }}
-    Start-Sleep -Seconds 5
+try {{
+    $before = @(Get-UninstallEntries)
+    Invoke-WebRequest -Uri {url} -OutFile {path} -UseBasicParsing
+    {run_line}
+    Remove-Item {path} -Force -ErrorAction SilentlyContinue
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {{
+        "FAIL:installer exited with code $($p.ExitCode)" | Set-Content -Path '{{RESULT_PATH}}' -Force
+    }} else {{
+        $confirmed = $false
+        for ($i = 0; $i -lt 120; $i++) {{
+            $after = @(Get-UninstallEntries)
+            if (@($after | Where-Object {{ $before -notcontains $_ }}).Count -gt 0) {{ $confirmed = $true; break }}
+            Start-Sleep -Seconds 5
+        }}
+        if ($confirmed) {{
+            "OK:installed (exit $($p.ExitCode)$(if ($p.ExitCode -eq 3010) {{ ', reboot required' }}))" | Set-Content -Path '{{RESULT_PATH}}' -Force
+        }} else {{
+            "FAIL:installer exited with code $($p.ExitCode) but no new registry Uninstall entry appeared within 10 minutes afterward (self-relaunching stub, or an installer that genuinely didn't complete)" | Set-Content -Path '{{RESULT_PATH}}' -Force
+        }}
+    }}
+}} catch {{
+    "FAIL:$($_.Exception.Message)" | Set-Content -Path '{{RESULT_PATH}}' -Force
 }}
-if (-not $confirmed) {{
-    Write-Output "Installer process exited (code $($p.ExitCode)) but no new registry Uninstall entry appeared within 10 minutes afterward - the install may not have actually completed (e.g. a self-relaunching installer stub that handed off to a detached process)."
-    exit 1
-}}
-Write-Output "Install confirmed: a new registry Uninstall entry appeared after the installer ran."
-exit 0
 """.strip()
-        return self.run_ps(script)
+        return self._run_as_system_task(script, task_name, max_attempts=150)
 
     def rename_computer(self, new_name: str) -> WinRMResult:
         return self.run_ps(f"Rename-Computer -NewName '{new_name}' -Force")
@@ -429,8 +493,6 @@ if ($installer) {
     # admin account), but Windows\Temp is unambiguous and needs no
     # profile to already be loaded.
     _WINDOWS_UPDATE_STATUS_PATH = r"C:\Windows\Temp\deploycore_wu_status.txt"
-    _WINDOWS_UPDATE_RESULT_PATH = r"C:\Windows\Temp\deploycore_wu_result.txt"
-    _WINDOWS_UPDATE_SCRIPT_PATH = r"C:\Windows\Temp\deploycore_wu_run.ps1"
     _WINDOWS_UPDATE_TASK_NAME = "DeployCoreWindowsUpdate"
     # Explicit tradeoff, not a default anyone should assume: skips the
     # monthly Cumulative Update (which on Server 2019+ is also that
@@ -455,8 +517,9 @@ if ($installer) {
         the rest of post-install regardless, never worth failing an
         otherwise-successful deployment over an update server hiccup.
 
-        Runs via a one-shot SYSTEM-context Scheduled Task, not directly
-        over this WinRM session: confirmed on a real deployment that
+        Runs via _run_as_system_task (a one-shot SYSTEM-context Scheduled
+        Task, shared with install_app), not directly over this WinRM
+        session: confirmed on a real deployment that
         $Session.CreateUpdateDownloader() throws UnauthorizedAccessException
         (E_ACCESSDENIED) when called from a WinRM/network-logon session -
         CreateUpdateSearcher() (read-only) works fine there, but WUA
@@ -498,7 +561,7 @@ if ($installer) {
         max_size = self._WINDOWS_UPDATE_MAX_UPDATE_SIZE_BYTES
         wua_script = f"""
 $marker = '{self._WINDOWS_UPDATE_STATUS_PATH}'
-$result = '{self._WINDOWS_UPDATE_RESULT_PATH}'
+$result = '{{RESULT_PATH}}'
 "searching for updates" | Set-Content -Path $marker -Force
 try {{
     Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU' -Name 'ExcludeWUDriversInQualityUpdate' -ErrorAction SilentlyContinue
@@ -544,55 +607,11 @@ try {{
 }}
 Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
 """.strip()
-        write_result = self._write_remote_script(wua_script, self._WINDOWS_UPDATE_SCRIPT_PATH, wrap_header=False)
-        if not write_result.ok:
-            return write_result
-
-        task_name = self._WINDOWS_UPDATE_TASK_NAME
-        register_result = self._run_ps_direct(
-            PS_HEADER
-            + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
-            + "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "
-            + f"'-NoProfile -ExecutionPolicy Bypass -File \"{self._WINDOWS_UPDATE_SCRIPT_PATH}\"'; "
-            + "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date); "
-            + f"Register-ScheduledTask -TaskName '{task_name}' -Action $action -Trigger $trigger "
-            + "-User 'SYSTEM' -RunLevel Highest -Force | Out-Null; "
-            + f"Start-ScheduledTask -TaskName '{task_name}'"
-        )
-        if not register_result.ok:
-            return register_result
-
         # Windows Update can genuinely take a long time (a big cumulative
         # update, a slow update server) - poll generously rather than
         # timing out on anything realistic; run_post_install's own arq
         # job timeout is the real outer ceiling if this never finishes.
-        max_attempts = 240
-        for _ in range(max_attempts):
-            state_result = self._run_ps_direct(
-                PS_HEADER + f"(Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue).State"
-            )
-            if state_result.ok and state_result.stdout.strip() not in ("Running", ""):
-                break
-            time.sleep(10)
-        else:
-            return WinRMResult(1, "", "Windows Update scheduled task did not finish within the expected time.")
-
-        result = self._run_ps_direct(
-            PS_HEADER + f"Get-Content -Path '{self._WINDOWS_UPDATE_RESULT_PATH}' -ErrorAction SilentlyContinue"
-        )
-        self._run_ps_direct(
-            PS_HEADER
-            + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
-            + f"Remove-Item -Path '{self._WINDOWS_UPDATE_SCRIPT_PATH}','{self._WINDOWS_UPDATE_RESULT_PATH}' "
-            + "-Force -ErrorAction SilentlyContinue"
-        )
-
-        output = result.stdout.strip()
-        if output.startswith("OK:"):
-            return WinRMResult(0, output[3:], "")
-        if output.startswith("FAIL:"):
-            return WinRMResult(1, "", output[5:])
-        return WinRMResult(1, "", output or "Windows Update task produced no result.")
+        return self._run_as_system_task(wua_script, self._WINDOWS_UPDATE_TASK_NAME, max_attempts=240)
 
     def get_windows_update_progress(self) -> str:
         """Best-effort progress read for install_windows_updates, run
