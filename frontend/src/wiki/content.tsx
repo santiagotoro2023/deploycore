@@ -982,9 +982,15 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               deployment record too - the one place a VM does get deleted automatically is on a failure
               before that Setup-succeeded point, as part of marking it <Code>failed</Code>. On ESXi, that
               delete follows up <Code>Destroy_Task</Code> with an explicit, best-effort cleanup of the VM's
-              datastore folder - <Code>Destroy_Task</Code> alone can occasionally leave an empty one behind
-              on a file-lock race right after power-off, a known class of ESXi/pyVmomi issue, not specific
-              to this project. The <strong>Download full log</strong> button produces one plain-text file
+              datastore folder. A real deployment showed a folder always left behind after delete, traced
+              back to VM creation itself: the file path handed to ESXi when creating the VM
+              (<Code>vmPathName</Code>) was a valid but ambiguous form whose exact resolution is left up to
+              the host, and this ESXi version resolved it one folder too deep - fixed at the source by
+              spelling out the exact file path instead, so only one folder gets created per VM going
+              forward. The delete-time cleanup still runs regardless, a no-op in the normal case, as
+              insurance against the separate, genuinely rare file-lock race right after power-off that can
+              still occasionally leave <Code>Destroy_Task</Code>'s own cleanup incomplete. The{" "}
+              <strong>Download full log</strong> button produces one plain-text file
               with the deployment's details, full state history, and every log line, the fastest way to
               hand off a failure to someone else or attach to a support ticket.
             </P>

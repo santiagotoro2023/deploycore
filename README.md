@@ -1022,13 +1022,21 @@ pending → creating_vm → booting → installing_os → post_install → confi
 - On an actual deployment *failure*, cleanup is automatic: the VM that
   failure's own deployment created is deleted on the hypervisor as part of
   marking the deployment `failed` (`driver.delete_vm`, worker's `_fail()`).
-  ESXi's own `Destroy_Task` is supposed to remove the VM's datastore folder
-  along with everything else, but can leave an empty one behind on a
-  file-lock race right after power-off (a known class of ESXi/pyVmomi
-  issue, not specific to this project); `esxi.py`'s delete now follows up
-  with an explicit, best-effort `DeleteDatastoreFile_Task` on that folder
-  path, a no-op in the normal case where `Destroy_Task` already cleaned up
-  fully
+  A real deployment showed a folder always left behind on the datastore
+  after delete, traced to VM creation itself: `vmPathName` was set to
+  `"[datastore] name"` (a valid but ambiguous form whose exact resolution
+  is left to the host's own default-naming logic), and this ESXi version
+  resolved it one level too deep - `[datastore]/name/name/name.vmx`
+  instead of the expected `[datastore]/name/name.vmx`. `Destroy_Task`
+  correctly removes the VM's actual (inner) home directory on delete, but
+  has no way to know an extra, empty wrapping folder exists one level
+  above it. Fixed at the source: `vmPathName` now spells out the exact
+  filename (`"[datastore] name/name.vmx"`), so only one folder gets
+  created in the first place. `esxi.py`'s delete still follows up with an
+  explicit, best-effort `DeleteDatastoreFile_Task` on the VM's folder path
+  regardless, a no-op in the normal case, as insurance against the
+  separate, genuinely rare file-lock race right after power-off that can
+  still occasionally leave `Destroy_Task`'s own cleanup incomplete
 - List view: filter by state or hostname, paginated, and exportable to CSV
 
 ### Notifications
