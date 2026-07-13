@@ -5,7 +5,7 @@ from arq.cron import cron
 from app.config import get_settings
 from worker.tasks.backup import run_scheduled_backup
 from worker.tasks.hypervisor import test_hypervisor_connection
-from worker.tasks.maintenance import check_deployment_health, sweep_stale_deployments
+from worker.tasks.maintenance import sweep_stale_deployments
 from worker.tasks.notifications import send_email_notification, send_teams_notification
 from worker.tasks.provision import cleanup_deployment, run_deployment, run_post_install, wait_for_callback
 from worker.tasks.webhooks import deliver_webhook
@@ -34,14 +34,14 @@ from worker.tasks.webhooks import deliver_webhook
 # based on the row's own updated_at, regardless of what any specific arq
 # job is doing.
 #
-# run_post_install is never independently enqueued (grep confirms: the
-# only call is `await run_post_install(ctx, deployment_id)` directly
-# inside wait_for_callback, once the callback lands) - it runs inside
-# wait_for_callback's own job execution and shares its timeout, not a
-# separate one. Its own func() entry below only matters if something
-# ever enqueues it directly in the future (e.g. a "retry post-install"
-# admin action) - it's not what protects today's actual call path.
-# wait_for_callback's own ceiling has to cover BOTH phases combined: up
+# run_post_install normally runs inline inside wait_for_callback's own
+# job execution once the callback lands (sharing its timeout, not a
+# separate one) - but it's also independently enqueued now by the
+# retry-post-install API action (deployments.py), reconnecting to an
+# already-provisioned VM after a post-install-stage failure instead of
+# restarting the whole deployment. Its own func() entry below is what
+# makes that possible; wait_for_callback's own ceiling has to cover BOTH
+# phases combined: up
 # to os_install_timeout_minutes of polling, plus the entire post-install
 # sequence after that (feature installs, app installs, post-install
 # scripts, domain join, a reboot and its own WINRM_REACHABILITY_MAX_ATTEMPTS
@@ -70,7 +70,6 @@ class WorkerSettings:
     ]
     cron_jobs = [
         cron(sweep_stale_deployments, minute=set(range(0, 60, 5))),
-        cron(check_deployment_health, minute=set(range(0, 60, 15))),
         cron(run_scheduled_backup, hour={3}, minute={0}),
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

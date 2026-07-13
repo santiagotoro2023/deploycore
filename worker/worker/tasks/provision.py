@@ -829,19 +829,6 @@ async def run_post_install(ctx, deployment_id: str) -> None:
 
             await _state_machine.transition(db, deployment, DeploymentState.CONFIGURING)
 
-            if template.domain_join_enabled and template.domain_join_timing == DomainJoinTiming.POST_INSTALL:
-                await log(db, deployment, "configuring", f"joining domain {template.domain_fqdn}")
-                result = await _run_with_heartbeat(
-                    db, deployment, "configuring", f"joining domain {template.domain_fqdn}",
-                    lambda: client.join_domain(
-                        template.domain_fqdn, template.domain_join_account, template.domain_join_credential,
-                        template.domain_target_ou,
-                    ),
-                )
-                if not result.ok:
-                    raise RuntimeError(f"domain join failed: {result.stderr}")
-                await log(db, deployment, "configuring", f"joined domain {template.domain_fqdn}")
-
             # Best-effort, deliberately last before the final reboot below
             # (which already happens unconditionally, so no separate
             # reboot-if-needed tracking is needed here): a VM built from a
@@ -869,6 +856,24 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 level=LogLevel.INFO if update_result.ok else LogLevel.WARN,
             )
 
+            # After software installs and Windows Update, not before: a
+            # domain controller's own policies (or just its being on the
+            # network at all) can affect what "finished installing" even
+            # means for some apps/updates, so join last, right before the
+            # single final reboot that picks up domain membership anyway.
+            if template.domain_join_enabled and template.domain_join_timing == DomainJoinTiming.POST_INSTALL:
+                await log(db, deployment, "configuring", f"joining domain {template.domain_fqdn}")
+                domain_result = await _run_with_heartbeat(
+                    db, deployment, "configuring", f"joining domain {template.domain_fqdn}",
+                    lambda: client.join_domain(
+                        template.domain_fqdn, template.domain_join_account, template.domain_join_credential,
+                        template.domain_target_ou,
+                    ),
+                )
+                if not domain_result.ok:
+                    raise RuntimeError(f"domain join failed: {domain_result.stderr}")
+                await log(db, deployment, "configuring", f"joined domain {template.domain_fqdn}")
+
             await log(db, deployment, "configuring", "rebooting to finalize configuration")
             await _reboot_and_wait(client, "guest did not come back reachable after the post-install reboot")
 
@@ -895,16 +900,25 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 )
 
             await log(db, deployment, "configuring", "closing WinRM access, post-install is finished")
+            # netsh, not Get-NetFirewallRule -DisplayName: the rule was
+            # created via netsh (_specialize_enable_winrm.xml.j2, `netsh
+            # advfirewall firewall add rule name="DeployCore WinRM"`),
+            # and a real deployment showed it silently still present and
+            # enabled afterward - PowerShell's own NetSecurity cmdlets
+            # querying by DisplayName aren't guaranteed to match a rule
+            # netsh created, so delete it with the same tool that made
+            # it. This part doesn't disrupt the current session (just a
+            # firewall rule), so it's a normal, logged call rather than
+            # swallowed - only the PSRemoting/WinRM-service teardown
+            # after it is expected to sever the channel it's running on.
+            firewall_result = client.run_ps('netsh.exe advfirewall firewall delete rule name="DeployCore WinRM"')
+            await log(
+                db, deployment, "configuring",
+                firewall_result.stdout or firewall_result.stderr,
+                level=LogLevel.INFO if firewall_result.ok else LogLevel.WARN,
+            )
             try:
-                # This command is itself the one thing that severs the
-                # channel it's running over: removing the firewall rule and
-                # disabling PSRemoting is safe to do inline (doesn't drop
-                # the current session), but stopping the WinRM service
-                # itself would, so that part runs detached a few seconds
-                # later, after this call has already returned its result.
                 client.run_ps(
-                    "Get-NetFirewallRule -DisplayName 'DeployCore WinRM' -ErrorAction SilentlyContinue "
-                    "| Remove-NetFirewallRule; "
                     "Disable-PSRemoting -Force; "
                     "Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "
                     "'-NoProfile -Command \"Start-Sleep -Seconds 5; "

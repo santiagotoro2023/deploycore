@@ -142,7 +142,6 @@ export type DeploymentState =
   | "configuring"
   | "completed"
   | "failed";
-export type HealthStatus = "unknown" | "healthy" | "unreachable";
 
 export interface Deployment {
   id: string;
@@ -160,8 +159,6 @@ export interface Deployment {
   error_message: string | null;
   retry_count: number;
   created_by_user_id: string | null;
-  last_health_status: HealthStatus;
-  last_health_checked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -173,17 +170,11 @@ export interface DeploymentStateTransition {
   detail: string | null;
 }
 
-export interface DeploymentHealthCheck {
-  status: HealthStatus;
-  checked_at: string;
-}
-
 export const WEBHOOK_EVENT_TYPES = [
   "deployment.start",
   "deployment.complete",
   "deployment.failed",
   "deployment.retry",
-  "health.degraded",
 ] as const;
 
 export interface Webhook {

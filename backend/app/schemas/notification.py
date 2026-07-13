@@ -24,22 +24,18 @@ class NotificationPreferenceRead(BaseModel):
     email_on_start: bool
     email_on_complete: bool
     email_on_failed: bool
-    email_on_health_degraded: bool
     teams_on_start: bool
     teams_on_complete: bool
     teams_on_failed: bool
-    teams_on_health_degraded: bool
 
 
 class NotificationPreferenceUpdate(BaseModel):
     email_on_start: bool
     email_on_complete: bool
     email_on_failed: bool
-    email_on_health_degraded: bool
     teams_on_start: bool
     teams_on_complete: bool
     teams_on_failed: bool
-    teams_on_health_degraded: bool
 
 
 class NotificationTemplateRead(BaseModel):

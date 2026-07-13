@@ -90,18 +90,15 @@ interface NotificationPreferences {
   email_on_start: boolean;
   email_on_complete: boolean;
   email_on_failed: boolean;
-  email_on_health_degraded: boolean;
   teams_on_start: boolean;
   teams_on_complete: boolean;
   teams_on_failed: boolean;
-  teams_on_health_degraded: boolean;
 }
 
 const EVENT_ROWS: { event: string; label: string }[] = [
   { event: "start", label: "Deployment started" },
   { event: "complete", label: "Deployment completed" },
   { event: "failed", label: "Deployment failed" },
-  { event: "health_degraded", label: "A completed deployment became unreachable" },
 ];
 
 function NotificationPreferencesPanel() {

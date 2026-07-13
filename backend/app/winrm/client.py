@@ -1,6 +1,7 @@
 import base64
 import ipaddress
 import json
+import time
 import uuid
 
 import winrm
@@ -92,11 +93,28 @@ class WinRMClient:
         short final command - see _LONG_SCRIPT_THRESHOLD for why this is
         needed at all."""
         remote_path = f"C:\\Windows\\Temp\\deploycore_script_{uuid.uuid4().hex}.ps1"
+        write_result = self._write_remote_script(full_script, remote_path, wrap_header=False)
+        if not write_result.ok:
+            return write_result
+        final_result = self._run_ps_direct(f"& '{remote_path}'")
+        self._run_ps_direct(f"Remove-Item -Path '{remote_path}' -Force -ErrorAction SilentlyContinue")
+        return final_result
+
+    def _write_remote_script(self, content: str, remote_path: str, wrap_header: bool = True) -> WinRMResult:
+        """Writes arbitrary script content to a remote file across
+        several safely-sized base64 chunks, same technique as
+        _run_long_ps, but without immediately executing it - used for
+        scripts meant to run some other way (e.g. install_windows_updates'
+        SYSTEM-context scheduled task, not directly over this WinRM
+        session). wrap_header=False when `content` is itself already a
+        full, self-contained script that shouldn't get PS_HEADER prepended
+        (it'll run in its own separate process, not this session)."""
+        full_content = (PS_HEADER + content) if wrap_header else content
         setup_result = self._run_ps_direct(f"Set-Content -Path '{remote_path}' -Value '' -Encoding UTF8 -Force")
         if not setup_result.ok:
             return setup_result
 
-        encoded = base64.b64encode(full_script.encode("utf-8")).decode("ascii")
+        encoded = base64.b64encode(full_content.encode("utf-8")).decode("ascii")
         for i in range(0, len(encoded), _SCRIPT_CHUNK_SIZE):
             chunk = encoded[i : i + _SCRIPT_CHUNK_SIZE]
             append_cmd = (
@@ -107,10 +125,7 @@ class WinRMClient:
             result = self._run_ps_direct(append_cmd)
             if not result.ok:
                 return result
-
-        final_result = self._run_ps_direct(f"& '{remote_path}'")
-        self._run_ps_direct(f"Remove-Item -Path '{remote_path}' -Force -ErrorAction SilentlyContinue")
-        return final_result
+        return WinRMResult(0, "", "")
 
     def install_features(self, feature_names: list[str]) -> FeatureInstallResult:
         """One Install-WindowsFeature call for every requested feature
@@ -333,7 +348,7 @@ if ($installer) {
         installed = "DEPLOYCORE_VMWARE_TOOLS_INSTALLED" in result.stdout
         return VmwareToolsInstallResult(result.status_code, result.stdout.strip(), result.stderr, installed)
 
-    # Fixed path, not $env:TEMP: get_feature_install_status-style progress
+    # Fixed paths, not $env:TEMP: get_feature_install_status-style progress
     # polling (see provision.py) runs over a *separate* WinRM session/
     # process than the one running install_windows_updates itself (same
     # NTLM-session-corruption reason as the feature-install progress
@@ -343,6 +358,9 @@ if ($installer) {
     # admin account), but Windows\Temp is unambiguous and needs no
     # profile to already be loaded.
     _WINDOWS_UPDATE_STATUS_PATH = r"C:\Windows\Temp\deploycore_wu_status.txt"
+    _WINDOWS_UPDATE_RESULT_PATH = r"C:\Windows\Temp\deploycore_wu_result.txt"
+    _WINDOWS_UPDATE_SCRIPT_PATH = r"C:\Windows\Temp\deploycore_wu_run.ps1"
+    _WINDOWS_UPDATE_TASK_NAME = "DeployCoreWindowsUpdate"
 
     def install_windows_updates(self) -> WinRMResult:
         """Best-effort: searches Windows Update via the built-in WUA COM
@@ -360,6 +378,17 @@ if ($installer) {
         the rest of post-install regardless, never worth failing an
         otherwise-successful deployment over an update server hiccup.
 
+        Runs via a one-shot SYSTEM-context Scheduled Task, not directly
+        over this WinRM session: confirmed on a real deployment that
+        $Session.CreateUpdateDownloader() throws UnauthorizedAccessException
+        (E_ACCESSDENIED) when called from a WinRM/network-logon session -
+        CreateUpdateSearcher() (read-only) works fine there, but WUA
+        refuses to let a remote/network token drive an actual download or
+        install. Running the same script under SYSTEM via Task Scheduler
+        sidesteps that restriction entirely - this WinRM session only
+        registers/starts the task and polls for it to finish, never runs
+        the WUA calls itself.
+
         Clears ExcludeWUDriversInQualityUpdate first (best-effort, never
         fatal if it can't): some Windows Server images have "Do not
         include drivers with Windows Updates" set via local/group
@@ -372,46 +401,99 @@ if ($installer) {
 
         Writes its current stage to a fixed status file throughout
         (search/download/install), read back by get_windows_update_progress
-        for the deployment log's heartbeat - a single blocking WinRM call
-        has no other way to report live progress mid-run."""
-        script = f"""
+        for the deployment log's heartbeat - the scheduled task has no
+        direct way to report progress back to this session otherwise."""
+        wua_script = f"""
 $marker = '{self._WINDOWS_UPDATE_STATUS_PATH}'
+$result = '{self._WINDOWS_UPDATE_RESULT_PATH}'
 "searching for updates" | Set-Content -Path $marker -Force
 try {{
     Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU' -Name 'ExcludeWUDriversInQualityUpdate' -ErrorAction SilentlyContinue
 }} catch {{}}
-$Session = New-Object -ComObject Microsoft.Update.Session
-$Searcher = $Session.CreateUpdateSearcher()
-$SearchResult = $Searcher.Search("IsInstalled=0 and IsHidden=0")
-if ($SearchResult.Updates.Count -eq 0) {{
-    "no updates found" | Set-Content -Path $marker -Force
-    Write-Output "No applicable updates found."
-    Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
-    exit 0
+try {{
+    $Session = New-Object -ComObject Microsoft.Update.Session
+    $Searcher = $Session.CreateUpdateSearcher()
+    $SearchResult = $Searcher.Search("IsInstalled=0 and IsHidden=0")
+    if ($SearchResult.Updates.Count -eq 0) {{
+        "OK:No applicable updates found." | Set-Content -Path $result -Force
+    }} else {{
+        "downloading $($SearchResult.Updates.Count) update(s)" | Set-Content -Path $marker -Force
+        $ToDownload = New-Object -ComObject Microsoft.Update.UpdateColl
+        foreach ($u in $SearchResult.Updates) {{ $ToDownload.Add($u) | Out-Null }}
+        $Downloader = $Session.CreateUpdateDownloader()
+        $Downloader.Updates = $ToDownload
+        $Downloader.Download() | Out-Null
+        $ToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
+        foreach ($u in $SearchResult.Updates) {{ if ($u.IsDownloaded) {{ $ToInstall.Add($u) | Out-Null }} }}
+        if ($ToInstall.Count -eq 0) {{
+            "FAIL:Found $($SearchResult.Updates.Count) update(s) but none downloaded successfully." | Set-Content -Path $result -Force
+        }} else {{
+            "installing $($ToInstall.Count) update(s)" | Set-Content -Path $marker -Force
+            $Installer = $Session.CreateUpdateInstaller()
+            $Installer.Updates = $ToInstall
+            $InstallResult = $Installer.Install()
+            $msg = "Installed $($ToInstall.Count) of $($SearchResult.Updates.Count) found update(s), result code $($InstallResult.ResultCode), reboot required: $($InstallResult.RebootRequired)."
+            if ($InstallResult.ResultCode -eq 2 -or $InstallResult.ResultCode -eq 3) {{
+                "OK:$msg" | Set-Content -Path $result -Force
+            }} else {{
+                "FAIL:$msg" | Set-Content -Path $result -Force
+            }}
+        }}
+    }}
+}} catch {{
+    "FAIL:$($_.Exception.Message)" | Set-Content -Path $result -Force
 }}
-"downloading $($SearchResult.Updates.Count) update(s)" | Set-Content -Path $marker -Force
-$ToDownload = New-Object -ComObject Microsoft.Update.UpdateColl
-foreach ($u in $SearchResult.Updates) {{ $ToDownload.Add($u) | Out-Null }}
-$Downloader = $Session.CreateUpdateDownloader()
-$Downloader.Updates = $ToDownload
-$Downloader.Download() | Out-Null
-$ToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
-foreach ($u in $SearchResult.Updates) {{ if ($u.IsDownloaded) {{ $ToInstall.Add($u) | Out-Null }} }}
-if ($ToInstall.Count -eq 0) {{
-    "no updates downloaded successfully" | Set-Content -Path $marker -Force
-    Write-Output "Found $($SearchResult.Updates.Count) update(s) but none downloaded successfully."
-    Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
-    exit 1
-}}
-"installing $($ToInstall.Count) update(s)" | Set-Content -Path $marker -Force
-$Installer = $Session.CreateUpdateInstaller()
-$Installer.Updates = $ToInstall
-$Result = $Installer.Install()
-Write-Output "Installed $($ToInstall.Count) of $($SearchResult.Updates.Count) found update(s), result code $($Result.ResultCode), reboot required: $($Result.RebootRequired)."
 Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
-if ($Result.ResultCode -ne 2 -and $Result.ResultCode -ne 3) {{ exit 1 }}
 """.strip()
-        return self.run_ps(script)
+        write_result = self._write_remote_script(wua_script, self._WINDOWS_UPDATE_SCRIPT_PATH, wrap_header=False)
+        if not write_result.ok:
+            return write_result
+
+        task_name = self._WINDOWS_UPDATE_TASK_NAME
+        register_result = self._run_ps_direct(
+            PS_HEADER
+            + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
+            + "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "
+            + f"'-NoProfile -ExecutionPolicy Bypass -File \"{self._WINDOWS_UPDATE_SCRIPT_PATH}\"'; "
+            + "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date); "
+            + f"Register-ScheduledTask -TaskName '{task_name}' -Action $action -Trigger $trigger "
+            + "-User 'SYSTEM' -RunLevel Highest -Force | Out-Null; "
+            + f"Start-ScheduledTask -TaskName '{task_name}'"
+        )
+        if not register_result.ok:
+            return register_result
+
+        # Windows Update can genuinely take a long time (a big cumulative
+        # update, a slow update server) - poll generously rather than
+        # timing out on anything realistic; run_post_install's own arq
+        # job timeout is the real outer ceiling if this never finishes.
+        max_attempts = 240
+        for _ in range(max_attempts):
+            state_result = self._run_ps_direct(
+                PS_HEADER + f"(Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue).State"
+            )
+            if state_result.ok and state_result.stdout.strip() not in ("Running", ""):
+                break
+            time.sleep(10)
+        else:
+            return WinRMResult(1, "", "Windows Update scheduled task did not finish within the expected time.")
+
+        result = self._run_ps_direct(
+            PS_HEADER + f"Get-Content -Path '{self._WINDOWS_UPDATE_RESULT_PATH}' -ErrorAction SilentlyContinue"
+        )
+        self._run_ps_direct(
+            PS_HEADER
+            + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
+            + f"Remove-Item -Path '{self._WINDOWS_UPDATE_SCRIPT_PATH}','{self._WINDOWS_UPDATE_RESULT_PATH}' "
+            + "-Force -ErrorAction SilentlyContinue"
+        )
+
+        output = result.stdout.strip()
+        if output.startswith("OK:"):
+            return WinRMResult(0, output[3:], "")
+        if output.startswith("FAIL:"):
+            return WinRMResult(1, "", output[5:])
+        return WinRMResult(1, "", output or "Windows Update task produced no result.")
 
     def get_windows_update_progress(self) -> str:
         """Best-effort progress read for install_windows_updates, run

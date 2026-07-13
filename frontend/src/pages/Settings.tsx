@@ -944,7 +944,6 @@ const NOTIFICATION_EVENT_LABELS: Record<string, string> = {
   start: "Deployment started",
   complete: "Deployment completed",
   failed: "Deployment failed",
-  health_degraded: "Completed deployment became unreachable",
 };
 
 function NotificationTemplatesPanel() {

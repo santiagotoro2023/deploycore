@@ -35,18 +35,16 @@ class NotificationPreference(UUIDPKMixin, Base):
     email_on_start: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     email_on_complete: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     email_on_failed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    email_on_health_degraded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Delivered to the same address as email (User.email doubles as the
     # Teams UPN - true for the overwhelming majority of M365 tenants,
     # where a user's primary email and UPN match).
     teams_on_start: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     teams_on_complete: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     teams_on_failed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    teams_on_health_degraded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class NotificationTemplate(UUIDPKMixin, TimestampMixin, Base):
-    """One row per event type (start/complete/failed/health_degraded),
+    """One row per event type (start/complete/failed),
     instance-wide (like M365Config/TeamsConfig): the actual subject/body/
     message text sent for that event, fully operator-editable instead of
     a hardcoded string. Seeded with today's hardcoded defaults by

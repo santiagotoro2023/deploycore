@@ -14,7 +14,7 @@ class Webhook(UUIDPKMixin, TimestampMixin, Base):
     Automation/ServiceNow/Zapier/n8n consume this with their own inbound
     webhook trigger rather than DeployCore integrating any one of them
     directly. events is a list of event-type strings, e.g.
-    ["deployment.failed", "health.degraded"]."""
+    ["deployment.failed", "deployment.complete"]."""
 
     __tablename__ = "webhooks"
 

@@ -6,7 +6,6 @@ from app.models.deployment import (
     DeploymentLogLine,
     DeploymentState,
     DeploymentStateTransition,
-    HealthStatus,
     IpMode,
     LogLevel,
 )
@@ -35,7 +34,6 @@ __all__ = [
     "DeploymentTemplate",
     "DiskLayout",
     "DomainJoinTiming",
-    "HealthStatus",
     "HypervisorHost",
     "HypervisorType",
     "IpMode",

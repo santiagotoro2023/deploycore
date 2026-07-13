@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.models.deployment import DeploymentState, HealthStatus, IpMode, LogLevel
+from app.models.deployment import DeploymentState, IpMode, LogLevel
 
 # Windows Setup's specialize pass sets ComputerName as a NetBIOS name, hard
 # capped at 15 characters, not the 63-character limit that applies to a
@@ -108,8 +108,6 @@ class DeploymentRead(BaseModel):
     error_message: str | None
     retry_count: int
     created_by_user_id: uuid.UUID | None
-    last_health_status: HealthStatus
-    last_health_checked_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -121,13 +119,6 @@ class DeploymentStateTransitionRead(BaseModel):
     to_state: str
     occurred_at: datetime
     detail: str | None
-
-
-class DeploymentHealthCheckRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    status: HealthStatus
-    checked_at: datetime
 
 
 class DeploymentLogLineRead(BaseModel):

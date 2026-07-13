@@ -5,7 +5,7 @@ import { api, ApiError, getToken } from "../api/client";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { downloadText } from "../lib/jsonFile";
-import { Deployment, DeploymentHealthCheck, DeploymentLogLine, DeploymentStateTransition } from "../api/types";
+import { Deployment, DeploymentLogLine, DeploymentStateTransition } from "../api/types";
 import { useAuth, roleAtLeast } from "../state/auth";
 import { useOrg } from "../state/org";
 
@@ -19,7 +19,6 @@ export default function DeploymentDetail() {
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [history, setHistory] = useState<DeploymentStateTransition[]>([]);
   const [logs, setLogs] = useState<DeploymentLogLine[]>([]);
-  const [healthHistory, setHealthHistory] = useState<DeploymentHealthCheck[]>([]);
   const [confirmRetry, setConfirmRetry] = useState(false);
   const [confirmRetryPostInstall, setConfirmRetryPostInstall] = useState(false);
   const [confirmDeleteDeployment, setConfirmDeleteDeployment] = useState(false);
@@ -51,12 +50,6 @@ export default function DeploymentDetail() {
     setHistory(hist);
     setLogs(logLines);
     if (dep.vm_moref) await loadPowerState(selectedOrgId, id);
-    if (dep.state === "completed") {
-      const checks = await api.get<DeploymentHealthCheck[]>(
-        `/organizations/${selectedOrgId}/deployments/${id}/health-history`,
-      );
-      setHealthHistory(checks);
-    }
   }
 
   useEffect(() => {
@@ -235,15 +228,6 @@ export default function DeploymentDetail() {
           <p className="text-xs text-neutral-500">{deployment.id}</p>
         </div>
         <div className="flex items-center gap-3">
-          {deployment.state === "completed" && (
-            <span className="flex items-center gap-1.5 text-xs text-neutral-500">
-              Health:
-              <Badge value={deployment.last_health_status} />
-              {deployment.last_health_checked_at && (
-                <span>checked {new Date(deployment.last_health_checked_at).toLocaleString()}</span>
-              )}
-            </span>
-          )}
           <Badge value={deployment.state} />
           {canRetryPostInstall && (
             <button
@@ -284,19 +268,6 @@ export default function DeploymentDetail() {
       {deleteError && (
         <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
           {deleteError}
-        </div>
-      )}
-
-      {deployment.state === "completed" && healthHistory.length > 0 && (
-        <div>
-          <h2 className="mb-2 text-sm font-semibold text-neutral-700 dark:text-neutral-300">Health history</h2>
-          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-4">
-            {[...healthHistory].reverse().map((check, i) => (
-              <span key={i} title={`${check.status} at ${new Date(check.checked_at).toLocaleString()}`}>
-                <Badge value={check.status} />
-              </span>
-            ))}
-          </div>
         </div>
       )}
 

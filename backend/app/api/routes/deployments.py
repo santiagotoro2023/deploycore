@@ -14,7 +14,6 @@ from app.jobs import get_arq_pool
 from app.models.base import utcnow
 from app.models.deployment import (
     Deployment,
-    DeploymentHealthCheck,
     DeploymentLogLine,
     DeploymentState,
     DeploymentStateTransition,
@@ -26,7 +25,6 @@ from app.schemas.deployment import (
     AutounattendPreview,
     BulkDeploymentCreate,
     DeploymentCreate,
-    DeploymentHealthCheckRead,
     DeploymentLogLineRead,
     DeploymentRead,
     DeploymentStateTransitionRead,
@@ -299,24 +297,6 @@ async def get_deployment_answer_file(
     if deployment.rendered_autounattend is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not rendered yet")
     return AutounattendPreview(xml=deployment.rendered_autounattend)
-
-
-@router.get(
-    "/api/organizations/{org_id}/deployments/{deployment_id}/health-history",
-    response_model=list[DeploymentHealthCheckRead],
-    dependencies=[Depends(require_role(Role.READONLY))],
-)
-async def get_deployment_health_history(
-    org_id: uuid.UUID, deployment_id: uuid.UUID, db: AsyncSession = Depends(get_db)
-) -> list[DeploymentHealthCheck]:
-    await _get_org_deployment(db, org_id, deployment_id)
-    result = await db.execute(
-        select(DeploymentHealthCheck)
-        .where(DeploymentHealthCheck.deployment_id == deployment_id)
-        .order_by(DeploymentHealthCheck.checked_at.desc())
-        .limit(200)
-    )
-    return list(result.scalars().all())
 
 
 @router.post(

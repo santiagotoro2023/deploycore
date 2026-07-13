@@ -17,7 +17,6 @@ EVENT_CONTEXT_FIELDS = {
     "start": ["hostname"],
     "complete": ["hostname"],
     "failed": ["hostname", "error"],
-    "health_degraded": ["hostname", "checked_at"],
 }
 
 
@@ -42,7 +41,6 @@ _PREFERENCE_DEFAULTS = {
     "start": False,
     "complete": True,
     "failed": True,
-    "health_degraded": False,
 }
 
 
