@@ -285,10 +285,35 @@ if ($missing) {{
         negative regardless of how long it polled. Only a genuinely
         portable/no-install "app" that never registers anything in
         either hive would still be missed - not a concern for the
-        installer catalog this project targets."""
+        installer catalog this project targets.
+
+        The process itself already runs with a full, unfiltered admin
+        token regardless of kind: the built-in Administrator (RID 500)
+        is exempt from UAC token filtering entirely, and a custom admin
+        account gets the same via LocalAccountTokenFilterPolicy, set
+        during the specialize pass specifically so every WinRM-driven
+        action - this one included - has real admin rights, not a
+        filtered/standard-user-like token. No -Verb RunAs here: that
+        triggers an actual UAC consent prompt, which would just hang
+        forever with no one at the console to click it - the opposite
+        of what an unattended pipeline needs, and unnecessary given the
+        token this session already has.
+
+        For kind "msi", ALLUSERS=1 (the standardized MSI property for a
+        machine-wide install) is forced unless install_args already sets
+        it - this is universal across every MSI, not installer-specific.
+        There's no equivalent single universal flag for generic EXE
+        installers (NSIS/Inno Setup/InstallShield/a vendor's own stub
+        each have their own convention, if any, e.g. Firefox's stub
+        accepts its own /AllUsers switch) - forcing consistent
+        machine-wide behavior for a specific EXE installer belongs in
+        that AppAsset's own install_args, which already supports
+        whatever flags that particular installer needs."""
         url = _ps_single_quote(download_url)
         path = _ps_single_quote(remote_path)
         if kind == "msi":
+            if "allusers" not in install_args.lower():
+                install_args = f"{install_args} ALLUSERS=1".strip()
             # A single raw argument-list string, not an array: msiexec (like
             # most Windows installers) does its own command-line parsing,
             # splitting install_args ("/qn /norestart") into an array would
@@ -314,13 +339,13 @@ Remove-Item {path} -Force -ErrorAction SilentlyContinue
 if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {{ exit $p.ExitCode }}
 
 $confirmed = $false
-for ($i = 0; $i -lt 36; $i++) {{
+for ($i = 0; $i -lt 120; $i++) {{
     $after = @(Get-UninstallEntries)
     if (@($after | Where-Object {{ $before -notcontains $_ }}).Count -gt 0) {{ $confirmed = $true; break }}
     Start-Sleep -Seconds 5
 }}
 if (-not $confirmed) {{
-    Write-Output "Installer process exited (code $($p.ExitCode)) but no new registry Uninstall entry appeared within 3 minutes afterward - the install may not have actually completed (e.g. a self-relaunching installer stub that handed off to a detached process)."
+    Write-Output "Installer process exited (code $($p.ExitCode)) but no new registry Uninstall entry appeared within 10 minutes afterward - the install may not have actually completed (e.g. a self-relaunching installer stub that handed off to a detached process)."
     exit 1
 }}
 Write-Output "Install confirmed: a new registry Uninstall entry appeared after the installer ran."
