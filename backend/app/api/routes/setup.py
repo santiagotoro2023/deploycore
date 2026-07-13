@@ -104,7 +104,7 @@ if ($source.Count -eq 0) {
     if ($LASTEXITCODE -ne 0) { throw "reagentc /enable failed with exit code $LASTEXITCODE" }
     Remove-PartitionAccessPath -DiskNumber 0 -PartitionNumber $target.PartitionNumber -AccessPath "${targetLetter}:\\"
     Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -GptType $recoveryTypeGuid
-    Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -Attributes 0x8000000000000001
+    Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -IsHidden $true -NoDefaultDriveLetter $true
     Info "done - WinRE relocated from C: to partition $($target.PartitionNumber)."
     return
 }
@@ -136,7 +136,7 @@ if ($LASTEXITCODE -ne 0) { throw "reagentc /enable failed with exit code $LASTEX
 Info "typing, hiding, and removing the temporary drive letter from the relocated partition..."
 Remove-PartitionAccessPath -DiskNumber 0 -PartitionNumber $target.PartitionNumber -AccessPath "${targetLetter}:\\"
 Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -GptType $recoveryTypeGuid
-Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -Attributes 0x8000000000000001
+Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -IsHidden $true -NoDefaultDriveLetter $true
 
 Info "deleting Setup's own recovery partition and extending C: into the freed space..."
 Remove-PartitionAccessPath -DiskNumber 0 -PartitionNumber $src.PartitionNumber -AccessPath "${sourceLetter}:\\" -ErrorAction SilentlyContinue
