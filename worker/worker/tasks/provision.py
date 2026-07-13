@@ -975,27 +975,60 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 )
 
             await log(db, deployment, "configuring", "closing WinRM access, post-install is finished")
-            # netsh, not Get-NetFirewallRule -DisplayName: the rule was
-            # created via netsh (_specialize_enable_winrm.xml.j2, `netsh
-            # advfirewall firewall add rule name="DeployCore WinRM"`),
-            # and a real deployment showed it silently still present and
-            # enabled afterward - PowerShell's own NetSecurity cmdlets
-            # querying by DisplayName aren't guaranteed to match a rule
-            # netsh created, so delete it with the same tool that made
-            # it. This part doesn't disrupt the current session (just a
-            # firewall rule), so it's a normal, logged call rather than
-            # swallowed - only the PSRemoting/WinRM-service teardown
-            # after it is expected to sever the channel it's running on.
-            firewall_result = await _run_with_retry(
-                lambda: client.run_ps('netsh.exe advfirewall firewall delete rule name="DeployCore WinRM"')
+            # Three things need cleaning up here, not just the one custom
+            # rule - confirmed against Microsoft's own Disable-PSRemoting
+            # docs, which explicitly list the other two as manual steps
+            # it does NOT do on its own:
+            #
+            # 1. The "DeployCore WinRM" rule: created via netsh
+            #    (_specialize_enable_winrm.xml.j2), and a real deployment
+            #    showed it silently still present and enabled afterward -
+            #    PowerShell's own NetSecurity cmdlets querying by
+            #    DisplayName aren't guaranteed to match a rule netsh
+            #    created, so delete it with the same tool that made it.
+            # 2. The built-in "Windows Remote Management (HTTP-In)" rule:
+            #    `winrm quickconfig` (also run in the specialize pass)
+            #    enables this pre-shipped-but-disabled-by-default rule as
+            #    a separate, documented side effect, distinct from the
+            #    custom one above - Disable-PSRemoting's own docs list
+            #    "disable the firewall exceptions for WS-Management
+            #    communications" as something it explicitly does NOT do.
+            #    Disabled by -Name, not -DisplayGroup: "Windows Remote
+            #    Management" is a localized display string, same lesson
+            #    already learned the hard way for RDP's DisplayGroup.
+            #    Restored to its default (present but disabled) state,
+            #    not deleted - it's a predefined Windows rule, not one
+            #    this project created.
+            # 3. LocalAccountTokenFilterPolicy: set to 1 by the
+            #    specialize pass when a custom admin account is
+            #    configured (see _specialize_enable_winrm.xml.j2), and
+            #    also explicitly listed in Disable-PSRemoting's own docs
+            #    as a manual-revert step it doesn't do - left at 1 this
+            #    weakens UAC's remote-token filtering for every local
+            #    admin account on the machine, indefinitely, well past
+            #    the WinRM access it was only ever needed for.
+            #
+            # None of this disrupts the current session (just firewall
+            # rules and a registry value), so it's a normal, logged call
+            # rather than swallowed - only the PSRemoting/WinRM-service
+            # teardown after it is expected to sever the channel it runs on.
+            cleanup_result = await _run_with_retry(
+                lambda: client.run_ps(
+                    'netsh.exe advfirewall firewall delete rule name="DeployCore WinRM"; '
+                    "Disable-NetFirewallRule -Name 'WINRM-HTTP-In-TCP','WINRM-HTTP-In-TCP-PUBLIC' "
+                    "-ErrorAction SilentlyContinue; "
+                    "Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' "
+                    "-Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue"
+                )
             )
             await log(
                 db, deployment, "configuring",
-                firewall_result.stdout or firewall_result.stderr,
-                level=LogLevel.INFO if firewall_result.ok else LogLevel.WARN,
+                cleanup_result.stdout or cleanup_result.stderr,
+                level=LogLevel.INFO if cleanup_result.ok else LogLevel.WARN,
             )
             try:
-                client.run_ps(
+                await asyncio.to_thread(
+                    client.run_ps,
                     "Disable-PSRemoting -Force; "
                     "Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "
                     "'-NoProfile -Command \"Start-Sleep -Seconds 5; "
