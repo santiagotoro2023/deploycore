@@ -401,6 +401,28 @@ async def _winrm_reachable(client: WinRMClient) -> bool:
         return False
 
 
+async def _run_with_retry(blocking_call, attempts: int = 3, delay_seconds: int = 15):
+    """Runs a blocking WinRMClient call via asyncio.to_thread, retrying a
+    few times with a short delay on any exception. Added after a real
+    deployment's post-reboot WinRM call - the very first real command
+    issued right after _reboot_and_wait already confirmed reachability -
+    still failed with WinRMOperationTimeoutError: the reboot that
+    follows a Windows Update install can leave the guest busy finishing
+    servicing/TrustedInstaller work well past the point basic
+    reachability comes back, and a single successful probe isn't strong
+    enough evidence the guest can reliably service a new WinRM shell
+    yet. Re-raises the last exception if every attempt fails."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return await asyncio.to_thread(blocking_call)
+        except Exception as exc:  # noqa: BLE001 - retried, not swallowed; re-raised below if attempts run out
+            last_exc = exc
+            if attempt < attempts - 1:
+                await asyncio.sleep(delay_seconds)
+    raise last_exc  # type: ignore[misc]
+
+
 async def _run_with_heartbeat(db, deployment: Deployment, stage: str, description: str, blocking_call, progress_check=None):
     """Runs a blocking WinRMClient call (install_features/install_app/
     run_ps/join_domain - see WinRMClient's own docstring: every method is
@@ -462,24 +484,41 @@ async def _run_post_install_scripts(db, deployment: Deployment, client: WinRMCli
         await log(db, deployment, "post_install", f"post-install script {script['name']} completed")
 
 
+WINRM_SETTLE_CONSECUTIVE_CHECKS = 3
+
 async def _reboot_and_wait(client: WinRMClient, failure_message: str) -> None:
     """Fire-and-forget the restart (the guest tearing down the WinRM
     connection mid-command is expected, not an error) then wait for it to
     come back, using the same bounded reachability check as everywhere
     else. Shared by the post-feature-install reboot (only when at least
     one installed feature actually reported RestartNeeded) and the
-    original end-of-post_install reboot, previously duplicated inline."""
+    original end-of-post_install reboot, previously duplicated inline.
+
+    Requires WINRM_SETTLE_CONSECUTIVE_CHECKS in a row, not just one:
+    confirmed on a real deployment that a single successful reachability
+    probe isn't enough evidence the guest is actually settled - the
+    reboot right after a Windows Update install (which can leave the OS
+    busy finishing servicing/TrustedInstaller work well past the point
+    basic WinRM connectivity comes back) answered one simple command
+    fine, then failed opening a new shell for the very next real
+    command moments later. One flaky check resets the counter rather
+    than failing outright, since a single missed poll this early is
+    expected, not a reason to give up."""
     try:
         client.reboot()
     except Exception:  # noqa: BLE001 - expected: the guest tearing down the WinRM connection mid-reboot
         pass
     await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
+    consecutive_ok = 0
     for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
         if await _winrm_reachable(client):
-            break
+            consecutive_ok += 1
+            if consecutive_ok >= WINRM_SETTLE_CONSECUTIVE_CHECKS:
+                return
+        else:
+            consecutive_ok = 0
         await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
-    else:
-        raise RuntimeError(failure_message)
+    raise RuntimeError(failure_message)
 
 
 async def _guest_reachable_over_winrm(
@@ -892,7 +931,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 # already run - some of those could plausibly still
                 # depend on Administrator being enabled.
                 await log(db, deployment, "configuring", "disabling built-in Administrator account")
-                disable_result = client.disable_builtin_administrator()
+                disable_result = await _run_with_retry(client.disable_builtin_administrator)
                 await log(
                     db, deployment, "configuring",
                     disable_result.stdout or disable_result.stderr,
@@ -911,7 +950,9 @@ async def run_post_install(ctx, deployment_id: str) -> None:
             # firewall rule), so it's a normal, logged call rather than
             # swallowed - only the PSRemoting/WinRM-service teardown
             # after it is expected to sever the channel it's running on.
-            firewall_result = client.run_ps('netsh.exe advfirewall firewall delete rule name="DeployCore WinRM"')
+            firewall_result = await _run_with_retry(
+                lambda: client.run_ps('netsh.exe advfirewall firewall delete rule name="DeployCore WinRM"')
+            )
             await log(
                 db, deployment, "configuring",
                 firewall_result.stdout or firewall_result.stderr,
