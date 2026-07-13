@@ -164,29 +164,56 @@ class WinRMClient:
         if not register_result.ok:
             return register_result
 
-        for _ in range(max_attempts):
-            state_result = self._run_ps_direct(
-                PS_HEADER + f"(Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue).State"
+        # Everything from here on must leave no trace on the guest
+        # regardless of how this ends - timed out, a transient WinRM
+        # exception mid-poll (pywinrm's own WinRMOperationTimeoutError has
+        # been observed escaping _run_ps_direct for real, elsewhere in
+        # this same pipeline), or a clean finish. try/finally, not just a
+        # cleanup call at the end of the happy path: that left a
+        # registered (and possibly still-running) task, its script, and
+        # its result file behind on every non-happy-path exit - a real
+        # gap, not hypothetical, given how long these polling loops run
+        # and how flaky WinRM has already shown itself to be after a
+        # reboot in this same codebase.
+        timed_out = False
+        try:
+            for _ in range(max_attempts):
+                state_result = self._run_ps_direct(
+                    PS_HEADER + f"(Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue).State"
+                )
+                if state_result.ok and state_result.stdout.strip() not in ("Running", ""):
+                    break
+                time.sleep(poll_seconds)
+            else:
+                timed_out = True
+
+            if timed_out:
+                return WinRMResult(1, "", f"scheduled task {task_name} did not finish within the expected time.")
+
+            result = self._run_ps_direct(
+                PS_HEADER + f"Get-Content -Path '{result_path}' -ErrorAction SilentlyContinue"
             )
-            if state_result.ok and state_result.stdout.strip() not in ("Running", ""):
-                break
-            time.sleep(poll_seconds)
-        else:
-            return WinRMResult(1, "", f"scheduled task {task_name} did not finish within the expected time.")
-
-        result = self._run_ps_direct(PS_HEADER + f"Get-Content -Path '{result_path}' -ErrorAction SilentlyContinue")
-        self._run_ps_direct(
-            PS_HEADER
-            + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
-            + f"Remove-Item -Path '{script_path}','{result_path}' -Force -ErrorAction SilentlyContinue"
-        )
-
-        output = result.stdout.strip()
-        if output.startswith("OK:"):
-            return WinRMResult(0, output[3:], "")
-        if output.startswith("FAIL:"):
-            return WinRMResult(1, "", output[5:])
-        return WinRMResult(1, "", output or f"scheduled task {task_name} produced no result.")
+            output = result.stdout.strip()
+            if output.startswith("OK:"):
+                return WinRMResult(0, output[3:], "")
+            if output.startswith("FAIL:"):
+                return WinRMResult(1, "", output[5:])
+            return WinRMResult(1, "", output or f"scheduled task {task_name} produced no result.")
+        finally:
+            try:
+                # Stop-ScheduledTask, not just Unregister: unregistering
+                # alone deletes the task *definition* but doesn't kill an
+                # instance still actually running (relevant on the
+                # timeout path specifically) - both together guarantee
+                # nothing keeps running and nothing keeps existing.
+                self._run_ps_direct(
+                    PS_HEADER
+                    + f"Stop-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue; "
+                    + f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue; "
+                    + f"Remove-Item -Path '{script_path}','{result_path}' -Force -ErrorAction SilentlyContinue"
+                )
+            except Exception:  # noqa: BLE001 - best-effort cleanup; never mask whatever the try block already decided
+                pass
 
     def install_features(self, feature_names: list[str]) -> FeatureInstallResult:
         """One Install-WindowsFeature call for every requested feature
