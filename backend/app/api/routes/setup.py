@@ -31,32 +31,122 @@ DEFAULT_DISK_LAYOUT_JSON = {
     "os_volume": "remaining",
     "extra_volumes": [],
 }
-# Read-only: pre-creating the mid-disk "Windows RE tools" partition via
-# DiskConfiguration does NOT by itself make Windows Setup relocate the
-# actual recovery image there - that needs a real diskpart/DISM/reagentc
-# sequence, which depends on which of a few possible states Setup left
-# the disk in (a state that isn't documented and hasn't been observed
-# yet on this project's own images). This just reports that state into
-# the deployment log so the real relocation script can be written
-# against confirmed behavior instead of guessed. Never throws (every
-# cmdlet is caught) so it can't block the rest of post-install.
-DEFAULT_DISK_LAYOUT_POST_INSTALL_SCRIPTS = [
-    {
-        "name": "Recovery partition diagnostic (read-only)",
-        "script_text": (
-            "function Safe($block) { try { & $block | Out-String } "
-            "catch { \"error: $($_.Exception.Message)\" } }\n"
-            "Write-Output '=== reagentc /info ==='\n"
-            "Write-Output (Safe { reagentc /info })\n"
-            "Write-Output '=== Get-Partition -DiskNumber 0 ==='\n"
-            "Write-Output (Safe { Get-Partition -DiskNumber 0 | "
-            "Select-Object PartitionNumber, Type, Size, DriveLetter, GptType | Format-Table -AutoSize })\n"
-            "Write-Output '=== Recovery-labeled volumes ==='\n"
-            "Write-Output (Safe { Get-Volume | Where-Object { $_.FileSystemLabel -eq 'Windows RE tools' -or "
-            "$_.FileSystemLabel -like '*Recovery*' } | "
-            "Select-Object DriveLetter, FileSystemLabel, Size, SizeRemaining | Format-Table -AutoSize })\n"
-        ),
+# Pre-creating the mid-disk "Windows RE tools" partition via
+# DiskConfiguration does not by itself make Windows Setup relocate the
+# actual recovery image there. This replicates the actual working fix
+# (https://stastka.ch/knowledge-base/Windows-2022-disk-layout-from-Hell,
+# verbatim diskpart/DISM/reagentc recipe translated to native PowerShell
+# Storage cmdlets, with partitions found by label/type instead of
+# hardcoded numbers since DeployCore's numbering can differ from the
+# blog's own disk): if Setup used our pre-created partition directly,
+# nothing to do; if Setup made its own extra recovery partition instead,
+# capture its image, apply it into ours, repoint reagentc, hide ours,
+# delete Setup's own, and extend C: into the freed space - the same
+# end state the blog's manual diskpart session produces. Real command
+# failures intentionally propagate (halting post-install rather than
+# leaving a half-relocated recovery partition unnoticed); "can't
+# determine what Setup did" cases log and return without changing
+# anything rather than guessing.
+_RECOVERY_RELOCATE_SCRIPT = """
+function Info($msg) { Write-Output "[recovery-relocate] $msg" }
+
+function Get-FreeLetter {
+    68..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Get-Volume -DriveLetter $_ -ErrorAction SilentlyContinue) } | Select-Object -First 1
+}
+
+$recoveryTypeGuid = '{de94bba4-06d1-4d40-a16a-bfd50179d6ac}'
+
+$target = Get-Partition -DiskNumber 0 | Where-Object {
+    (Get-Volume -Partition $_ -ErrorAction SilentlyContinue).FileSystemLabel -eq 'Windows RE tools'
+}
+if (-not $target) {
+    Info "no pre-created 'Windows RE tools' partition found on disk 0 - this layout has no recovery_size_mb set, nothing to do."
+    return
+}
+Info "target partition: number $($target.PartitionNumber), $([math]::Round($target.Size/1MB)) MB"
+
+$reagentInfo = (reagentc /info) -join "`n"
+Info "reagentc /info (before):`n$reagentInfo"
+
+if ($reagentInfo -match "partition$($target.PartitionNumber)\\b") {
+    Info "WinRE is already using the pre-created partition - nothing to relocate."
+    return
+}
+
+$source = @(Get-Partition -DiskNumber 0 | Where-Object {
+    $_.GptType -eq $recoveryTypeGuid -and $_.PartitionNumber -ne $target.PartitionNumber
+})
+
+if ($source.Count -gt 1) {
+    Info "found $($source.Count) other recovery-type partitions, expected at most 1 - not safe to proceed automatically, stopping without changes."
+    return
+}
+
+if ($source.Count -eq 0) {
+    $localWinRE = "$env:WINDIR\\System32\\Recovery\\Winre.wim"
+    if (-not (Test-Path $localWinRE)) {
+        Info "no separate recovery partition and no local Winre.wim found - unexpected state, stopping without changes for manual review."
+        return
     }
+    Info "WinRE image is stored on C: (no dedicated partition) - relocating that instead of the DISM capture/apply path."
+    $letter = Get-FreeLetter
+    Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -NewDriveLetter $letter
+    New-Item -ItemType Directory -Path "${letter}:\\Recovery\\WindowsRE" -Force | Out-Null
+    Copy-Item $localWinRE "${letter}:\\Recovery\\WindowsRE\\Winre.wim" -Force
+    reagentc /disable
+    reagentc /setreimage /path "${letter}:\\Recovery\\WindowsRE"
+    if ($LASTEXITCODE -ne 0) { throw "reagentc /setreimage failed with exit code $LASTEXITCODE" }
+    reagentc /enable
+    if ($LASTEXITCODE -ne 0) { throw "reagentc /enable failed with exit code $LASTEXITCODE" }
+    Remove-PartitionAccessPath -DiskNumber 0 -PartitionNumber $target.PartitionNumber -AccessPath "${letter}:\\"
+    Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -Attributes 0x8000000000000001
+    Info "done - WinRE relocated from C: to partition $($target.PartitionNumber)."
+    return
+}
+
+$src = $source[0]
+Info "source partition (Setup's own auto-created recovery): number $($src.PartitionNumber)"
+
+$sourceLetter = Get-FreeLetter
+Set-Partition -DiskNumber 0 -PartitionNumber $src.PartitionNumber -NewDriveLetter $sourceLetter
+$targetLetter = Get-FreeLetter
+Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -NewDriveLetter $targetLetter
+Info "mounted source as ${sourceLetter}:, target as ${targetLetter}:"
+
+$wimPath = "C:\\Windows\\Temp\\deploycore_recovery.wim"
+Info "capturing recovery image from ${sourceLetter}:\\ ..."
+dism /Capture-Image /ImageFile:$wimPath /CaptureDir:"${sourceLetter}:\\" /Name:"Recovery" /Quiet
+if ($LASTEXITCODE -ne 0) { throw "DISM capture failed with exit code $LASTEXITCODE" }
+
+Info "applying recovery image to ${targetLetter}:\\ ..."
+dism /Apply-Image /ImageFile:$wimPath /Index:1 /ApplyDir:"${targetLetter}:\\" /Quiet
+if ($LASTEXITCODE -ne 0) { throw "DISM apply failed with exit code $LASTEXITCODE" }
+Remove-Item $wimPath -Force -ErrorAction SilentlyContinue
+
+Info "repointing reagentc at the new location..."
+reagentc /disable
+reagentc /setreimage /path "${targetLetter}:\\Recovery\\WindowsRE"
+if ($LASTEXITCODE -ne 0) { throw "reagentc /setreimage failed with exit code $LASTEXITCODE" }
+reagentc /enable
+if ($LASTEXITCODE -ne 0) { throw "reagentc /enable failed with exit code $LASTEXITCODE" }
+
+Info "hiding the relocated partition and removing its temporary drive letter..."
+Remove-PartitionAccessPath -DiskNumber 0 -PartitionNumber $target.PartitionNumber -AccessPath "${targetLetter}:\\"
+Set-Partition -DiskNumber 0 -PartitionNumber $target.PartitionNumber -Attributes 0x8000000000000001
+
+Info "deleting Setup's own recovery partition and extending C: into the freed space..."
+Remove-PartitionAccessPath -DiskNumber 0 -PartitionNumber $src.PartitionNumber -AccessPath "${sourceLetter}:\\" -ErrorAction SilentlyContinue
+Remove-Partition -DiskNumber 0 -PartitionNumber $src.PartitionNumber -Confirm:$false
+
+$osPartition = Get-Partition -DiskNumber 0 -DriveLetter C
+$maxSize = (Get-PartitionSupportedSize -DiskNumber 0 -PartitionNumber $osPartition.PartitionNumber).SizeMax
+Resize-Partition -DiskNumber 0 -PartitionNumber $osPartition.PartitionNumber -Size $maxSize
+
+Info "done - WinRE relocated to partition $($target.PartitionNumber), C: extended to $([math]::Round($maxSize/1GB)) GB."
+""".strip()
+
+DEFAULT_DISK_LAYOUT_POST_INSTALL_SCRIPTS = [
+    {"name": "Recovery partition relocation (disk layout from hell fix)", "script_text": _RECOVERY_RELOCATE_SCRIPT}
 ]
 
 
