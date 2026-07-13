@@ -261,7 +261,23 @@ if ($missing) {{
         straight through, whatever that installer's own silent-install
         convention is. Exit code 3010 (success, reboot required) counts as
         success alongside 0, the same convention MSI and many EXE
-        installers both use for "done, but you should reboot"."""
+        installers both use for "done, but you should reboot".
+
+        -Wait -PassThru only waits for the process it directly launched -
+        a "stub"/"online" installer that relaunches itself (elevation) or
+        hands off to a detached child and exits can report a clean exit
+        code seconds later while the real install is still running
+        unobserved, or never actually happened at all (confirmed on a
+        real deployment: an installer "succeeded" in under 15 seconds and
+        the app wasn't actually there). Verified generically, without
+        needing to know the installed app's exact name in advance: snapshot
+        the registry Uninstall key set before running, then poll for a new
+        entry to appear afterward - what every real installer (MSI or a
+        normal EXE installer) registers on completion, regardless of
+        whether the process that reports it is the one originally
+        launched or a child/relaunch. Only a portable/no-install "app"
+        that never registers anything would be a false negative here -
+        not a concern for the installer catalog this project targets."""
         url = _ps_single_quote(download_url)
         path = _ps_single_quote(remote_path)
         if kind == "msi":
@@ -274,12 +290,30 @@ if ($missing) {{
         else:
             arg_list = _ps_single_quote(install_args)
             run_line = f"$p = Start-Process -FilePath {path} -ArgumentList {arg_list} -Wait -PassThru"
-        script = (
-            f"Invoke-WebRequest -Uri {url} -OutFile {path} -UseBasicParsing; "
-            f"{run_line}; "
-            f"Remove-Item {path} -Force -ErrorAction SilentlyContinue; "
-            "if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) { exit 0 } else { exit $p.ExitCode }"
-        )
+        script = f"""
+function Get-UninstallEntries {{
+    Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue |
+        Where-Object {{ $_.DisplayName }} | Select-Object -ExpandProperty PSChildName
+}}
+$before = @(Get-UninstallEntries)
+Invoke-WebRequest -Uri {url} -OutFile {path} -UseBasicParsing
+{run_line}
+Remove-Item {path} -Force -ErrorAction SilentlyContinue
+if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {{ exit $p.ExitCode }}
+
+$confirmed = $false
+for ($i = 0; $i -lt 36; $i++) {{
+    $after = @(Get-UninstallEntries)
+    if (@($after | Where-Object {{ $before -notcontains $_ }}).Count -gt 0) {{ $confirmed = $true; break }}
+    Start-Sleep -Seconds 5
+}}
+if (-not $confirmed) {{
+    Write-Output "Installer process exited (code $($p.ExitCode)) but no new registry Uninstall entry appeared within 3 minutes afterward - the install may not have actually completed (e.g. a self-relaunching installer stub that handed off to a detached process)."
+    exit 1
+}}
+Write-Output "Install confirmed: a new registry Uninstall entry appeared after the installer ran."
+exit 0
+""".strip()
         return self.run_ps(script)
 
     def rename_computer(self, new_name: str) -> WinRMResult:
