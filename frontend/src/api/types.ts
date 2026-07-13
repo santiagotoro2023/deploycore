@@ -127,6 +127,7 @@ export interface DeploymentTemplate {
   domain_target_ou: string | null;
   domain_join_timing: DomainJoinTiming;
   enable_rdp: boolean;
+  install_windows_updates: boolean;
   windows_features: string[];
   post_install_scripts: PostInstallScript[];
   app_installs: AppInstallEntry[];

@@ -40,6 +40,7 @@ export interface TemplateFieldsBody {
   domain_join_account: string | null;
   domain_join_credential: string | null;
   enable_rdp: boolean;
+  install_windows_updates: boolean;
   windows_features: string[];
   post_install_scripts: PostInstallScriptForm[];
   app_installs: AppInstallEntry[];
@@ -106,6 +107,7 @@ export default function TemplateFieldsForm({
   const [keyboardLayout, setKeyboardLayout] = useState(existing?.keyboard_layout ?? "de-CH");
   const [customAdminEnabled, setCustomAdminEnabled] = useState(existing?.custom_admin_enabled ?? false);
   const [enableRdp, setEnableRdp] = useState(existing?.enable_rdp ?? true);
+  const [installWindowsUpdates, setInstallWindowsUpdates] = useState(existing?.install_windows_updates ?? true);
   // When custom admin is off, the backend always stores "Administrator"
   // regardless of what was last typed here, that's not a useful starting
   // point if the operator flips the toggle on, offer the real default instead.
@@ -216,6 +218,7 @@ export default function TemplateFieldsForm({
       domain_join_account: domainJoinEnabled ? domainJoinAccount : null,
       domain_join_credential: domainJoinEnabled ? domainJoinCredential : null,
       enable_rdp: enableRdp,
+      install_windows_updates: installWindowsUpdates,
       windows_features: windowsFeatures,
       post_install_scripts: postInstallScripts,
       app_installs: appInstalls,
@@ -472,9 +475,18 @@ export default function TemplateFieldsForm({
           ))}
         </div>
 
-        <label className="mb-3 flex items-center gap-1.5 text-xs text-neutral-700 dark:text-neutral-300">
+        <label className="mb-1.5 flex items-center gap-1.5 text-xs text-neutral-700 dark:text-neutral-300">
           <input type="checkbox" checked={enableRdp} onChange={(e) => setEnableRdp(e.target.checked)} />
           Enable Remote Desktop during post-install
+        </label>
+
+        <label className="mb-3 flex items-center gap-1.5 text-xs text-neutral-700 dark:text-neutral-300">
+          <input
+            type="checkbox"
+            checked={installWindowsUpdates}
+            onChange={(e) => setInstallWindowsUpdates(e.target.checked)}
+          />
+          Install Windows updates during post-install
         </label>
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Software to install</label>

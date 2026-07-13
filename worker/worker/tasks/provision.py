@@ -956,17 +956,20 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 progress_client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
                 return progress_client.get_windows_update_progress()
 
-            await log(db, deployment, "configuring", "checking for Windows updates")
-            update_result = await _run_with_heartbeat(
-                db, deployment, "configuring", "checking for Windows updates",
-                client.install_windows_updates,
-                progress_check=_update_progress,
-            )
-            await log(
-                db, deployment, "configuring",
-                update_result.stdout or update_result.stderr,
-                level=LogLevel.INFO if update_result.ok else LogLevel.WARN,
-            )
+            if template.install_windows_updates:
+                await log(db, deployment, "configuring", "checking for Windows updates")
+                update_result = await _run_with_heartbeat(
+                    db, deployment, "configuring", "checking for Windows updates",
+                    client.install_windows_updates,
+                    progress_check=_update_progress,
+                )
+                await log(
+                    db, deployment, "configuring",
+                    update_result.stdout or update_result.stderr,
+                    level=LogLevel.INFO if update_result.ok else LogLevel.WARN,
+                )
+            else:
+                await log(db, deployment, "configuring", "skipping Windows Update (disabled for this template/deployment)")
 
             # After software installs and Windows Update, not before: a
             # domain controller's own policies (or just its being on the

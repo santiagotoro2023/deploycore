@@ -105,6 +105,12 @@ class DeploymentTemplate(UUIDPKMixin, TimestampMixin, Base):
     # happens.
     enable_rdp: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # On by default (matches previous unconditional behavior). Off is a
+    # deliberate speed/currency trade-off for deployments that need to be
+    # quick - see install_windows_updates' own docstring for the size-skip
+    # trade-off already baked into what "on" means.
+    install_windows_updates: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
     windows_features: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     post_install_scripts: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     # Ordered list of {"app_asset_id": "<uuid str>", "install_args": "<str>"},
