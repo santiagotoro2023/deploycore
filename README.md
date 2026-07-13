@@ -439,16 +439,17 @@ org-scoped copy.
   into a PowerShell array, specifically so a multi-flag string survives
   intact instead of becoming one glued-together quoted argument
 - Attached to a template's `app_installs` (ordered list of
-  `{app_asset_id, install_args}`), installed over WinRM **after the
-  final post-install reboot** (Windows Update, domain join, and template
-  post-install scripts have all already run and settled by then) - not
-  before it like earlier in this project's life. That also means
-  post-install scripts can no longer assume an app installed via
-  `app_installs` is already present; a script that depends on one now
-  needs to become its own app-install step or move later. Not a foreign
-  key: `app_installs` is a JSONB column, a deleted app asset is skipped
-  with an error log line at deploy time rather than blocking the delete
-  or failing the whole deployment
+  `{app_asset_id, install_args}`), installed over WinRM during
+  post_install, after Windows features and RDP and before post-install
+  scripts and the final reboot - so a post-install script can assume an
+  app installed earlier in the list is already present, and an app that
+  reports needing a reboot to finish actually gets one (briefly moved
+  to run after the final reboot instead, on the theory that a settled,
+  fully-patched guest is a more representative install target - reverted,
+  since that meant an app's own requested reboot never happened at all).
+  Not a foreign key: `app_installs` is a JSONB column, a deleted app
+  asset is skipped with an error log line at deploy time rather than
+  blocking the delete or failing the whole deployment
 - Delivery is guest-initiated, not worker-pushed: the guest's own
   `Invoke-WebRequest` downloads the installer directly from DeployCore's
   API (`GET /api/deployments/{id}/app-assets/{app_id}/download`), the
@@ -900,23 +901,42 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `DisplayGroup` text - matching on the English display name ("Remote
   Desktop") broke RDP enablement outright on non-English images, where
   that group is named differently (e.g. "Remotedesktop" on German) -
-  neither needs a restart to take effect. Then run each template
-  post-install script in order, check Windows Update, join the domain
-  here if configured for `post_install` timing, reboot, and only *then*
-  - after that reboot, not before it like earlier in this project's
-  life - install each configured app asset in order (the guest downloads
-  each installer itself over `Invoke-WebRequest`, see the App Assets
-  section above for the token/download flow and how each install
-  actually runs and gets verified now), disable the built-in
-  Administrator if a custom admin account is configured, verify the
-  guest comes back reachable. Every one of those (feature installs, RDP,
-  post-install scripts, the domain join, app installs) runs through
+  neither needs a restart to take effect. Then install each configured
+  app asset in order (the guest downloads each installer itself over
+  `Invoke-WebRequest`, see the App Assets section above for the token/
+  download flow and how each install actually runs and gets verified
+  now), run each template post-install script in order, check Windows
+  Update, join the domain here if configured for `post_install` timing,
+  reboot, disable the built-in Administrator if a custom admin account
+  is configured, verify the guest comes back reachable. Every one of
+  those (feature installs, RDP, app installs, post-install scripts, the
+  domain join) runs through
   `_run_with_heartbeat`, not a bare blocking WinRM call: a real Windows
   role install can legitimately take several minutes, and without a
   periodic "still running (Ns elapsed)" log line the deployment log
   otherwise goes completely silent for however long that takes,
   indistinguishable from a hang - confirmed as a real point of confusion
   on an otherwise-successful deployment.
+- Every reboot in this pipeline (feature-install, VMware Tools, and the
+  final one) goes through the same `_reboot_and_wait`, which does two
+  things worth knowing about: it requires 3 consecutive successful
+  reachability checks, not just one, before considering the guest
+  settled (a single successful probe answered fine once, then failed
+  opening a new shell moments later on a real deployment - the reboot
+  after a Windows Update install can leave the OS busy finishing
+  servicing well past when basic connectivity returns), and each of
+  those checks uses a brand-new `WinRMClient`, not the pre-reboot one
+  reused throughout - a real reboot severs the TCP connection abruptly,
+  and pooled HTTP connections can get stuck reusing a half-dead socket
+  rather than opening a fresh one, which looked exactly like "the guest
+  is reachable by every other means but this check won't agree" on a
+  real deployment. It also captures the guest's own `LastBootUpTime`
+  before triggering the reboot and again once reachable, logging both -
+  proof a reboot actually happened rather than the guest simply staying
+  reachable the whole time (a reboot command that silently doesn't fire
+  looks identical to a working one under a reachability check alone,
+  confirmed for real with `Restart-Computer` over WinRM before it was
+  replaced with `shutdown.exe`).
 - Feature installs and app installs both stay sequential, deliberately,
   not parallelized across concurrent WinRM sessions: Windows Feature
   installation already batches everything into one

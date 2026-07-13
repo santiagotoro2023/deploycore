@@ -520,12 +520,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               A template attaches any number of app assets in an ordered list (Templates page, the
               "Software to install" section), each with its own optional argument override, blank means
-              "use the asset's own default." Installed over WinRM <strong>after the final post-install
-              reboot</strong> - Windows Update, the domain join, and the template's own post-install
-              scripts have all already run and settled by then, not before it like earlier in this
-              project's life. That also means a post-install script can no longer assume an app installed
-              via this list is already present by the time it runs; a script that depends on one needs to
-              become its own app-install step, or move to running later, instead.
+              "use the asset's own default." Installed over WinRM during post_install, after Windows
+              features and RDP, before post-install scripts and the final reboot - so a post-install
+              script can assume an app installed earlier in this list is already present, and an app that
+              reports needing a reboot to finish actually gets one from that final reboot (briefly moved
+              to run after that reboot instead, on the theory that a settled, fully-patched guest is a
+              more representative install target - reverted, since that meant an app's own requested
+              reboot never happened at all).
             </P>
             <P>
               Delivery is guest-initiated: the guest's own <Code>Invoke-WebRequest</Code> downloads each
@@ -933,7 +934,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   while it hasn't finished yet, rather than the deployment log going silent for however
                   long that guest-side command actually takes: a real Windows role install can
                   legitimately run several minutes, and without this a genuinely-still-working deployment
-                  looked indistinguishable from a stuck one.</>,
+                  looked indistinguishable from a stuck one. Every reboot here requires 3 consecutive
+                  successful reachability checks, not just one, using a brand-new WinRM connection for
+                  each check rather than the pre-reboot one (a real reboot can leave pooled HTTP
+                  connections stuck reusing a half-dead socket, which looked exactly like "the guest is
+                  reachable by every other means but this check won't agree" on a real deployment), and
+                  logs the guest's own boot timestamp from before and after as proof a reboot actually
+                  happened, rather than the guest simply having stayed reachable the whole time.</>,
                 <>Role installs and app installs both stay sequential on purpose, not run in parallel
                   across concurrent WinRM sessions: the single-call feature install above is the real,
                   safe speedup, and it's already what Server Manager's own wizard does — Windows' own
