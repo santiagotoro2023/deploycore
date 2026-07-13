@@ -71,7 +71,18 @@ class WinRMClient:
     driver's pyvmomi calls."""
 
     def __init__(self, host: str, username: str, password: str) -> None:
-        self._session = winrm.Session(host, auth=(username, password), transport="ntlm")
+        # pywinrm's defaults (operation_timeout_sec=20, read_timeout_sec=30)
+        # leave only a 10s margin between them - WinRM's Receive operation
+        # can legitimately block server-side for the full operation timeout
+        # before replying, and under real load (e.g. a guest mid-Windows-
+        # Update) that round trip occasionally exceeds a 30s hard client
+        # read-timeout, surfacing as a spurious requests.ReadTimeout that
+        # has nothing to do with the guest actually being unreachable.
+        # Widened with a large, safe margin between the two.
+        self._session = winrm.Session(
+            host, auth=(username, password), transport="ntlm",
+            operation_timeout_sec=60, read_timeout_sec=90,
+        )
 
     def run_ps(self, script: str) -> WinRMResult:
         full_script = PS_HEADER + script
@@ -178,9 +189,16 @@ class WinRMClient:
         timed_out = False
         try:
             for _ in range(max_attempts):
-                state_result = self._run_ps_direct(
-                    PS_HEADER + f"(Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue).State"
-                )
+                try:
+                    state_result = self._run_ps_direct(
+                        PS_HEADER + f"(Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue).State"
+                    )
+                except Exception:  # noqa: BLE001 - a transient WinRM hiccup mid-poll (confirmed for
+                    # real: requests.ReadTimeout during a long-running task) isn't proof the task or the
+                    # guest is dead, just that this one check didn't land - the loop's own max_attempts
+                    # ceiling is what still bounds how long a genuinely stuck/unreachable guest gets tolerated.
+                    time.sleep(poll_seconds)
+                    continue
                 if state_result.ok and state_result.stdout.strip() not in ("Running", ""):
                     break
                 time.sleep(poll_seconds)
@@ -190,9 +208,16 @@ class WinRMClient:
             if timed_out:
                 return WinRMResult(1, "", f"scheduled task {task_name} did not finish within the expected time.")
 
-            result = self._run_ps_direct(
-                PS_HEADER + f"Get-Content -Path '{result_path}' -ErrorAction SilentlyContinue"
-            )
+            for attempt in range(3):
+                try:
+                    result = self._run_ps_direct(
+                        PS_HEADER + f"Get-Content -Path '{result_path}' -ErrorAction SilentlyContinue"
+                    )
+                    break
+                except Exception:  # noqa: BLE001 - same transient-timeout reasoning as the poll loop above
+                    if attempt == 2:
+                        raise
+                    time.sleep(poll_seconds)
             output = result.stdout.strip()
             if output.startswith("OK:"):
                 return WinRMResult(0, output[3:], "")
