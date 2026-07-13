@@ -432,6 +432,12 @@ if ($installer) {
     _WINDOWS_UPDATE_RESULT_PATH = r"C:\Windows\Temp\deploycore_wu_result.txt"
     _WINDOWS_UPDATE_SCRIPT_PATH = r"C:\Windows\Temp\deploycore_wu_run.ps1"
     _WINDOWS_UPDATE_TASK_NAME = "DeployCoreWindowsUpdate"
+    # Explicit tradeoff, not a default anyone should assume: skips the
+    # monthly Cumulative Update (which on Server 2019+ is also that
+    # month's security fix, no smaller one exists) for a much faster
+    # pass that still gets drivers/definitions/small individual patches
+    # - see install_windows_updates' own docstring.
+    _WINDOWS_UPDATE_MAX_UPDATE_SIZE_BYTES = 150 * 1024 * 1024
 
     def install_windows_updates(self) -> WinRMResult:
         """Best-effort: searches Windows Update via the built-in WUA COM
@@ -470,10 +476,26 @@ if ($installer) {
         never sees drivers to begin with, no Type filter on the search
         criteria itself would fix that.
 
+        Skips anything over _WINDOWS_UPDATE_MAX_UPDATE_SIZE_BYTES
+        (MaxDownloadSize, known before downloading) - deliberate,
+        explicitly requested trade-off: on Windows Server 2019+ there's
+        no separate small "security-only" patch anymore, the monthly
+        Cumulative Update (usually the single largest item, often
+        500MB-1.5GB) *is* that month's security fix, merged into one
+        package - skipping it for speed means skipping that month's OS
+        security patches too, not just bloat, in exchange for a much
+        faster pass that still gets drivers, definition updates, and
+        any other smaller individual patches. Sized instead of matched
+        by classification: modern cumulative updates are classified as
+        plain "Security Updates" the same as everything else worth
+        keeping, there's no classification GUID that means "cumulative"
+        specifically to exclude just that.
+
         Writes its current stage to a fixed status file throughout
         (search/download/install), read back by get_windows_update_progress
         for the deployment log's heartbeat - the scheduled task has no
         direct way to report progress back to this session otherwise."""
+        max_size = self._WINDOWS_UPDATE_MAX_UPDATE_SIZE_BYTES
         wua_script = f"""
 $marker = '{self._WINDOWS_UPDATE_STATUS_PATH}'
 $result = '{self._WINDOWS_UPDATE_RESULT_PATH}'
@@ -485,25 +507,31 @@ try {{
     $Session = New-Object -ComObject Microsoft.Update.Session
     $Searcher = $Session.CreateUpdateSearcher()
     $SearchResult = $Searcher.Search("IsInstalled=0 and IsHidden=0")
-    if ($SearchResult.Updates.Count -eq 0) {{
-        "OK:No applicable updates found." | Set-Content -Path $result -Force
+    $Wanted = @($SearchResult.Updates | Where-Object {{ $_.MaxDownloadSize -le {max_size} }})
+    $SkippedLarge = @($SearchResult.Updates | Where-Object {{ $_.MaxDownloadSize -gt {max_size} }})
+    if ($SkippedLarge.Count -gt 0) {{
+        $skippedNames = ($SkippedLarge | ForEach-Object {{ "$($_.Title) ($([math]::Round($_.MaxDownloadSize/1MB)) MB)" }}) -join '; '
+        Add-Content -Path $marker -Value "`nskipped $($SkippedLarge.Count) update(s) over the size limit: $skippedNames" -Force
+    }}
+    if ($Wanted.Count -eq 0) {{
+        "OK:No applicable updates under the size limit found." | Set-Content -Path $result -Force
     }} else {{
-        "downloading $($SearchResult.Updates.Count) update(s)" | Set-Content -Path $marker -Force
+        "downloading $($Wanted.Count) update(s)" | Set-Content -Path $marker -Force
         $ToDownload = New-Object -ComObject Microsoft.Update.UpdateColl
-        foreach ($u in $SearchResult.Updates) {{ $ToDownload.Add($u) | Out-Null }}
+        foreach ($u in $Wanted) {{ $ToDownload.Add($u) | Out-Null }}
         $Downloader = $Session.CreateUpdateDownloader()
         $Downloader.Updates = $ToDownload
         $Downloader.Download() | Out-Null
         $ToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
-        foreach ($u in $SearchResult.Updates) {{ if ($u.IsDownloaded) {{ $ToInstall.Add($u) | Out-Null }} }}
+        foreach ($u in $Wanted) {{ if ($u.IsDownloaded) {{ $ToInstall.Add($u) | Out-Null }} }}
         if ($ToInstall.Count -eq 0) {{
-            "FAIL:Found $($SearchResult.Updates.Count) update(s) but none downloaded successfully." | Set-Content -Path $result -Force
+            "FAIL:Found $($Wanted.Count) update(s) but none downloaded successfully." | Set-Content -Path $result -Force
         }} else {{
             "installing $($ToInstall.Count) update(s)" | Set-Content -Path $marker -Force
             $Installer = $Session.CreateUpdateInstaller()
             $Installer.Updates = $ToInstall
             $InstallResult = $Installer.Install()
-            $msg = "Installed $($ToInstall.Count) of $($SearchResult.Updates.Count) found update(s), result code $($InstallResult.ResultCode), reboot required: $($InstallResult.RebootRequired)."
+            $msg = "Installed $($ToInstall.Count) of $($Wanted.Count) applicable update(s) ($($SkippedLarge.Count) skipped for size), result code $($InstallResult.ResultCode), reboot required: $($InstallResult.RebootRequired)."
             if ($InstallResult.ResultCode -eq 2 -or $InstallResult.ResultCode -eq 3) {{
                 "OK:$msg" | Set-Content -Path $result -Force
             }} else {{
