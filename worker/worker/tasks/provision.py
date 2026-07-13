@@ -485,8 +485,27 @@ async def _run_post_install_scripts(db, deployment: Deployment, client: WinRMCli
 
 
 WINRM_SETTLE_CONSECUTIVE_CHECKS = 3
+_LAST_BOOT_TIME_PS = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')"
 
-async def _reboot_and_wait(client: WinRMClient, failure_message: str) -> None:
+
+async def _get_boot_time(client: WinRMClient) -> str:
+    """Best-effort guest boot timestamp, empty string on any failure.
+    Compared before/after a reboot to prove one actually happened,
+    rather than trusting "the guest answered a command" alone - a reboot
+    command that silently no-ops (confirmed a real failure mode earlier
+    this session: Restart-Computer over WinRM did exactly this) would
+    otherwise look identical to a genuine one if the guest happened to
+    stay reachable the whole time."""
+    try:
+        result = await asyncio.to_thread(client.run_ps, _LAST_BOOT_TIME_PS)
+        return result.stdout.strip() if result.ok else ""
+    except Exception:  # noqa: BLE001 - best-effort, missing just means "can't confirm either way"
+        return ""
+
+
+async def _reboot_and_wait(
+    db, deployment: Deployment, stage: str, client: WinRMClient, client_factory, failure_message: str
+) -> None:
     """Fire-and-forget the restart (the guest tearing down the WinRM
     connection mid-command is expected, not an error) then wait for it to
     come back, using the same bounded reachability check as everywhere
@@ -503,7 +522,22 @@ async def _reboot_and_wait(client: WinRMClient, failure_message: str) -> None:
     fine, then failed opening a new shell for the very next real
     command moments later. One flaky check resets the counter rather
     than failing outright, since a single missed poll this early is
-    expected, not a reason to give up."""
+    expected, not a reason to give up.
+
+    client_factory builds a brand-new WinRMClient for every reachability
+    check, not the same pre-reboot `client` reused throughout: a real
+    reboot severs the underlying TCP connection abruptly, and pooled
+    HTTP connections (pywinrm's transport is backed by requests/urllib3)
+    can end up stuck reusing a half-dead socket rather than opening a
+    fresh one - a plausible, concrete explanation for "the guest is
+    genuinely reachable by every other means, but this check never
+    agrees," rather than something to just wait out for longer.
+
+    Confirms with the guest's own LastBootUpTime, not just reachability,
+    that a reboot actually happened at all, and logs both timestamps -
+    directly answering "did it actually reboot" instead of leaving it to
+    guesswork or console-watching."""
+    boot_time_before = await _get_boot_time(client)
     try:
         client.reboot()
     except Exception:  # noqa: BLE001 - expected: the guest tearing down the WinRM connection mid-reboot
@@ -511,9 +545,31 @@ async def _reboot_and_wait(client: WinRMClient, failure_message: str) -> None:
     await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
     consecutive_ok = 0
     for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
-        if await _winrm_reachable(client):
+        fresh_client = client_factory()
+        if await _winrm_reachable(fresh_client):
             consecutive_ok += 1
             if consecutive_ok >= WINRM_SETTLE_CONSECUTIVE_CHECKS:
+                boot_time_after = await _get_boot_time(client_factory())
+                if boot_time_before and boot_time_after:
+                    if boot_time_before == boot_time_after:
+                        await log(
+                            db, deployment, stage,
+                            f"guest is reachable again, but its boot time didn't change "
+                            f"({boot_time_after}) - the reboot command may not have actually restarted it",
+                            level=LogLevel.WARN,
+                        )
+                    else:
+                        await log(
+                            db, deployment, stage,
+                            f"guest rebooted and is back: boot time went from {boot_time_before} to {boot_time_after}",
+                        )
+                else:
+                    await log(
+                        db, deployment, stage,
+                        "guest is reachable again (could not confirm boot time before and/or after to prove "
+                        "a reboot actually happened)",
+                        level=LogLevel.WARN,
+                    )
                 return
         else:
             consecutive_ok = 0
@@ -711,7 +767,11 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 )
             elif tools_result.installed:
                 await log(db, deployment, "post_install", "VMware Tools installed, rebooting to apply driver updates")
-                await _reboot_and_wait(client, "guest did not come back reachable after the VMware Tools reboot")
+                await _reboot_and_wait(
+                    db, deployment, "post_install", client,
+                    lambda: WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password),
+                    "guest did not come back reachable after the VMware Tools reboot",
+                )
             else:
                 await log(db, deployment, "post_install", "no VMware Tools installer found (not an ESXi host, or Tools ISO wasn't mounted)")
 
@@ -808,7 +868,9 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         "a feature install requires a restart, rebooting before continuing",
                     )
                     await _reboot_and_wait(
-                        client, "guest did not come back reachable after the feature-install reboot"
+                        db, deployment, "post_install", client,
+                        lambda: WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password),
+                        "guest did not come back reachable after the feature-install reboot",
                     )
 
             if template.enable_rdp:
@@ -821,13 +883,60 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     raise RuntimeError(f"enabling Remote Desktop failed: {rdp_result.stderr}")
                 await log(db, deployment, "post_install", "Remote Desktop enabled")
 
-            # Software installs (template.app_installs) run later now, after
-            # the final reboot below - see that reboot's own comment for why.
-            # template.post_install_scripts no longer has an installed app to
-            # assume is already present by the time it runs (it used to run
-            # after app_installs); if a script depends on an app, it needs to
-            # move to running after this deployment completes, or the app
-            # needs converting to a post_install_script itself.
+            if template.app_installs:
+                # Back to running before post-install scripts and the
+                # final reboot, not after it - moved there briefly this
+                # session on the reasoning that a settled, fully-patched
+                # guest is a more representative install target, but that
+                # meant an app needing its own reboot to finish never got
+                # one (the final reboot only fires once, before app
+                # installs ran, not after) - a real regression, reverted.
+                # A post-install script can once again assume an app
+                # installed earlier in this list is already present by
+                # the time it runs.
+                #
+                # Short-lived, cleared right after this block: authenticates
+                # the guest's own Invoke-WebRequest calls back to DeployCore
+                # for each app it downloads (see api/routes/app_assets.py's
+                # download_app_asset), there's no user session to
+                # authenticate those with, same reasoning as callback_token.
+                deployment.app_asset_access_token = secrets.token_urlsafe(32)
+                await db.commit()
+                callback_base_url = get_settings().app_public_url
+                for entry in template.app_installs:
+                    app_asset = await db.get(AppAsset, uuid.UUID(entry["app_asset_id"]))
+                    if app_asset is None:
+                        await log(
+                            db, deployment, "post_install",
+                            f"skipping app install: asset {entry['app_asset_id']} no longer exists",
+                            level=LogLevel.ERROR,
+                        )
+                        continue
+                    install_args = entry.get("install_args") or app_asset.default_install_args
+                    await log(db, deployment, "post_install", f"installing {app_asset.name}")
+                    download_url = (
+                        f"{callback_base_url}/api/deployments/{deployment.id}/app-assets/{app_asset.id}/download"
+                        f"?token={deployment.app_asset_access_token}"
+                    )
+                    remote_path = f"C:\\Windows\\Temp\\{app_asset.id}-{app_asset.filename}"
+                    result = await _run_with_heartbeat(
+                        db, deployment, "post_install", f"installing {app_asset.name}",
+                        lambda u=download_url, p=remote_path, k=app_asset.kind.value, a=install_args:
+                            client.install_app(u, p, k, a),
+                    )
+                    await log(
+                        db,
+                        deployment,
+                        "post_install",
+                        result.stdout or result.stderr,
+                        level=LogLevel.INFO if result.ok else LogLevel.ERROR,
+                    )
+                    if not result.ok:
+                        raise RuntimeError(f"installing {app_asset.name} failed (exit {result.status_code}): {result.stderr}")
+                    await log(db, deployment, "post_install", f"{app_asset.name} installed")
+                deployment.app_asset_access_token = None
+                await db.commit()
+
             await _run_post_install_scripts(db, deployment, client, template.post_install_scripts)
 
             await _state_machine.transition(db, deployment, DeploymentState.CONFIGURING)
@@ -878,79 +987,11 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 await log(db, deployment, "configuring", f"joined domain {template.domain_fqdn}")
 
             await log(db, deployment, "configuring", "rebooting to finalize configuration")
-            await _reboot_and_wait(client, "guest did not come back reachable after the post-install reboot")
-
-            if template.app_installs:
-                # Deliberately after the final reboot, not before it (where
-                # this used to run): a fresh guest that's just applied
-                # Windows Update and/or joined a domain is a more stable,
-                # more representative target for whatever install-detection
-                # logic an installer runs (some genuinely behave differently
-                # pre- vs post-domain-join), and it means no app install ever
-                # gets silently undone or left half-settled by a reboot that
-                # happens after it for an unrelated reason. See
-                # WinRMClient.install_app for how each install actually runs
-                # and gets verified now (a SYSTEM-context Scheduled Task,
-                # not directly over this session) and why.
-                #
-                # Short-lived, cleared right after this block: authenticates
-                # the guest's own Invoke-WebRequest calls back to DeployCore
-                # for each app it downloads (see api/routes/app_assets.py's
-                # download_app_asset), there's no user session to
-                # authenticate those with, same reasoning as callback_token.
-                deployment.app_asset_access_token = secrets.token_urlsafe(32)
-                await db.commit()
-                callback_base_url = get_settings().app_public_url
-                any_reboot_requested = False
-                for entry in template.app_installs:
-                    app_asset = await db.get(AppAsset, uuid.UUID(entry["app_asset_id"]))
-                    if app_asset is None:
-                        await log(
-                            db, deployment, "configuring",
-                            f"skipping app install: asset {entry['app_asset_id']} no longer exists",
-                            level=LogLevel.ERROR,
-                        )
-                        continue
-                    install_args = entry.get("install_args") or app_asset.default_install_args
-                    await log(db, deployment, "configuring", f"installing {app_asset.name}")
-                    download_url = (
-                        f"{callback_base_url}/api/deployments/{deployment.id}/app-assets/{app_asset.id}/download"
-                        f"?token={deployment.app_asset_access_token}"
-                    )
-                    remote_path = f"C:\\Windows\\Temp\\{app_asset.id}-{app_asset.filename}"
-                    result = await _run_with_heartbeat(
-                        db, deployment, "configuring", f"installing {app_asset.name}",
-                        lambda u=download_url, p=remote_path, k=app_asset.kind.value, a=install_args:
-                            client.install_app(u, p, k, a),
-                    )
-                    await log(
-                        db,
-                        deployment,
-                        "configuring",
-                        result.stdout or result.stderr,
-                        level=LogLevel.INFO if result.ok else LogLevel.ERROR,
-                    )
-                    if not result.ok:
-                        raise RuntimeError(f"installing {app_asset.name} failed (exit {result.status_code}): {result.stderr}")
-                    if "reboot required" in (result.stdout or ""):
-                        any_reboot_requested = True
-                    await log(db, deployment, "configuring", f"{app_asset.name} installed")
-                deployment.app_asset_access_token = None
-                await db.commit()
-
-                # Not an automatic reboot: forcing one after every deployment
-                # with apps installed would cost several more minutes on top
-                # of an already-long pipeline for something most apps don't
-                # strictly need to be usable. Surfaced clearly instead, so
-                # it's a deliberate operator choice rather than a silently
-                # skipped requirement.
-                if any_reboot_requested:
-                    await log(
-                        db, deployment, "configuring",
-                        "at least one installed app reported it needs a reboot to finish - "
-                        "consider rebooting this VM once it's in use",
-                        level=LogLevel.WARN,
-                    )
+            await _reboot_and_wait(
+                db, deployment, "configuring", client,
+                lambda: WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password),
+                "guest did not come back reachable after the post-install reboot",
+            )
 
             if template.custom_admin_enabled:
                 # Deliberately this late, not in FirstLogonCommands
