@@ -124,15 +124,21 @@ def test_disk_layout_with_recovery_partition_mid_disk():
     assert len(create_partitions) == 4
     assert create_partitions[2].xpath("string(.//u:Size)", namespaces=NS) == "1000"
 
-    # Partition 3 (recovery) is intentionally left raw - no ModifyPartition
-    # entry at all, so it's untouched (no Format/Label/TypeID) by Setup's
-    # own DiskConfiguration pass. The post-install "Recovery partition
-    # relocation" script formats and types it after Windows is installed
-    # instead - see _disk_configuration.xml.j2's comment for why.
+    # Partition 3 (recovery) gets a minimal ModifyPartition - Order/
+    # PartitionID only, no Format/Label/TypeID - same pattern as MSR.
+    # Omitting the entry entirely made real Windows Setup abandon
+    # unattended mode and drop to the interactive partition screen; it's
+    # left functionally raw (no filesystem, no type change) for the
+    # post-install "Recovery partition relocation" script to format and
+    # type after Windows is installed - see _disk_configuration.xml.j2's
+    # comment for why.
     modify_partitions = root.xpath("//u:ModifyPartition", namespaces=NS)
-    assert len(modify_partitions) == 3
-    modified_ids = [m.xpath("string(.//u:PartitionID)", namespaces=NS) for m in modify_partitions]
-    assert "3" not in modified_ids
+    assert len(modify_partitions) == 4
+    recovery_partition = modify_partitions[2]
+    assert recovery_partition.xpath("string(.//u:PartitionID)", namespaces=NS) == "3"
+    assert recovery_partition.xpath(".//u:Format", namespaces=NS) == []
+    assert recovery_partition.xpath(".//u:Label", namespaces=NS) == []
+    assert recovery_partition.xpath(".//u:TypeID", namespaces=NS) == []
 
     install_to = root.xpath("//u:InstallTo/u:PartitionID", namespaces=NS)
     assert install_to[0].text == "4"

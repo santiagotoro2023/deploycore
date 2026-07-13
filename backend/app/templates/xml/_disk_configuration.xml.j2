@@ -51,18 +51,24 @@
             <Order>2</Order>
             <PartitionID>2</PartitionID>
         </ModifyPartition>
-{# Partition 3 (recovery, when recovery_size_mb is set) is deliberately left
-   raw here - no Format/Label/TypeID. Formatting/typing it as WinRE during
-   Setup's own DiskConfiguration pass, before Windows exists on the disk, is
-   untested territory the source blog never exercises either - its
-   equivalent partition stays raw through the whole install and is only
-   formatted/typed afterward, manually. A real deployment failed Setup's own
-   BCD creation on this exact layout with no other explanation found after a
-   full git-history audit, so this was reverted to match the blog's proven
-   order of operations rather than kept as an unverified assumption. The
-   post-install "Recovery partition relocation" script in setup.py's
-   DEFAULT_DISK_LAYOUT_POST_INSTALL_SCRIPTS formats and retypes it after
-   Windows is fully installed instead. #}
+{% if recovery_size_mb %}
+        {# A CreatePartition with no matching ModifyPartition at all made
+           Setup abandon unattended mode and drop to the interactive
+           "choose install location" screen (confirmed on a real
+           deployment) - every created partition needs an acknowledgment
+           entry, same as MSR above. So this stays, minimal: no
+           Format/Label/TypeID, matching the MSR pattern, so the partition
+           is still functionally raw (no filesystem, no type change) for
+           the post-install "Recovery partition relocation" script to
+           format and type after Windows is fully installed - see that
+           script in setup.py's DEFAULT_DISK_LAYOUT_POST_INSTALL_SCRIPTS
+           for why formatting/typing it during Setup itself, before
+           Windows exists on the disk, isn't safe to do here instead. #}
+        <ModifyPartition wcm:action="add">
+            <Order>3</Order>
+            <PartitionID>3</PartitionID>
+        </ModifyPartition>
+{% endif %}
         <ModifyPartition wcm:action="add">
             <Order>{{ os_partition_number }}</Order>
             <PartitionID>{{ os_partition_number }}</PartitionID>
