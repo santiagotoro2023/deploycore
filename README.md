@@ -812,6 +812,28 @@ pending → creating_vm → booting → installing_os → post_install → confi
   specialize-pass step somehow didn't take for a given deployment) -
   redundant in the common case, harmless either way.
 
+  The WinRM-reachability fallback above isn't a complete answer on its
+  own, though: for a **DHCP** deployment specifically, it depends on
+  `HypervisorDriver.get_guest_ip()`, which needs VMware Tools (or
+  hypervisor-level DHCP snooping that isn't guaranteed on every host or
+  ESXi version) to report anything - and Tools isn't installed until
+  *after* `installing_os` finishes, a chicken-and-egg gap that left a
+  real deployment sitting in `installing_os` indefinitely despite
+  Windows Setup having genuinely completed (confirmed directly on the
+  console), because neither the callback (needs a login that never
+  happens) nor the fallback (needs an IP that was never reported) ever
+  fired. Fixed the same way WinRM enablement was: `_specialize_callback.xml.j2`
+  sends the exact same callback POST unconditionally during the
+  specialize pass too, via `curl.exe` (an inbox tool on Server 2019+,
+  same reasoning as `winrm.cmd` over `Enable-PSRemoting` - a native
+  executable, not PowerShell, avoiding that same specialize-pass crash
+  risk) rather than depending on FirstLogonCommands or a guest IP being
+  discoverable at all. The callback token is single-use, so this
+  landing before (or alongside, if a human does log in) FirstLogonCommands'
+  own attempt is harmless - a second POST to an already-used token just
+  gets a `409` back, which `curl` (unlike PowerShell's `Invoke-WebRequest`)
+  doesn't treat as a failure worth doing anything about either.
+
   VMware Tools installs post-install, over WinRM, as the very first step
   of `run_post_install` - before the static-IP cross-check, before any
   Windows feature or app install, before the final reboot

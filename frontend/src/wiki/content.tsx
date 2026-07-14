@@ -1321,6 +1321,26 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               the account that's actually used.
             </P>
             <P>
+              The WinRM-reachability fallback isn't a complete answer by itself, though: for a{" "}
+              <strong>DHCP</strong> deployment specifically, it depends on{" "}
+              <Code>HypervisorDriver.get_guest_ip()</Code>, which needs VMware Tools (or hypervisor-level
+              DHCP snooping that isn't guaranteed on every host/ESXi version) to report anything — and
+              Tools isn't installed until <em>after</em> <Code>installing_os</Code> finishes, a
+              chicken-and-egg gap that left a real deployment sitting in <Code>installing_os</Code>{" "}
+              indefinitely despite Windows Setup having genuinely completed (confirmed directly on the
+              console) — neither the callback (needs a login that never happens) nor the fallback (needs
+              an IP that was never reported) ever fired. Fixed the same way WinRM enablement was:{" "}
+              <Code>_specialize_callback.xml.j2</Code> sends the exact same callback POST unconditionally
+              during the specialize pass too, via <Code>curl.exe</Code> (an inbox tool on Server 2019+,
+              same reasoning as <Code>winrm.cmd</Code> over <Code>Enable-PSRemoting</Code> — native, not
+              PowerShell, avoiding that same specialize-pass crash risk) rather than depending on{" "}
+              <Code>FirstLogonCommands</Code> or a guest IP being discoverable at all. The callback token
+              is single-use, so this landing before (or alongside, if a human does log in){" "}
+              <Code>FirstLogonCommands</Code>' own attempt is harmless — a second POST to an already-used
+              token just gets a <Code>409</Code> back, which <Code>curl</Code> (unlike PowerShell's{" "}
+              <Code>Invoke-WebRequest</Code>) doesn't treat as a failure worth doing anything about either.
+            </P>
+            <P>
               <strong>VMware Tools installs automatically too</strong>, but over WinRM, post-install — as
               the very first thing <Code>run_post_install</Code> does, before the static-IP cross-check,
               before any role or app install. It used to run during the specialize pass instead (a{" "}
