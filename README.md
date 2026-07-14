@@ -808,9 +808,21 @@ pending → creating_vm → booting → installing_os → post_install → confi
   none of that risk, so that file is gone and the same install now runs
   through the same channel already proven for `Install-WindowsFeature`.
   It scans for `setup64.exe` on the CD-ROM `esxi.py`'s `create_vm` mounts
-  via `vm.MountToolsInstaller()` at VM creation (ESXi manages that device
-  itself, no unit number to track; Windows Setup's own install media
-  usually claims `D:`, so Tools typically lands on `E:` or `F:`), and
+  via `vm.MountToolsInstaller()` at VM creation. That call requires an
+  *existing* CD/DVD device to attach the Tools ISO to - confirmed
+  against Broadcom's own KB (vix error 21002, "This virtual machine does
+  not have a CD-ROM drive configured") after it silently failed on every
+  deployment for a while: the Windows and VirtIO ISOs are attached later
+  in the pipeline, once uploaded, so neither CD-ROM device existed yet
+  at VM-creation time when this call ran, and the `except Exception:
+  logger.exception(...)` around it swallowed the failure without
+  surfacing anything. Fixed with a dedicated, empty CD-ROM device
+  (`controllerKey=201`, ESXi's second built-in IDE controller - the
+  first, `200`, is already fully claimed by the Windows/VirtIO ISOs'
+  own two units) added as part of the VM's initial creation spec,
+  purely so `MountToolsInstaller()` has somewhere to attach to; Windows
+  Setup's own install media usually claims `D:`, so Tools typically
+  lands on `E:` or `F:` once the guest is up, and
   runs it with `REBOOT=ReallySuppress` - a real, documented VMXNET3
   interaction means the network driver update needs an actual restart to
   take effect cleanly, or the guest loses network access immediately
@@ -1039,23 +1051,34 @@ pending → creating_vm → booting → installing_os → post_install → confi
   plausibly run concurrently, but not reliably enough across arbitrary,
   operator-supplied installers to build automation around by default.
   Then, as the very
-  last WinRM action before marking `completed`, three things get cleaned
-  up, not just one - checked against Microsoft's own `Disable-PSRemoting`
-  docs, which explicitly list the other two as manual steps it does not
-  perform on its own: the custom `DeployCore WinRM` firewall rule
-  (deleted via `netsh`, the same tool that created it - `Get-NetFirewallRule
-  -DisplayName` isn't guaranteed to match a netsh-created rule); the
-  built-in "Windows Remote Management (HTTP-In)" firewall rule that
-  `winrm quickconfig` itself enables as a separate, documented side
-  effect (disabled by its stable internal `-Name`, not the localized
-  `-DisplayGroup`, the same lesson already learned for RDP); and
-  `LocalAccountTokenFilterPolicy`, set to `1` during the specialize pass
-  when a custom admin account is configured, removed here rather than
-  left weakening UAC's remote-token filtering for every local admin
-  account indefinitely. Only then: `Disable-PSRemoting`, and stop+disable
-  the WinRM service itself (the service stop runs in a
-  detached process a few seconds later, not inline, so the command reporting
+  last WinRM action before marking `completed`, four things get cleaned
+  up in a **single** call - checked against Microsoft's own
+  `Disable-PSRemoting` docs, which explicitly list three of the four as
+  manual steps it does not perform on its own: the custom `DeployCore
+  WinRM` firewall rule (deleted via `netsh`, the same tool that created
+  it - `Get-NetFirewallRule -DisplayName` isn't guaranteed to match a
+  netsh-created rule); the built-in "Windows Remote Management
+  (HTTP-In)" firewall rule that `winrm quickconfig` itself enables as a
+  separate, documented side effect (disabled by its stable internal
+  `-Name`, not the localized `-DisplayGroup`, the same lesson already
+  learned for RDP); `LocalAccountTokenFilterPolicy`, set to `1` during
+  the specialize pass when a custom admin account is configured, removed
+  here rather than left weakening UAC's remote-token filtering for every
+  local admin account indefinitely; and finally `Disable-PSRemoting`
+  plus stopping/disabling the WinRM service itself (in a detached
+  process a few seconds later, not inline, so the command reporting
   success back doesn't get cut off by the very channel it's closing).
+  All four run as one command, not the firewall/registry cleanup
+  logged separately followed by a swallowed `Disable-PSRemoting`: an
+  earlier version treated only the latter as "may not report back
+  before this severs the connection," but disabling the built-in
+  `WINRM-HTTP-In-TCP` rule is exactly as capable of doing that, it's the
+  very rule this session's own connection is using - splitting them
+  meant a real chance of `_run_with_retry` burning several minutes
+  retrying a command whose response could no longer come back over a
+  connection its own first half had just cut, then permanently failing
+  (every retry opening a fresh connection against a now-disabled rule)
+  right at the last step of an otherwise fully-succeeded deployment.
   WinRM is not reachable at all on a completed deployment from this point
   on, by design - ongoing monitoring is left to the operator's own tooling
 - Error tracing: every major pipeline step (rendering the answer file,
@@ -1095,7 +1118,22 @@ pending → creating_vm → booting → installing_os → post_install → confi
   there's a perfectly good, bootable install worth keeping rather than
   building an entire new VM to retry what's usually a one-line script or
   app-install fix (`POST .../deployments/{id}/retry-post-install`,
-  `deployment_service.retry_post_install`)
+  `deployment_service.retry_post_install`). Either form of retry clears
+  the deployment's prior log lines (not the state-transition history,
+  which is the real audit trail and keeps every past attempt visible as
+  its own row) - without it, a retried deployment's log just kept
+  appending onto the previous failed attempt's lines with nothing
+  marking where one ended and the next began, reading exactly like the
+  retry had silently done nothing. The frontend also reopens a fresh
+  event-stream connection on retry (`GET .../events?since=...`): that
+  stream deliberately closes for good the first time it observes a
+  transition into `completed`/`failed`, so without explicitly reopening
+  one, a page left open across a retry would show the state flip back
+  to `installing_os`/`pending` once (from the retry response's own
+  refetch) and then simply never update again - `since` (an ISO
+  timestamp, captured right after that refetch) tells the new connection
+  to skip straight to new events instead of replaying everything the
+  refetch already fetched over REST
 - VM lifecycle (once a VM exists): live power state (read directly from the
   hypervisor, not cached), power on, shut down (graceful) or power off
   (hard). There's no dedicated "delete just the VM" action in the UI -
@@ -1361,7 +1399,7 @@ minimum effective role for the request's organization unless marked
 | GET | `.../deployments/{deployment_id}/history` | readonly | state transitions |
 | GET | `.../deployments/{deployment_id}/logs` | readonly | |
 | GET | `.../deployments/{deployment_id}/answer-file` | readonly | the exact autounattend.xml this deployment shipped with; `404` if not rendered yet |
-| GET | `.../deployments/{deployment_id}/events` | readonly | SSE stream |
+| GET | `.../deployments/{deployment_id}/events?since=...` | readonly | SSE stream; optional `since` (ISO timestamp) skips replaying events at/before it, closes for good after a `completed`/`failed` transition |
 | POST | `.../deployments/{deployment_id}/retry` | operator | only from `failed`, always builds a fresh VM |
 | POST | `.../deployments/{deployment_id}/retry-post-install` | operator | only from `failed` with a preserved VM (see Retry above) |
 | GET | `.../deployments/{deployment_id}/power` | readonly | live hypervisor query |

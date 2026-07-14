@@ -1031,7 +1031,16 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               at that point - but a failure after Setup already succeeded (a bad post-install script, a
               feature install error, an app that wouldn't verify) now keeps the VM instead of throwing it
               away, since it's usually just a one-line fix away from finishing rather than a reason to
-              build an entire new VM and sit through Setup again. There's no dedicated "delete just the VM"
+              build an entire new VM and sit through Setup again. Either form of retry clears the
+              deployment's prior log lines (not the state-transition history, which is the real audit trail
+              and keeps every past attempt visible as its own row) - without it, a retry's log just kept
+              appending onto the previous failed attempt's with nothing marking where one ended and the
+              next began, reading exactly like the retry had silently done nothing. The page itself also
+              reopens a fresh live-event connection on retry: the event stream deliberately closes for good
+              the first time it sees a transition into <Code>completed</Code>/<Code>failed</Code>, so a
+              page left open across a retry would otherwise show the state flip back once (from the
+              retry's own immediate refetch) and then simply never update again, no matter how far the
+              retried run actually got - indistinguishable from the retry having done nothing at all. There's no dedicated "delete just the VM"
               action, remove it directly on the hypervisor if you want it gone without deleting the
               deployment record too - the one place a VM does get deleted automatically is on a failure
               before that Setup-succeeded point, as part of marking it <Code>failed</Code>. On ESXi, that
@@ -1283,9 +1292,19 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               reuses the exact same channel already proven for role installs.{" "}
               <Code>WinRMClient.install_vmware_tools</Code> scans for <Code>setup64.exe</Code> on whichever
               CD-ROM <Code>esxi.py</Code>'s <Code>create_vm</Code> mounted the installer ISO on via
-              vSphere's own <Code>MountToolsInstaller()</Code> API at VM creation — no unit number to
-              track, ESXi manages that device itself; Windows Setup's own install media usually claims{" "}
-              <Code>D:</Code>, so Tools typically lands on <Code>E:</Code> or <Code>F:</Code>. This is what
+              vSphere's own <Code>MountToolsInstaller()</Code> API at VM creation. That call needs an{" "}
+              <em>existing</em> CD/DVD device to attach the Tools ISO to — confirmed against Broadcom's own
+              KB (vix error 21002, "This virtual machine does not have a CD-ROM drive configured") after it
+              silently failed on every deployment for a while: the Windows and VirtIO ISOs only get their
+              own CD-ROM devices later in the pipeline, once uploaded, so neither existed yet at
+              VM-creation time when this call used to run, and the surrounding{" "}
+              <Code>except Exception: logger.exception(...)</Code> swallowed the failure completely. Fixed
+              with a dedicated, empty CD-ROM device (<Code>controllerKey=201</Code>, ESXi's second built-in
+              IDE controller — the first, <Code>200</Code>, is already fully claimed by the Windows/VirtIO
+              ISOs' own two units) added to the VM's initial creation spec purely so{" "}
+              <Code>MountToolsInstaller()</Code> has somewhere to attach to. Windows Setup's own install
+              media usually claims <Code>D:</Code>, so Tools typically lands on <Code>E:</Code> or{" "}
+              <Code>F:</Code> once the guest is up. This is what
               makes a <strong>DHCP</strong> deployment's guest IP discoverable at all without a human
               logging in: <Code>get_guest_ip()</Code> has nothing to report without VMware Tools present,
               which is a real gap a deployment hit directly once (spinning for the full{" "}
@@ -1341,8 +1360,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               DeployCore itself is actively configuring the guest; leaving it open indefinitely afterward
               is unnecessary attack surface. Checked directly against Microsoft's own{" "}
               <Code>Disable-PSRemoting</Code> documentation rather than assumed complete, since it
-              explicitly lists steps it does <em>not</em> perform on its own - three separate things get
-              cleaned up here, right before a deployment is marked <Code>completed</Code>, not just one:
+              explicitly lists three of the following as steps it does <em>not</em> perform on its own -
+              four things get cleaned up here, right before a deployment is marked <Code>completed</Code>,
+              all in a <strong>single</strong> command rather than a "safe" logged call followed by a
+              separately-swallowed one (see why, below the list):
             </P>
             <List
               items={[
@@ -1361,15 +1382,24 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   token over a network logon; removed here rather than left weakening UAC's remote-token
                   filtering for every local admin account on the machine indefinitely, well past the point
                   WinRM access even still exists to need it.</>,
+                <><strong><Code>Disable-PSRemoting -Force</Code></strong>, and stopping/disabling the WinRM
+                  service itself - the last part runs in a short-delayed detached process rather than
+                  inline, so the command doesn't try to report its own success back over the exact channel
+                  it's in the middle of tearing down.</>,
               ]}
             />
             <P>
-              Only then: <Code>Disable-PSRemoting -Force</Code>, and stop and disable the WinRM service
-              itself. That last part runs in a short-delayed detached process rather than inline, so the
-              command doesn't try to report its own success back over the exact channel it's in the middle
-              of tearing down. From this point on a completed deployment has no WinRM listener at all, by
-              design: there's no way for DeployCore (or anything else) to remotely reconfigure the guest
-              again without an operator opening it back up on the guest directly.
+              All four run as one call, not the firewall/registry cleanup logged separately followed by a
+              swallowed <Code>Disable-PSRemoting</Code>: an earlier version treated only the very last step
+              as "may not report back before this severs the connection," but disabling the built-in{" "}
+              <Code>WINRM-HTTP-In-TCP</Code> rule is exactly as capable of doing that - it's the same rule
+              this very session's connection is using. Splitting them meant a real chance of a slow or
+              interrupted response there causing several minutes of retries (each one opening a fresh
+              connection against a rule that's now disabled, guaranteed to fail every time), then
+              permanently failing right at the last step of an otherwise fully-succeeded deployment. From
+              this point on a completed deployment has no WinRM listener at all, by design: there's no way
+              for DeployCore (or anything else) to remotely reconfigure the guest again without an operator
+              opening it back up on the guest directly.
             </P>
             <P>
               A consequence worth knowing: nothing in DeployCore checks on a completed deployment's guest
