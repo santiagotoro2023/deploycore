@@ -48,6 +48,7 @@
         <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
             <RunSynchronous>
 {% include "_specialize_enable_winrm.xml.j2" %}
+{% include "_specialize_callback.xml.j2" %}
             </RunSynchronous>
         </component>
 {% if deployment.ip_mode == "static" and deployment.static_ip and static_prefix %}

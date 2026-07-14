@@ -273,8 +273,9 @@ def test_specialize_pass_enables_winrm_without_a_login():
     # the built-in Administrator without it. VMware Tools install isn't
     # part of the specialize pass at all (see autounattend_base.xml.j2's
     # comment - it runs post-install over WinRM instead), so just the 2
-    # WinRM commands.
-    assert len(paths) == 2
+    # WinRM commands plus the specialize-pass callback (see
+    # test_specialize_pass_sends_callback_without_a_login below).
+    assert len(paths) == 3
 
 
 def test_specialize_pass_sets_token_filter_policy_for_custom_admin():
@@ -283,8 +284,40 @@ def test_specialize_pass_sets_token_filter_policy_for_custom_admin():
 
     deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
     paths = deployment_component.xpath(".//u:RunSynchronousCommand/u:Path/text()", namespaces=NS)
-    assert len(paths) == 3
+    assert len(paths) == 4
     assert any("LocalAccountTokenFilterPolicy" in p for p in paths)
+
+
+def test_specialize_pass_sends_callback_without_a_login():
+    """The real gap this closes: FirstLogonCommands' own callback (Order 3
+    there) only ever runs on an actual interactive first logon, which
+    AutoLogon being permanently absent means never happens in the normal
+    unattended flow. For a DHCP deployment specifically, the WinRM-
+    reachability fallback in wait_for_callback also can't cover that gap:
+    it depends on HypervisorDriver.get_guest_ip(), which needs VMware
+    Tools (or hypervisor-level DHCP snooping that isn't guaranteed on
+    every host/version) to report anything before Setup has even
+    finished - a real deployment sat in installing_os indefinitely
+    despite Setup genuinely having completed, confirmed by console
+    access, because neither path ever fired. Sending the same callback
+    here too, unconditionally, during specialize (which - like WinRM
+    enablement above - runs without any login and has already proven
+    reliable for reaching DeployCore over the network) means a fresh
+    guest can always self-report completion regardless of DHCP/Tools/
+    login state. curl.exe, not Invoke-WebRequest/PowerShell: same
+    reasoning as winrm.cmd over Enable-PSRemoting, a native inbox tool
+    (Server 2019+) rather than risking PowerShell's specialize-pass
+    startup crash. The callback route's token is single-use, so this
+    landing before (or in addition to) FirstLogonCommands' own attempt,
+    should a human ever actually log in, is harmless - the second POST
+    just gets rejected with 409 already-used."""
+    template = _make_template()
+    root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
+
+    deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
+    paths = deployment_component.xpath(".//u:RunSynchronousCommand/u:Path/text()", namespaces=NS)
+    assert any("curl.exe" in p and "/api/callback/" in p for p in paths)
+    assert not any("powershell" in p.lower() for p in paths)
 
 
 # No test_specialize_pass_installs_vmware_tools_* here: VMware Tools is
