@@ -834,6 +834,25 @@ pending → creating_vm → booting → installing_os → post_install → confi
   gets a `409` back, which `curl` (unlike PowerShell's `Invoke-WebRequest`)
   doesn't treat as a failure worth doing anything about either.
 
+  A single bare `curl.exe` call wasn't actually enough, though: confirmed
+  live, curl's own `--retry` flag only covers a specific set of
+  transient errors (timeouts, HTTP 408/429/5xx) - **not** "connection
+  refused" or "network unreachable", which is exactly what a DHCP guest
+  gets if the specialize pass reaches this command before DHCP has
+  actually finished negotiating a lease, a real race that isn't
+  guaranteed to lose. `--retry` alone was silently useless against it.
+  The actual fix wraps the whole `curl.exe` call in a `cmd.exe /c "for
+  /l %i in (1,1,24) do (curl.exe ... && exit /b 0 || ping -n 6
+  127.0.0.1 >NUL)"` loop instead - up to 24 attempts, a delay between
+  each - so the retry happens at the "does this machine have a working
+  route yet at all" level, not just curl's own narrower definition of
+  transient. `ping -n 6 127.0.0.1` as the delay, not `timeout.exe`:
+  `timeout` refuses to run without a real attached console ("ERROR:
+  Input redirection is not supported"), which a specialize-pass command
+  never has - pinging loopback a fixed number of times is the
+  standard console-independent way to get a few seconds of delay in a
+  Windows batch context.
+
   VMware Tools installs post-install, over WinRM, as the very first step
   of `run_post_install` - before the static-IP cross-check, before any
   Windows feature or app install, before the final reboot

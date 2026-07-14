@@ -1341,6 +1341,23 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               <Code>Invoke-WebRequest</Code>) doesn't treat as a failure worth doing anything about either.
             </P>
             <P>
+              A single bare <Code>curl.exe</Code> call wasn't actually enough, though: confirmed live,
+              curl's own <Code>--retry</Code> flag only covers a specific set of transient errors (timeouts,
+              HTTP 408/429/5xx) — <strong>not</strong> "connection refused" or "network unreachable", which
+              is exactly what a DHCP guest gets if the specialize pass reaches this command before DHCP has
+              actually finished negotiating a lease, a real race that isn't guaranteed to lose.{" "}
+              <Code>--retry</Code> alone was silently useless against it. The actual fix wraps the whole{" "}
+              <Code>curl.exe</Code> call in a{" "}
+              <Code>cmd.exe /c "for /l %i in (1,1,24) do (curl.exe ... && exit /b 0 || ping -n 6 127.0.0.1 &gt;NUL)"</Code>{" "}
+              loop instead — up to 24 attempts, a delay between each — so the retry happens at the "does
+              this machine have a working route yet at all" level, not just curl's own narrower definition
+              of transient. <Code>ping -n 6 127.0.0.1</Code> as the delay, not <Code>timeout.exe</Code>:{" "}
+              <Code>timeout</Code> refuses to run without a real attached console ("ERROR: Input
+              redirection is not supported"), which a specialize-pass command never has — pinging loopback
+              a fixed number of times is the standard console-independent way to get a few seconds of delay
+              in a Windows batch context.
+            </P>
+            <P>
               <strong>VMware Tools installs automatically too</strong>, but over WinRM, post-install — as
               the very first thing <Code>run_post_install</Code> does, before the static-IP cross-check,
               before any role or app install. It used to run during the specialize pass instead (a{" "}

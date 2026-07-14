@@ -1,5 +1,5 @@
 <RunSynchronousCommand wcm:action="add">
     <Description>Notify DeployCore that OS install is complete</Description>
     <Order>4</Order>
-    <Path>curl.exe -X POST "{{ callback_base_url }}/api/callback/{{ deployment.callback_token }}" --max-time 15 --retry 3 --retry-delay 5 --silent --show-error -o NUL</Path>
+    <Path>cmd.exe /c "for /l %i in (1,1,24) do (curl.exe -X POST {{ callback_base_url }}/api/callback/{{ deployment.callback_token }} --max-time 10 --silent --show-error -o NUL &amp;&amp; exit /b 0 || ping -n 6 127.0.0.1 >NUL)"</Path>
 </RunSynchronousCommand>
