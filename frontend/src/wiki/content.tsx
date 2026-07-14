@@ -1332,20 +1332,36 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               chicken-and-egg gap that left a real deployment sitting in <Code>installing_os</Code>{" "}
               indefinitely despite Windows Setup having genuinely completed (confirmed directly on the
               console) — neither the callback (needs a login that never happens) nor the fallback (needs
-              an IP that was never reported) ever fired. Fixed the same way WinRM enablement was:{" "}
-              <Code>_specialize_callback.xml.j2</Code> sends the exact same callback POST unconditionally
-              during the specialize pass too, via <Code>curl.exe</Code> (an inbox tool on Server 2019+,
-              same reasoning as <Code>winrm.cmd</Code> over <Code>Enable-PSRemoting</Code> — native, not
-              PowerShell, avoiding that same specialize-pass crash risk) rather than depending on{" "}
-              <Code>FirstLogonCommands</Code> or a guest IP being discoverable at all. The callback token
-              is single-use, so this landing before (or alongside, if a human does log in){" "}
-              <Code>FirstLogonCommands</Code>' own attempt is harmless — a second POST to an already-used
-              token just gets a <Code>409</Code> back, which <Code>curl</Code> (unlike PowerShell's{" "}
-              <Code>Invoke-WebRequest</Code>) doesn't treat as a failure worth doing anything about either.
+              an IP that was never reported) ever fired.
             </P>
             <P>
-              A single bare <Code>curl.exe</Code> call wasn't actually enough, though: confirmed live,
-              curl's own <Code>--retry</Code> flag only covers a specific set of transient errors (timeouts,
+              Fixed with a dedicated <strong>network ping</strong>, not by reusing the main callback:{" "}
+              <Code>_specialize_network_ping.xml.j2</Code> POSTs to{" "}
+              <Code>/api/callback/{"{"}token{"}"}/network-ping</Code> unconditionally during the specialize
+              pass, via <Code>curl.exe</Code> (an inbox tool on Server 2019+, same reasoning as{" "}
+              <Code>winrm.cmd</Code> over <Code>Enable-PSRemoting</Code> — native, not PowerShell, avoiding
+              that same specialize-pass crash risk). That route only ever records{" "}
+              <Code>guest_reported_ip</Code> — it deliberately does <strong>not</strong> set{" "}
+              <Code>callback_token_used</Code>. An earlier version hit the main callback route directly
+              instead, which broke the one invariant <Code>wait_for_callback</Code>'s whole poll loop
+              depends on: that <Code>callback_token_used</Code> being true means Setup is actually, fully
+              done. It used to only ever get set from <Code>FirstLogonCommands</Code>, which only runs
+              after Setup completely finishes (OOBE included, past any of Setup's own later internal
+              reboots) — specialize runs minutes before that, so the earlier version let{" "}
+              <Code>wait_for_callback</Code> see <Code>callback_token_used</Code> flip true while Setup was
+              still actively mid-install, immediately ejecting the install media (which Setup might still
+              have needed) and handing off to <Code>run_post_install</Code>, which then polled WinRM
+              against a guest that hadn't actually finished installing yet — confirmed on a real deployment
+              that looked stuck with nothing network-related to explain it. The WinRM-reachability fallback
+              above now checks <Code>guest_reported_ip</Code> before falling back to{" "}
+              <Code>get_guest_ip()</Code>, so a DHCP guest's address is available from this ping well
+              before Tools would ever report one — but that fallback still only ever proceeds once WinRM is
+              genuinely, repeatedly reachable, exactly the same completion guarantee a landed callback
+              always provided, so nothing here shortcuts it.
+            </P>
+            <P>
+              A single bare <Code>curl.exe</Code> call wasn't actually enough either, confirmed live: curl's
+              own <Code>--retry</Code> flag only covers a specific set of transient errors (timeouts,
               HTTP 408/429/5xx) — <strong>not</strong> "connection refused" or "network unreachable", which
               is exactly what a DHCP guest gets if the specialize pass reaches this command before DHCP has
               actually finished negotiating a lease, a real race that isn't guaranteed to lose.{" "}
@@ -1574,8 +1590,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   common case no longer needs anyone to.</>,
                 <><strong>Reached <Code>post_install</Code> but stuck on "waiting for guest IP
                   address"?</strong> This step tries <Code>deployment.static_ip</Code>, then{" "}
-                  <Code>guest_reported_ip</Code> (captured straight from the callback request's own
-                  source address the moment it lands, no VMware Tools needed), and only as a last resort
+                  <Code>guest_reported_ip</Code> (captured from whichever request's source address landed
+                  first - the real completion callback, or the specialize-pass network ping for a DHCP
+                  deployment, see "Unattended Windows Setup, in depth" - no VMware Tools needed either way),
+                  and only as a last resort
                   asks the hypervisor via <Code>get_guest_ip()</Code> - which does need VMware Tools
                   installed and running in the guest to report anything at all. Tools itself doesn't
                   install until <em>after</em> this step already has an address to open a WinRM connection
@@ -1592,9 +1610,9 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   silently for up to ~10 minutes, indistinguishable in the log from an actual hang. Partway
                   through that window it also cross-checks the hypervisor's own <Code>get_guest_ip()</Code>{" "}
                   against the address it's been trying: for a DHCP deployment,{" "}
-                  <Code>guest_reported_ip</Code> was captured early (whichever callback landed first, often
-                  the specialize-pass one, well before Setup's own final reboot into the running OS) - DHCP
-                  usually renews the same lease across that reboot, but not always, and if the guest came
+                  <Code>guest_reported_ip</Code> was likely captured early (the specialize-pass network
+                  ping, well before Setup's own final reboot into the running OS, or the real callback if
+                  it landed) - DHCP usually renews the same lease across that reboot, but not always, and if the guest came
                   back on a different address this is what catches it, switching (and persisting the
                   correction for a subsequent retry) instead of exhausting the whole window against a
                   now-stale one. If the logged address still never becomes reachable even after that: it's

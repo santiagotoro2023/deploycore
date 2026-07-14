@@ -825,20 +825,38 @@ pending → creating_vm → booting → installing_os → post_install → confi
   Windows Setup having genuinely completed (confirmed directly on the
   console), because neither the callback (needs a login that never
   happens) nor the fallback (needs an IP that was never reported) ever
-  fired. Fixed the same way WinRM enablement was: `_specialize_callback.xml.j2`
-  sends the exact same callback POST unconditionally during the
-  specialize pass too, via `curl.exe` (an inbox tool on Server 2019+,
-  same reasoning as `winrm.cmd` over `Enable-PSRemoting` - a native
-  executable, not PowerShell, avoiding that same specialize-pass crash
-  risk) rather than depending on FirstLogonCommands or a guest IP being
-  discoverable at all. The callback token is single-use, so this
-  landing before (or alongside, if a human does log in) FirstLogonCommands'
-  own attempt is harmless - a second POST to an already-used token just
-  gets a `409` back, which `curl` (unlike PowerShell's `Invoke-WebRequest`)
-  doesn't treat as a failure worth doing anything about either.
+  fired.
 
-  A single bare `curl.exe` call wasn't actually enough, though: confirmed
-  live, curl's own `--retry` flag only covers a specific set of
+  Fixed with a dedicated **network ping**, not by reusing the main
+  callback: `_specialize_network_ping.xml.j2` POSTs to
+  `/api/callback/{token}/network-ping` unconditionally during the
+  specialize pass, via `curl.exe` (an inbox tool on Server 2019+, same
+  reasoning as `winrm.cmd` over `Enable-PSRemoting` - native, not
+  PowerShell, avoiding that same specialize-pass crash risk). That route
+  only ever records `guest_reported_ip` - it deliberately does **not**
+  set `callback_token_used`. An earlier version hit the main callback
+  route directly instead, which broke the one invariant
+  `wait_for_callback`'s whole poll loop depends on: that
+  `callback_token_used` being true means Setup is actually, fully done.
+  It used to only ever get set from `FirstLogonCommands`, which only
+  runs after Setup completely finishes (OOBE included, past any of
+  Setup's own later internal reboots) - specialize runs minutes before
+  that, so the earlier version let `wait_for_callback` see
+  `callback_token_used` flip true while Setup was still actively
+  mid-install, immediately ejecting the install media (which Setup might
+  still have needed) and handing off to `run_post_install`, which then
+  polled WinRM against a guest that hadn't actually finished installing
+  yet - confirmed on a real deployment that looked stuck with nothing
+  network-related to explain it. The WinRM-reachability fallback above
+  now checks `guest_reported_ip` before falling back to
+  `get_guest_ip()`, so a DHCP guest's address is available from this
+  ping well before Tools would ever report one - but that fallback still
+  only ever proceeds once WinRM is genuinely, repeatedly reachable,
+  exactly the same completion guarantee a landed callback always
+  provided, so nothing here shortcuts it.
+
+  A single bare `curl.exe` call wasn't actually enough either, confirmed
+  live: curl's own `--retry` flag only covers a specific set of
   transient errors (timeouts, HTTP 408/429/5xx) - **not** "connection
   refused" or "network unreachable", which is exactly what a DHCP guest
   gets if the specialize pass reaches this command before DHCP has
@@ -1000,8 +1018,8 @@ pending → creating_vm → booting → installing_os → post_install → confi
   get_guest_ip()` against the address it's been trying: DHCP *usually*
   renews the same lease across Setup's own final reboot into the
   running OS, but that's not guaranteed, and `guest_reported_ip` was
-  captured early (from whichever callback landed first - see the
-  specialize-pass callback above, which fires well before that reboot).
+  likely captured early (the specialize-pass network ping above, which
+  fires well before that reboot, or the real callback if it landed).
   If the hypervisor's own view disagrees, it switches to the new address
   (persisting it back to `guest_reported_ip` too, so a subsequent "Retry
   post-install" starts from the corrected value) and keeps going on the
