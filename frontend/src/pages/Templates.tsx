@@ -137,7 +137,10 @@ export default function Templates() {
           {
             key: "sizing",
             header: "CPU / RAM / Disk",
-            render: (t) => `${t.cpu_count} vCPU (${t.cores_per_socket}/socket) / ${t.ram_mb} MB / ${t.disk_size_gb} GB`,
+            render: (t) =>
+              `${t.cpu_count} vCPU (${t.cores_per_socket}/socket) / ${
+                t.ram_mb % 1024 === 0 ? t.ram_mb / 1024 : (t.ram_mb / 1024).toFixed(2)
+              } GB / ${t.disk_size_gb} GB`,
           },
           { key: "domain", header: "Domain join", render: (t) => (t.domain_join_enabled ? t.domain_fqdn : "Workgroup") },
           { key: "features", header: "Roles", render: (t) => t.windows_features.join(", ") || "(none)" },

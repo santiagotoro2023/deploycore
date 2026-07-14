@@ -93,7 +93,13 @@ export default function TemplateFieldsForm({
   const [diskLayoutId, setDiskLayoutId] = useState(existing?.disk_layout_id ?? diskLayouts[0]?.id ?? "");
   const [cpuCount, setCpuCount] = useState(existing?.cpu_count ?? 2);
   const [coresPerSocket, setCoresPerSocket] = useState(existing?.cores_per_socket ?? 1);
-  const [ramMb, setRamMb] = useState(existing?.ram_mb ?? 4096);
+  // RAM is edited in GB in this form - friendlier than typing MB - and
+  // converted to ram_mb (what the API/backend/ESXi actually use) right
+  // before submit; existing.ram_mb is converted back to GB here for
+  // display. Rounds to a whole MB on submit, not just truncating GB to
+  // an integer first, so a value like 1.5 still becomes an exact 1536
+  // rather than losing precision.
+  const [ramGb, setRamGb] = useState(existing ? existing.ram_mb / 1024 : 4);
   const [diskSizeGb, setDiskSizeGb] = useState(existing?.disk_size_gb ?? 80);
   const [diskProvisioning, setDiskProvisioning] = useState<DiskProvisioning>(existing?.disk_provisioning ?? "thin");
   const [networkName, setNetworkName] = useState(existing?.network_name ?? "");
@@ -203,7 +209,7 @@ export default function TemplateFieldsForm({
       disk_layout_id: diskLayoutId,
       cpu_count: cpuCount,
       cores_per_socket: coresPerSocket,
-      ram_mb: ramMb,
+      ram_mb: Math.round(ramGb * 1024),
       disk_size_gb: diskSizeGb,
       disk_provisioning: diskProvisioning,
       network_name: networkName,
@@ -322,8 +328,8 @@ export default function TemplateFieldsForm({
             <input type="number" min={1} className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={coresPerSocket} onChange={(e) => setCoresPerSocket(Number(e.target.value))} />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">RAM (MB)</label>
-            <input type="number" className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={ramMb} onChange={(e) => setRamMb(Number(e.target.value))} />
+            <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">RAM (GB)</label>
+            <input type="number" min={0.25} step={0.25} className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" value={ramGb} onChange={(e) => setRamGb(Number(e.target.value))} />
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Disk (GB)</label>

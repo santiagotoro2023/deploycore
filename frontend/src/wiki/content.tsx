@@ -727,7 +727,9 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   name/description text, which isn't guaranteed to spell "(Desktop Experience)" out on
                   every ISO), stored on the edition for future use even though the dropdown itself doesn't
                   show it as a separate tag today, trusting Microsoft's own naming to already be clear.</>,
-                <>Disk layout, CPU count and cores per socket, RAM (MB), disk size (GB) and its{" "}
+                <>Disk layout, CPU count and cores per socket, RAM (edited in GB — up to two decimal
+                  places, e.g. 1.5 — converted to whole MB, what the API/ESXi actually use, right before
+                  submit), disk size (GB) and its{" "}
                   <strong>provisioning type</strong>: thin (space allocated on demand), thick lazily zeroed
                   (space reserved up front, zeroed on first write), or thick eagerly zeroed (space reserved
                   and zeroed entirely at creation time, slower to create but avoids any first-write

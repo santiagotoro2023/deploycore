@@ -551,7 +551,9 @@ org-scoped copy.
   `windows_editions` when available, each option labeled with its actual
   edition name (e.g. "Windows Server 2025 Standard (Desktop Experience)")
   instead of a bare number, a plain number field otherwise),
-  disk layout, CPU count and cores per socket, RAM (MB), disk size (GB) and
+  disk layout, CPU count and cores per socket, RAM (edited in GB - up to
+  two decimal places, e.g. 1.5 - converted to whole MB, what the
+  API/ESXi actually use, right before submit), disk size (GB) and
   disk provisioning type (thin / thick lazily zeroed / thick eagerly
   zeroed), network name (an ESXi/vCenter port group, network segmentation
   is expected to already be handled by picking the right port group, not
