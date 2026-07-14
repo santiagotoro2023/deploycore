@@ -363,7 +363,18 @@ class ESXiDriver(HypervisorDriver):
         service_instance = self._connect_sync()
         try:
             vm = self._find_vm_sync(service_instance, vm_ref)
-            WaitForTask(vm.MountToolsInstaller())
+            # Not WaitForTask(vm.MountToolsInstaller()) - confirmed live
+            # ("'NoneType' object has no attribute '_stub'") and against
+            # pyVmomi's own docs: unlike most vSphere operations, this
+            # call is synchronous and returns None, not a Task to wait
+            # on. The mount itself had already succeeded on the ESXi side
+            # by the time this raised - WaitForTask(None) failed on the
+            # client side afterward, which meant this method's own
+            # exception handler in provision.py treated the whole mount
+            # as failed and never learned which unit to eject later,
+            # even though install_vmware_tools then found the (actually
+            # mounted) installer and ran it successfully regardless.
+            vm.MountToolsInstaller()
             vm = self._find_vm_sync(service_instance, vm_ref)
             for device in vm.config.hardware.device:
                 if isinstance(device, vim.vm.device.VirtualCdrom) and isinstance(
