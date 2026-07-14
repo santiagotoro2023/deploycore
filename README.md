@@ -1131,6 +1131,25 @@ pending → creating_vm → booting → installing_os → post_install → confi
   `run_post_install` runs inside `wait_for_callback`'s own job execution,
   not a separately-enqueued one, so that ceiling has to cover both
   phases combined)
+- Duplicate-delivery guard: arq is at-least-once, not exactly-once - a
+  job can be redelivered and re-run from scratch while the original
+  execution is still alive and working. Confirmed live: a redelivered
+  `wait_for_callback` execution ran its entire "poll for the callback,
+  fall back to WinRM reachability" sequence a second time - logging a
+  duplicate "install callback did not arrive" - well after the first
+  execution had already moved the deployment into `post_install`, then
+  crashed trying to transition `post_install -> post_install` (not a
+  valid forward transition, the state machine correctly rejects it).
+  Both `wait_for_callback` and `run_post_install` now check the
+  deployment's actual state before doing anything: `wait_for_callback`
+  only proceeds if the deployment is still exactly `installing_os` (the
+  one precondition `run_deployment` guarantees before ever enqueueing
+  it), and `run_post_install` has the identical check as defense in
+  depth, since it's also independently enqueued by the retry-post-install
+  route. Anything else means a second, stale execution of the same
+  nominal job arrived after the real one already made progress - logged
+  as a no-op and skipped, rather than redoing (and crashing on) work
+  that's already done or in progress elsewhere.
 - Detail view: live pipeline-stage visualization, full state-transition
   history, streaming log output (Server-Sent Events, ~1s poll interval),
   and a "Download full log" button producing a plain-text file with the

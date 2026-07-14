@@ -612,7 +612,22 @@ async def _guest_reachable_over_winrm(
 async def wait_for_callback(ctx, deployment_id: str) -> None:
     async with SessionLocal() as db:
         deployment = await db.get(Deployment, uuid.UUID(deployment_id))
-        if deployment is None or deployment.state in (DeploymentState.COMPLETED, DeploymentState.FAILED):
+        # Stricter than just excluding the terminal states: this job's own
+        # only valid precondition is installing_os (set by run_deployment
+        # right before enqueueing it, the one and only place that does).
+        # arq's at-least-once delivery means this same job can be
+        # redelivered and re-run from scratch while the original execution
+        # is still alive - confirmed live, a redelivered execution ran this
+        # entire function a second time well after the first one had
+        # already advanced the deployment into post_install, logging a
+        # duplicate "install callback did not arrive" and ultimately
+        # crashing run_post_install trying to transition post_install into
+        # itself. Bailing here, at the top, before any of that duplicate
+        # work happens, is the actual fix - run_post_install has its own
+        # matching guard too, as defense in depth for it being called
+        # directly (the retry-post-install route enqueues it on its own,
+        # not through here).
+        if deployment is None or deployment.state != DeploymentState.INSTALLING_OS:
             return
 
         host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
@@ -684,6 +699,31 @@ async def run_post_install(ctx, deployment_id: str) -> None:
     async with SessionLocal() as db:
         deployment = await db.get(Deployment, uuid.UUID(deployment_id))
         if deployment is None:
+            return
+        # arq guarantees at-least-once delivery, not exactly-once - a job
+        # can be redelivered and re-run from scratch while the original
+        # execution is still alive and working (confirmed live: a second
+        # wait_for_callback execution for the same deployment logged its
+        # own "install callback did not arrive" a second time, 8 minutes
+        # after the first one had already moved the deployment well into
+        # post_install, then crashed here trying to transition
+        # post_install -> post_install, which the state machine correctly
+        # rejects since it's not a real forward transition). Both
+        # wait_for_callback (which calls straight into this) and the
+        # retry-post-install API route always leave the deployment in
+        # exactly installing_os right before this runs - anything else
+        # here means a second, stale execution of the same nominal job
+        # arrived after the real one already made progress; treat it as
+        # a harmless no-op rather than redoing (and crashing on) work
+        # that's already done or in progress elsewhere.
+        if deployment.state != DeploymentState.INSTALLING_OS:
+            await log(
+                db, deployment, deployment.state.value,
+                "skipping: this looks like a duplicate/redelivered job for a deployment "
+                f"already past installing_os (currently {deployment.state.value}) - "
+                "another execution already handled it",
+                level=LogLevel.WARN,
+            )
             return
         host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
         driver = get_driver(host)

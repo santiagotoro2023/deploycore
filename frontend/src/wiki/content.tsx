@@ -1041,6 +1041,21 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   network conditions or anything else actually being wrong. That job (and the one it runs
                   straight into once the callback lands, in the same execution, not a separately queued
                   job) now has an explicit, much longer timeout of its own.</>,
+                <>arq is at-least-once, not exactly-once - a job can be redelivered and re-run from scratch
+                  while the original execution is still alive and working. Confirmed live: a redelivered{" "}
+                  <Code>wait_for_callback</Code> execution ran its entire "poll for the callback, fall back
+                  to WinRM reachability" sequence a second time - logging a duplicate "install callback did
+                  not arrive" - well after the first execution had already moved the deployment into{" "}
+                  <Code>post_install</Code>, then crashed trying to transition <Code>post_install</Code>{" "}
+                  into itself (not a valid forward transition, correctly rejected). Both{" "}
+                  <Code>wait_for_callback</Code> and <Code>run_post_install</Code> now check the
+                  deployment's actual state before doing anything - the former only proceeds if it's still
+                  exactly <Code>installing_os</Code> (the one precondition <Code>run_deployment</Code>{" "}
+                  guarantees before ever enqueueing it), the latter has the identical check as defense in
+                  depth, since it's also independently enqueued by "Retry post-install." Anything else means
+                  a second, stale execution of the same nominal job arrived after the real one already made
+                  progress - logged as a no-op and skipped rather than redoing (and crashing on) work
+                  that's already done or in progress elsewhere.</>,
               ]}
             />
             <P>
