@@ -594,15 +594,21 @@ async def _guest_reachable_over_winrm(
     should never itself raise or fail the deployment.
 
     A static deployment's IP is already known outright (it's declarative,
-    set in the answer file, not learned from anything) - use it directly
-    rather than driver.get_guest_ip(), which depends on VMware Tools being
-    installed in the guest to report anything at all. If it isn't (this
-    fallback exists specifically for environments already showing signs
-    of that kind of gap), get_guest_ip() would otherwise make this
-    fallback silently useless for every deployment on that host, static
-    IP or not, without this check ever telling anyone why."""
+    set in the answer file, not learned from anything) - use it directly.
+    A DHCP deployment's guest_reported_ip may already be set too, from
+    the specialize-pass network ping (_specialize_network_ping.xml.j2,
+    api/routes/callback.py's network-ping route) - that only ever reports
+    "the guest can reach DeployCore and this is its current address", not
+    "Setup is done" (conflating those broke this exact fallback's own
+    guarantee on a real deployment, see the network-ping route's own
+    docstring), so using it here is safe: this function still only ever
+    returns True once WinRM is genuinely, actually reachable, the ping
+    just means there's an address worth trying well before VMware Tools
+    would ever report one. Only fall through to driver.get_guest_ip() -
+    which depends on Tools being installed to report anything at all -
+    if neither of those is available yet."""
     try:
-        guest_ip = deployment.static_ip if deployment.ip_mode == IpMode.STATIC else None
+        guest_ip = deployment.static_ip if deployment.ip_mode == IpMode.STATIC else deployment.guest_reported_ip
         if not guest_ip:
             guest_ip = await driver.get_guest_ip(deployment.vm_moref)
         if not guest_ip:

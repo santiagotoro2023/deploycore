@@ -46,3 +46,42 @@ async def deployment_callback(deployment_token: str, request: Request, db: Async
     if request.client is not None:
         deployment.guest_reported_ip = request.client.host
     await db.commit()
+
+
+@router.post("/{deployment_token}/network-ping", status_code=status.HTTP_204_NO_CONTENT)
+async def deployment_network_ping(deployment_token: str, request: Request, db: AsyncSession = Depends(get_db)) -> None:
+    """Called from the specialize pass (_specialize_network_ping.xml.j2), well
+    before Setup is actually done - reports "the guest has network
+    connectivity and this is its current address" only, nothing more.
+
+    Deliberately does NOT set callback_token_used: an earlier version had
+    the specialize-pass command hit the main callback route above
+    directly, which broke the one invariant wait_for_callback's whole
+    poll loop depends on - that callback_token_used being true means
+    Setup is actually, fully done. It used to only ever get set from
+    FirstLogonCommands, which only runs after Setup completely finishes
+    (OOBE included, past any of Setup's own internal reboots). Specialize
+    runs minutes earlier than that, well before OOBE - reusing the same
+    endpoint meant wait_for_callback could see callback_token_used flip
+    true while Setup was still actively mid-install, immediately ejecting
+    the install ISO (which Setup might still need) and hand off to
+    run_post_install polling WinRM against a guest that wasn't actually
+    up yet, confirmed on a real deployment that looked stuck with nothing
+    network-related to point at.
+
+    guest_reported_ip set here is still useful well before that, though:
+    wait_for_callback's own WinRM-reachability fallback
+    (_guest_reachable_over_winrm) can use it as soon as it's available
+    instead of needing VMware Tools (not installed until after
+    installing_os finishes) to report a DHCP guest's address - that
+    fallback only ever proceeds once WinRM is genuinely, repeatedly
+    reachable, which is real evidence of completion the same way the
+    real callback is, so nothing here shortcuts that guarantee. Safe to
+    call repeatedly/early: idempotent, just keeps the address current."""
+    result = await db.execute(select(Deployment).where(Deployment.callback_token == deployment_token))
+    deployment = result.scalar_one_or_none()
+    if deployment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown callback token")
+    if deployment.state == DeploymentState.INSTALLING_OS and request.client is not None:
+        deployment.guest_reported_ip = request.client.host
+        await db.commit()

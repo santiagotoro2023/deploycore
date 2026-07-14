@@ -273,8 +273,8 @@ def test_specialize_pass_enables_winrm_without_a_login():
     # the built-in Administrator without it. VMware Tools install isn't
     # part of the specialize pass at all (see autounattend_base.xml.j2's
     # comment - it runs post-install over WinRM instead), so just the 2
-    # WinRM commands plus the specialize-pass callback (see
-    # test_specialize_pass_sends_callback_without_a_login below).
+    # WinRM commands plus the specialize-pass network ping (see
+    # test_specialize_pass_sends_network_ping_without_a_login below).
     assert len(paths) == 3
 
 
@@ -288,7 +288,7 @@ def test_specialize_pass_sets_token_filter_policy_for_custom_admin():
     assert any("LocalAccountTokenFilterPolicy" in p for p in paths)
 
 
-def test_specialize_pass_sends_callback_without_a_login():
+def test_specialize_pass_sends_network_ping_without_a_login():
     """The real gap this closes: FirstLogonCommands' own callback (Order 3
     there) only ever runs on an actual interactive first logon, which
     AutoLogon being permanently absent means never happens in the normal
@@ -299,24 +299,31 @@ def test_specialize_pass_sends_callback_without_a_login():
     every host/version) to report anything before Setup has even
     finished - a real deployment sat in installing_os indefinitely
     despite Setup genuinely having completed, confirmed by console
-    access, because neither path ever fired. Sending the same callback
-    here too, unconditionally, during specialize (which - like WinRM
-    enablement above - runs without any login and has already proven
-    reliable for reaching DeployCore over the network) means a fresh
-    guest can always self-report completion regardless of DHCP/Tools/
-    login state. curl.exe, not Invoke-WebRequest/PowerShell: same
-    reasoning as winrm.cmd over Enable-PSRemoting, a native inbox tool
-    (Server 2019+) rather than risking PowerShell's specialize-pass
-    startup crash. The callback route's token is single-use, so this
-    landing before (or in addition to) FirstLogonCommands' own attempt,
-    should a human ever actually log in, is harmless - the second POST
-    just gets rejected with 409 already-used."""
+    access, because neither path ever fired.
+
+    Hits a dedicated /network-ping route, not the main callback route
+    FirstLogonCommands uses: an earlier version hit that one directly,
+    which broke wait_for_callback's own invariant that callback_token_used
+    being true means Setup is actually done - specialize runs minutes
+    before Setup really finishes (before OOBE, before Setup's own later
+    internal reboots), so that version could make wait_for_callback eject
+    the install media and hand off to run_post_install while Setup was
+    still mid-install, confirmed on a real deployment that looked stuck
+    with nothing network-related to point at. /network-ping only ever
+    records guest_reported_ip, which the WinRM-reachability fallback can
+    then use as a DHCP guest's address to actually test - that fallback
+    still only ever proceeds once WinRM is genuinely, repeatedly
+    reachable, so nothing here shortcuts real completion evidence the way
+    hitting the main callback route did. curl.exe, not
+    Invoke-WebRequest/PowerShell: same reasoning as winrm.cmd over
+    Enable-PSRemoting, a native inbox tool (Server 2019+) rather than
+    risking PowerShell's specialize-pass startup crash."""
     template = _make_template()
     root = etree.fromstring(render_autounattend(_make_deployment(), template, _basic_disk_layout(), "00:50:56:12:34:56").encode())
 
     deployment_component = root.xpath("//u:component[@name='Microsoft-Windows-Deployment']", namespaces=NS)[0]
     paths = deployment_component.xpath(".//u:RunSynchronousCommand/u:Path/text()", namespaces=NS)
-    assert any("curl.exe" in p and "/api/callback/" in p for p in paths)
+    assert any("curl.exe" in p and "/api/callback/" in p and "/network-ping" in p for p in paths)
     assert not any("powershell" in p.lower() for p in paths)
 
 

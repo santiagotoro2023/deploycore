@@ -1,0 +1,5 @@
+<RunSynchronousCommand wcm:action="add">
+    <Description>Report early network reachability to DeployCore</Description>
+    <Order>4</Order>
+    <Path>cmd.exe /c "for /l %i in (1,1,24) do (curl.exe -X POST {{ callback_base_url }}/api/callback/{{ deployment.callback_token }}/network-ping --max-time 10 --silent --show-error -o NUL &amp;&amp; exit /b 0 || ping -n 6 127.0.0.1 >NUL)"</Path>
+</RunSynchronousCommand>
