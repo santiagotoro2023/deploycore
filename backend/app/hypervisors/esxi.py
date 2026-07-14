@@ -124,6 +124,27 @@ class ESXiDriver(HypervisorDriver):
                 nic_spec.device.addressType = "manual"
                 nic_spec.device.macAddress = spec.mac_address
 
+            # A dedicated, empty CD-ROM device for MountToolsInstaller()
+            # below - confirmed (Broadcom KB, vix error 21002 "This
+            # virtual machine does not have a CD-ROM drive configured")
+            # that call requires an existing CD/DVD device to attach the
+            # Tools ISO to, it does not create one itself, and silently
+            # failed on every deployment before this: the Windows/VirtIO
+            # ISOs (attach_iso, run later in the pipeline once uploaded)
+            # are the only CD-ROM devices this VM ever had, and neither
+            # exists yet at VM-creation time when MountToolsInstaller()
+            # was being called. controllerKey 201, not 200 (which
+            # attach_iso's WINDOWS_ISO_UNIT/VIRTIO_ISO_UNIT use): ESXi's
+            # default two built-in IDE controllers are 200 and 201, and
+            # 200 alone (2 units) is already fully claimed by those two.
+            cdrom_spec = vim.vm.device.VirtualDeviceSpec()
+            cdrom_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+            cdrom_spec.device = vim.vm.device.VirtualCdrom()
+            cdrom_spec.device.unitNumber = 0
+            cdrom_spec.device.controllerKey = 201
+            cdrom_spec.device.backing = vim.vm.device.VirtualCdrom.RemotePassthroughBackingInfo()
+            cdrom_spec.device.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
+
             config = vim.vm.ConfigSpec()
             config.name = spec.name
             config.numCPUs = spec.cpu_count
@@ -157,7 +178,7 @@ class ESXiDriver(HypervisorDriver):
             config.files = vim.vm.FileInfo(
                 vmPathName=f"[{datastore_name}] {spec.name}/{spec.name}.vmx"
             )
-            config.deviceChange = [controller, disk_spec, nic_spec]
+            config.deviceChange = [controller, disk_spec, nic_spec, cdrom_spec]
 
             task = vm_folder.CreateVM_Task(config=config, pool=resource_pool)
             # WaitForTask's return value is the task's State enum
