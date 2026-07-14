@@ -773,10 +773,72 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 if not guest_ip:
                     raise RuntimeError("guest never reported an IP address")
 
+            # Logged immediately, not just on eventual failure: this loop
+            # previously ran completely silently for up to
+            # WINRM_REACHABILITY_MAX_ATTEMPTS * WINRM_REACHABILITY_POLL_INTERVAL_SECONDS
+            # (~10 minutes) with nothing in the deployment log to show for
+            # it - indistinguishable from a genuine hang, confirmed
+            # confusing on a real deployment that was, in fact, still
+            # actively (if silently) retrying. Which guest_ip this is
+            # trying matters on its own too: for a DHCP deployment it's
+            # deployment.guest_reported_ip (whichever address the guest's
+            # own callback request arrived from, see above) - if that's
+            # wrong (a NAT/proxy between the guest's network and
+            # DeployCore reporting some other source address, or a
+            # network segment DeployCore's own host genuinely has no
+            # route back into) no amount of retrying here will ever
+            # succeed, and this line is what lets an operator actually
+            # see which address to go check reachability against instead
+            # of guessing.
+            await log(db, deployment, "post_install", f"waiting for {guest_ip} to become reachable over WinRM")
             client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
-            for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
+            re_resolved = False
+            for attempt in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
                 if await _winrm_reachable(client):
                     break
+                # A DHCP deployment's guest_ip normally comes from
+                # deployment.guest_reported_ip - whichever address the
+                # guest's callback request arrived from, captured early
+                # (the specialize-pass callback fires well before Setup's
+                # own final reboot into the running OS, see above). DHCP
+                # *usually* renews the same lease/address across a reboot
+                # on the same adapter, but that's not guaranteed - if the
+                # guest genuinely came back on a different address, no
+                # amount of retrying the stale one would ever succeed.
+                # One-shot cross-check partway through the window (not
+                # every attempt - driver.get_guest_ip is a real
+                # hypervisor API call, worth paying for once, not 60
+                # times): if the hypervisor's own view disagrees, switch
+                # to it and keep going on the remaining attempts instead
+                # of burning the rest of the budget on an address that
+                # may no longer mean anything.
+                if not re_resolved and attempt == WINRM_REACHABILITY_MAX_ATTEMPTS // 3:
+                    re_resolved = True
+                    try:
+                        current_ip = await driver.get_guest_ip(deployment.vm_moref)
+                    except Exception:  # noqa: BLE001 - best-effort cross-check, the original guest_ip is still tried either way
+                        current_ip = None
+                    if current_ip and current_ip != guest_ip:
+                        await log(
+                            db, deployment, "post_install",
+                            f"guest now reports a different address ({current_ip}, was {guest_ip}) - "
+                            "switching to it",
+                        )
+                        guest_ip = current_ip
+                        client = WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password)
+                        if deployment.ip_mode != IpMode.STATIC:
+                            # Persisted so a subsequent "Retry post-install"
+                            # (which reads guest_reported_ip fresh, same as
+                            # this run did) starts from the corrected
+                            # address instead of the same stale one.
+                            deployment.guest_reported_ip = current_ip
+                            await db.commit()
+                elif attempt > 0 and attempt % 3 == 0:
+                    await log(
+                        db, deployment, "post_install",
+                        f"still waiting for {guest_ip} to become reachable over WinRM "
+                        f"({attempt * WINRM_REACHABILITY_POLL_INTERVAL_SECONDS}s elapsed)",
+                    )
                 await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
             else:
                 raise RuntimeError(f"guest at {guest_ip} never became reachable over WinRM")
