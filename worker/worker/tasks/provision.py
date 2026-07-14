@@ -1018,7 +1018,6 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     level=LogLevel.INFO if disable_result.ok else LogLevel.WARN,
                 )
 
-            await log(db, deployment, "configuring", "closing WinRM access, post-install is finished")
             # Three things need cleaning up here, not just the one custom
             # rule - confirmed against Microsoft's own Disable-PSRemoting
             # docs, which explicitly list the other two as manual steps
@@ -1052,27 +1051,33 @@ async def run_post_install(ctx, deployment_id: str) -> None:
             #    admin account on the machine, indefinitely, well past
             #    the WinRM access it was only ever needed for.
             #
-            # None of this disrupts the current session (just firewall
-            # rules and a registry value), so it's a normal, logged call
-            # rather than swallowed - only the PSRemoting/WinRM-service
-            # teardown after it is expected to sever the channel it runs on.
-            cleanup_result = await _run_with_retry(
-                lambda: client.run_ps(
+            # All four steps run as ONE call, wrapped in a swallow-all
+            # try/except, not the netsh/firewall/registry cleanup logged
+            # separately followed by a swallowed Disable-PSRemoting: the
+            # WINRM-HTTP-In-TCP rule being disabled here is the same rule
+            # this very session's own connection is using right now.
+            # Windows Firewall's stateful tracking *usually* lets an
+            # already-established connection keep flowing after its rule
+            # is disabled, but that's not guaranteed on every config - if
+            # it doesn't, this command's own response has to travel back
+            # over the connection the command itself just cut, which
+            # previously meant _run_with_retry burning several minutes
+            # retrying (each retry opening a brand-new connection against
+            # a now-disabled rule, guaranteed to fail every time) before
+            # finally raising and failing an otherwise fully-succeeded
+            # deployment right at the last step. Splitting it never
+            # protected anything real: the firewall/registry cleanup was
+            # exactly as capable of severing the session as
+            # Disable-PSRemoting always was.
+            await log(db, deployment, "configuring", "closing WinRM access, post-install is finished")
+            try:
+                await asyncio.to_thread(
+                    client.run_ps,
                     'netsh.exe advfirewall firewall delete rule name="DeployCore WinRM"; '
                     "Disable-NetFirewallRule -Name 'WINRM-HTTP-In-TCP','WINRM-HTTP-In-TCP-PUBLIC' "
                     "-ErrorAction SilentlyContinue; "
                     "Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' "
-                    "-Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue"
-                )
-            )
-            await log(
-                db, deployment, "configuring",
-                cleanup_result.stdout or cleanup_result.stderr,
-                level=LogLevel.INFO if cleanup_result.ok else LogLevel.WARN,
-            )
-            try:
-                await asyncio.to_thread(
-                    client.run_ps,
+                    "-Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue; "
                     "Disable-PSRemoting -Force; "
                     "Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "
                     "'-NoProfile -Command \"Start-Sleep -Seconds 5; "
