@@ -989,8 +989,26 @@ pending → creating_vm → booting → installing_os → post_install → confi
   Tools isn't installed until the very next step, after a guest address is
   already known one way or another; authenticating as
   `template.local_admin_username`, not the now-disabled built-in
-  Administrator): install VMware Tools first, if present (see above), then
-  install every configured Windows feature in one call
+  Administrator): the WinRM-reachability wait right after resolving that
+  address now logs immediately (`waiting for {ip} to become reachable
+  over WinRM`) and every few attempts after (`still waiting... (Ns
+  elapsed)`) - this loop previously ran completely silently for up to
+  `WINRM_REACHABILITY_MAX_ATTEMPTS * WINRM_REACHABILITY_POLL_INTERVAL_SECONDS`
+  (~10 minutes), indistinguishable in the log from an actual hang.
+  Partway through that window (once, not every attempt - it's a real
+  hypervisor API call) it also cross-checks `HypervisorDriver.
+  get_guest_ip()` against the address it's been trying: DHCP *usually*
+  renews the same lease across Setup's own final reboot into the
+  running OS, but that's not guaranteed, and `guest_reported_ip` was
+  captured early (from whichever callback landed first - see the
+  specialize-pass callback above, which fires well before that reboot).
+  If the hypervisor's own view disagrees, it switches to the new address
+  (persisting it back to `guest_reported_ip` too, so a subsequent "Retry
+  post-install" starts from the corrected value) and keeps going on the
+  remaining attempts, rather than exhausting the whole budget against an
+  address that may no longer mean anything - install VMware Tools first,
+  if present (see above), then install every configured Windows feature
+  in one call
   (`WinRMClient.install_features`, a single
   `Install-WindowsFeature -Name @(...) -IncludeManagementTools`, not one
   call per feature) - the same thing Server Manager's own "Add Roles and

@@ -1586,6 +1586,22 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   and DeployCore rather than anything about Tools - check that the guest can actually reach
                   DeployCore's callback URL. A static deployment never hits this at all: its IP is already
                   known outright.</>,
+                <><strong>Has a guest IP, but sits silently at "waiting for ... to become reachable over
+                  WinRM"?</strong> This step now logs immediately with the exact address it's trying, and
+                  again every few attempts ("still waiting... (Ns elapsed)") - it previously ran completely
+                  silently for up to ~10 minutes, indistinguishable in the log from an actual hang. Partway
+                  through that window it also cross-checks the hypervisor's own <Code>get_guest_ip()</Code>{" "}
+                  against the address it's been trying: for a DHCP deployment,{" "}
+                  <Code>guest_reported_ip</Code> was captured early (whichever callback landed first, often
+                  the specialize-pass one, well before Setup's own final reboot into the running OS) - DHCP
+                  usually renews the same lease across that reboot, but not always, and if the guest came
+                  back on a different address this is what catches it, switching (and persisting the
+                  correction for a subsequent retry) instead of exhausting the whole window against a
+                  now-stale one. If the logged address still never becomes reachable even after that: it's
+                  a real network-path problem specifically in the DeployCore-to-guest direction (the guest
+                  clearly reached DeployCore fine, or there'd be no address here at all) - check whether
+                  DeployCore's own host can reach that address on port 5985 at all, a one-way
+                  firewall/segmentation gap between them would look exactly like this.</>,
                 <><strong>Static IP configured but the guest still shows DHCP after install?</strong>{" "}
                   <Code>Microsoft-Windows-TCPIP</Code>'s <Code>Identifier</Code> matches the NIC by MAC
                   address (assigned explicitly to the VM at creation time, see "Unattended Windows Setup,
