@@ -318,6 +318,38 @@ class ESXiDriver(HypervisorDriver):
     async def detach_floppy(self, vm_ref: str, unit: int = 0) -> None:
         await asyncio.to_thread(self._detach_floppy_sync, vm_ref, unit)
 
+    def _remove_floppy_sync(self, vm_ref: str, unit: int) -> None:
+        service_instance = self._connect_sync()
+        try:
+            vm = self._find_vm_sync(service_instance, vm_ref)
+            existing = next(
+                (
+                    d
+                    for d in vm.config.hardware.device
+                    if isinstance(d, vim.vm.device.VirtualFloppy) and d.unitNumber == unit
+                ),
+                None,
+            )
+            if existing is None:
+                return
+            # Operation.remove, unlike _detach_floppy_sync's edit-to-empty
+            # above: only valid while the VM is powered off (confirmed
+            # live, vim.fault.InvalidPowerState, "cannot be performed in
+            # the current state (Powered on)" otherwise) - the caller
+            # (provision.py's _shutdown_remove_floppy_and_power_on) only
+            # ever calls this after confirming the VM has actually
+            # reached poweredOff.
+            device_spec = vim.vm.device.VirtualDeviceSpec()
+            device_spec.device = existing
+            device_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+            config = vim.vm.ConfigSpec(deviceChange=[device_spec])
+            WaitForTask(vm.ReconfigVM_Task(spec=config))
+        finally:
+            connect.Disconnect(service_instance)
+
+    async def remove_floppy(self, vm_ref: str, unit: int = 0) -> None:
+        await asyncio.to_thread(self._remove_floppy_sync, vm_ref, unit)
+
     def _detach_iso_sync(self, vm_ref: str, unit: int) -> None:
         service_instance = self._connect_sync()
         try:

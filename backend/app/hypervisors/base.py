@@ -83,6 +83,19 @@ class HypervisorDriver(ABC):
         entry lingering on the VM is harmless."""
 
     @abstractmethod
+    async def remove_floppy(self, vm_ref: str, unit: int = 0) -> None:
+        """Actually removes the device, unlike detach_floppy above - only
+        valid while the VM is powered off (confirmed against the vSphere
+        API's own requirement, InvalidPowerState/not_allowed_in_current_state
+        otherwise), so only ever called from provision.py's
+        _shutdown_remove_floppy_and_power_on, which piggybacks this
+        one-time cleanup onto the VMware Tools driver-install reboot -
+        already a full power cycle through the hypervisor rather than a
+        guest-initiated restart, the one point in the pipeline the VM is
+        genuinely powered off at all. A no-op, not an error, if the
+        device is already gone."""
+
+    @abstractmethod
     async def set_boot_order(self, vm_ref: str, device_order: list[str]) -> None: ...
 
     @abstractmethod

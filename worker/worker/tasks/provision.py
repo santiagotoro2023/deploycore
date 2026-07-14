@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 from app.config import get_settings
 from app.db import SessionLocal
 from app.hypervisors import get_driver
-from app.hypervisors.base import HypervisorDriver, VmSpec
+from app.hypervisors.base import HypervisorDriver, PowerState, VmSpec
 from app.hypervisors.defaults import HYPERVISOR_DEFAULTS, generate_mac_address
 from app.models.app_asset import AppAsset
 from app.models.deployment import Deployment, DeploymentState, IpMode, LogLevel
@@ -546,6 +546,23 @@ async def _reboot_and_wait(
         client.reboot()
     except Exception:  # noqa: BLE001 - expected: the guest tearing down the WinRM connection mid-reboot
         pass
+    await _wait_for_guest_settled(db, deployment, stage, client_factory, boot_time_before, failure_message)
+
+
+async def _wait_for_guest_settled(
+    db, deployment: Deployment, stage: str, client_factory, boot_time_before: str, failure_message: str
+) -> None:
+    """Shared tail of _reboot_and_wait and
+    _shutdown_remove_floppy_and_power_on below: both trigger a restart
+    their own way (a guest-initiated shutdown.exe /r, or a full
+    hypervisor power cycle), then wait for it to come back the same way
+    - WINRM_SETTLE_CONSECUTIVE_CHECKS in a row, not just one (see
+    _reboot_and_wait's own docstring for why), each against a brand-new
+    WinRMClient (a real reboot severs the underlying TCP connection
+    abruptly, and pooled HTTP connections can get stuck reusing a
+    half-dead socket rather than opening a fresh one), then confirmed
+    against the guest's own LastBootUpTime, not just reachability, that
+    a restart actually happened at all."""
     await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
     consecutive_ok = 0
     for _ in range(WINRM_REACHABILITY_MAX_ATTEMPTS):
@@ -579,6 +596,77 @@ async def _reboot_and_wait(
             consecutive_ok = 0
         await asyncio.sleep(WINRM_REACHABILITY_POLL_INTERVAL_SECONDS)
     raise RuntimeError(failure_message)
+
+
+SHUTDOWN_POLL_INTERVAL_SECONDS = 5
+SHUTDOWN_MAX_ATTEMPTS = 24  # ~2 minutes - a clean Windows shutdown is fast, well short of this
+
+
+async def _shutdown_remove_floppy_and_power_on(
+    db, deployment: Deployment, stage: str, driver: HypervisorDriver, client: WinRMClient, client_factory,
+    failure_message: str,
+) -> None:
+    """Piggybacks the floppy device's one-time removal onto a reboot
+    that's already happening anyway (the VMware Tools driver install
+    right before this needs one regardless, see run_post_install) -
+    HypervisorDriver.remove_floppy only works while the VM is genuinely
+    powered off (confirmed against the vSphere API's own
+    InvalidPowerState/not_allowed_in_current_state requirement), unlike
+    every other reboot in this pipeline, which is a guest-initiated
+    restart that never actually reaches poweredOff at the hypervisor
+    level. shutdown.exe /s, not /r: same reasoning as
+    WinRMClient.reboot's own choice of shutdown.exe over
+    Restart-Computer, just powering off instead of restarting.
+
+    Best-effort throughout, same as everything else around VMware Tools:
+    if the guest never actually reaches poweredOff in time, it's powered
+    back on regardless rather than left off indefinitely - the floppy
+    device just doesn't get removed this run, no worse than before this
+    existed. If remove_floppy itself fails, that's logged and moved
+    past too - the device was already harmless (ejected, empty) either
+    way, removing it outright is a nice-to-have, not something worth
+    stalling a deployment over."""
+    boot_time_before = await _get_boot_time(client)
+    try:
+        client.shutdown()
+    except Exception:  # noqa: BLE001 - expected: the guest tearing down the WinRM connection mid-shutdown
+        pass
+
+    reached_poweroff = False
+    for _ in range(SHUTDOWN_MAX_ATTEMPTS):
+        if await driver.get_power_state(deployment.vm_moref) == PowerState.POWERED_OFF:
+            reached_poweroff = True
+            break
+        await asyncio.sleep(SHUTDOWN_POLL_INTERVAL_SECONDS)
+
+    if not reached_poweroff:
+        await log(
+            db, deployment, stage,
+            "guest did not reach powered-off in time, continuing without removing the floppy device",
+            level=LogLevel.WARN,
+        )
+    else:
+        try:
+            await driver.remove_floppy(deployment.vm_moref)
+            await log(db, deployment, stage, "floppy device removed")
+        except Exception as exc:  # noqa: BLE001 - best-effort, never worth failing a deployment over
+            await log(
+                db, deployment, stage, f"failed to remove the floppy device: {exc}", level=LogLevel.WARN,
+            )
+
+    # Only power on if it's not already on: if the shutdown never
+    # actually took (reached_poweroff False almost always means this,
+    # rather than a still-shutting-down VM this poll interval would
+    # have caught), PowerOnVM_Task on an already-running VM raises
+    # vim.fault.InvalidPowerState - checked explicitly rather than
+    # letting that turn a harmless "shutdown didn't happen" into a
+    # failed deployment. _wait_for_guest_settled still runs either way:
+    # if the guest was never actually down, it'll be reachable almost
+    # immediately and its own boot-time comparison already reports that
+    # correctly (a WARN, not a false "rebooted" claim).
+    if await driver.get_power_state(deployment.vm_moref) != PowerState.POWERED_ON:
+        await driver.power_on(deployment.vm_moref)
+    await _wait_for_guest_settled(db, deployment, stage, client_factory, boot_time_before, failure_message)
 
 
 async def _guest_reachable_over_winrm(
@@ -898,9 +986,12 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         level=LogLevel.WARN,
                     )
                 elif tools_result.installed:
-                    await log(db, deployment, "post_install", "VMware Tools installed, rebooting to apply driver updates")
-                    await _reboot_and_wait(
-                        db, deployment, "post_install", client,
+                    await log(
+                        db, deployment, "post_install",
+                        "VMware Tools installed, shutting down to apply driver updates and remove the floppy device",
+                    )
+                    await _shutdown_remove_floppy_and_power_on(
+                        db, deployment, "post_install", driver, client,
                         lambda: WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password),
                         "guest did not come back reachable after the VMware Tools reboot",
                     )

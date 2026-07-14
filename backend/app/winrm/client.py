@@ -688,6 +688,15 @@ Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
         which reliably triggers a real restart in this same context."""
         return self.run_ps("shutdown.exe /r /t 0 /f")
 
+    def shutdown(self) -> WinRMResult:
+        """Same shutdown.exe reasoning as reboot() above, /s instead of
+        /r - a full power-off through the guest OS rather than a
+        restart, for the one place this pipeline needs the VM to
+        actually reach a powered-off state at the hypervisor level (the
+        floppy device can only be removed, not just ejected, while
+        powered off - see provision.py's _shutdown_remove_floppy_and_power_on)."""
+        return self.run_ps("shutdown.exe /s /t 0 /f")
+
     def is_reachable(self) -> bool:
         try:
             return self.run_ps("Write-Output ok").ok
