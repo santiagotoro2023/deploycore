@@ -1,4 +1,4 @@
-import { LogOut, Pencil, Plus, Power, Trash2, X } from "lucide-react";
+import { KeyRound, LogOut, Pencil, Plus, Power, Trash2, X } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import Avatar from "../components/Avatar";
@@ -18,6 +18,7 @@ export default function Users() {
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
   const [confirmLogout, setConfirmLogout] = useState<User | null>(null);
+  const [confirmReset2fa, setConfirmReset2fa] = useState<User | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<User | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -69,6 +70,14 @@ export default function Users() {
     await api.post(`/users/${confirmLogout.id}/force-logout`);
     setConfirmLogout(null);
     setToast(`Signed out ${confirmLogout.username} everywhere.`);
+  }
+
+  async function reset2fa() {
+    if (!confirmReset2fa) return;
+    await api.post(`/users/${confirmReset2fa.id}/2fa/disable`);
+    setConfirmReset2fa(null);
+    setToast(`2FA reset for ${confirmReset2fa.username}.`);
+    await load();
   }
 
   async function toggleActive(u: User) {
@@ -192,6 +201,15 @@ export default function Users() {
                   <LogOut size={12} strokeWidth={1.75} />
                   Force logout
                 </button>
+                {u.totp_enabled && (
+                  <button
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                    onClick={() => setConfirmReset2fa(u)}
+                  >
+                    <KeyRound size={12} strokeWidth={1.75} />
+                    Reset 2FA
+                  </button>
+                )}
                 {u.id !== currentUser?.id && (
                   <button
                     className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
@@ -237,6 +255,15 @@ export default function Users() {
         confirmLabel="Sign out everywhere"
         onConfirm={forceLogout}
         onCancel={() => setConfirmLogout(null)}
+      />
+
+      <ConfirmDialog
+        open={!!confirmReset2fa}
+        title="Reset 2FA"
+        message={`Disable two-factor authentication for ${confirmReset2fa?.username}. They'll be able to sign in with just their password, and can set 2FA up again themselves afterward. Use this if they've lost their authenticator device.`}
+        confirmLabel="Reset 2FA"
+        onConfirm={reset2fa}
+        onCancel={() => setConfirmReset2fa(null)}
       />
 
       <ConfirmDialog

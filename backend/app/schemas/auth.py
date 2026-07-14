@@ -1,12 +1,24 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.models.user import Role
 from app.schemas.user import UserRead
+from app.security.auth import validate_password_strength
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        validate_password_strength(value)
+        return value
 
 
 class TokenResponse(BaseModel):

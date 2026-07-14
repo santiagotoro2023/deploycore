@@ -221,6 +221,28 @@ async def get_user_avatar(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     return FileResponse(path, media_type=content_type)
 
 
+@router.post("/{user_id}/2fa/disable", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_admin_global])
+async def admin_disable_totp(
+    user_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> None:
+    """Account-recovery path for a user who's lost their authenticator
+    device: unlike the self-service /auth/2fa/disable, no code is
+    required here - an admin who can already reset this user's password
+    (see update_user's password field) is equally trusted to clear their
+    2FA. Doesn't touch active sessions, unlike a password reset:
+    resetting 2FA only affects future logins, not tokens already issued."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    user.totp_enabled = False
+    user.totp_secret_encrypted = None
+    audit.record(
+        db, action="user.2fa_reset", target_type="user", user_id=current_user.id, target_id=user.id,
+        detail={"username": user.username},
+    )
+    await db.commit()
+
+
 @router.post("/{user_id}/force-logout", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_admin_global])
 async def force_logout(
     user_id: uuid.UUID,

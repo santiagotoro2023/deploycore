@@ -13,6 +13,7 @@ export default function AccountSettings() {
       <h1 className="text-lg font-semibold">Account</h1>
       <div className="columns-1 gap-4 xl:columns-2 [&>*]:mb-4 [&>*]:break-inside-avoid">
         <ProfilePicturePanel />
+        <ChangePasswordPanel />
         <TwoFactorPanel />
         <SessionsPanel />
         <NotificationPreferencesPanel />
@@ -186,6 +187,77 @@ function NotificationPreferencesPanel() {
       </button>
       {saved && <div className="mt-3 text-xs text-emerald-600">Saved.</div>}
     </div>
+  );
+}
+
+function ChangePasswordPanel() {
+  const { logoutEverywhere } = useAuth();
+  const navigate = useNavigate();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (newPassword !== confirmPassword) {
+      setError("New password and confirmation don't match.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.post("/auth/change-password", { current_password: currentPassword, new_password: newPassword });
+      // Same as "Sign out everywhere" below: the backend revokes every
+      // session for this account (including the one making this very
+      // request) once the password changes, so there's nothing left to
+      // stay on this page for.
+      await logoutEverywhere();
+      navigate("/login");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to change password.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-5">
+      <h2 className="mb-1 text-sm font-semibold">Password</h2>
+      <p className="mb-3 text-xs text-neutral-500">Changing it signs you out everywhere, including this device.</p>
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Current password</label>
+      <input
+        type="password"
+        autoComplete="current-password"
+        className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+        value={currentPassword}
+        onChange={(e) => setCurrentPassword(e.target.value)}
+      />
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">New password</label>
+      <input
+        type="password"
+        autoComplete="new-password"
+        className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+        value={newPassword}
+        onChange={(e) => setNewPassword(e.target.value)}
+      />
+      <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Confirm new password</label>
+      <input
+        type="password"
+        autoComplete="new-password"
+        className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+        value={confirmPassword}
+        onChange={(e) => setConfirmPassword(e.target.value)}
+      />
+      {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
+      <button
+        type="submit"
+        disabled={saving || !currentPassword || !newPassword}
+        className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+      >
+        {saving ? "Changing..." : "Change password"}
+      </button>
+    </form>
   );
 }
 
