@@ -247,7 +247,7 @@ function DiskLayoutForm({
   );
   const [extraVolumes, setExtraVolumes] = useState<ExtraVolumeForm[]>(existing?.layout_json.extra_volumes ?? []);
   const [recoveryEnabled, setRecoveryEnabled] = useState(!!existing?.layout_json.recovery_size_mb);
-  const [recoverySizeMb, setRecoverySizeMb] = useState(existing?.layout_json.recovery_size_mb ?? 1000);
+  const [recoverySizeMb, setRecoverySizeMb] = useState(existing?.layout_json.recovery_size_mb ?? 1024);
   const [postInstallScripts, setPostInstallScripts] = useState<PostInstallScriptForm[]>(existing?.post_install_scripts ?? []);
   const [error, setError] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);

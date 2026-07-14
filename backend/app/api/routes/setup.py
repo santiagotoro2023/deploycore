@@ -27,7 +27,7 @@ DEFAULT_DISK_LAYOUT_NAME = "Windows Server (Recovery Mid-Disk)"
 DEFAULT_DISK_LAYOUT_JSON = {
     "efi_size_mb": 500,
     "msr_size_mb": 128,
-    "recovery_size_mb": 1000,
+    "recovery_size_mb": 1024,
     "os_volume": "remaining",
     "extra_volumes": [],
 }
