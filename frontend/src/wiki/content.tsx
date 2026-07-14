@@ -1250,9 +1250,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   for an ISO the boot-prompt patch was skipped on (or any other firmware prompt). Sized to
                   bracket when a "press any key" prompt would appear and stop before Setup's GUI is up,
                   where blind Enters would start landing on real dialogs instead.</>,
-                <>A sparser round after that, one Enter every 8 seconds for about two minutes, timed for
-                  whenever Setup's GUI actually finishes loading (which varies far more than the boot
-                  prompt's own timing), for the windowsPE-stage language/keyboard screen quirk above.</>,
+                <>A sparser round after that, one Enter every 5 seconds for about 45 seconds (60 seconds
+                  total from power-on), timed for whenever Setup's GUI actually finishes loading (which
+                  varies far more than the boot prompt's own timing), for the windowsPE-stage
+                  language/keyboard screen quirk above.</>,
               ]}
             />
             <P>

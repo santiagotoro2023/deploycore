@@ -733,10 +733,11 @@ pending → creating_vm → booting → installing_os → post_install → confi
   Microsoft for exactly this kind of unattended deployment; `iso_remaster.py`
   finds it and swaps it into the boot catalog's actual slot via `xorriso`,
   rewriting only that one boot image. Deployments still send a tight round
-  of synthetic Enter keypresses right after power-on as a safety net for
-  ISOs where the swap wasn't possible (media without that second boot
-  image), plus a second, sparser round over the next couple of minutes for
-  Windows Setup's own windowsPE-stage language/time/keyboard screen, which
+  of synthetic Enter keypresses right after power-on (15s, one per second)
+  as a safety net for ISOs where the swap wasn't possible (media without
+  that second boot image), plus a second, sparser round over the next 45
+  seconds (60s total from power-on) for Windows Setup's own
+  windowsPE-stage language/time/keyboard screen, which
   has a long-standing upstream quirk on some locales where `InputLocale`
   isn't honored on that one specific screen even though the rest of the
   answer file (including the specialize-pass locale, see below) applies

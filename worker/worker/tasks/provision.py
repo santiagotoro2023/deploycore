@@ -106,12 +106,16 @@ BOOT_KEYPRESS_INTERVAL_SECONDS = 1
 # format/keyboard, is shown unconditionally regardless. Its values are
 # already correct (from the answer file, or the install media's own
 # single language), so one Enter just advances past it. Timing here
-# varies a lot more (however long WinPE takes to finish loading its
-# GUI), so this phase is sparser than phase 1, not to avoid missing it,
-# but to avoid repeated blind Enters landing on whatever real dialog
-# Setup has moved on to once this screen's already been dismissed.
-LANGUAGE_SCREEN_KEYPRESS_ATTEMPTS = 12
-LANGUAGE_SCREEN_KEYPRESS_INTERVAL_SECONDS = 8
+# varies more than phase 1 (however long WinPE takes to finish loading
+# its GUI), so this phase is sparser, not to avoid missing it, but to
+# avoid repeated blind Enters landing on whatever real dialog Setup has
+# moved on to once this screen's already been dismissed. Kept to a
+# 45-second window (60s combined with phase 1's own 15s) - explicitly
+# requested to be short rather than the "couple of minutes" this used
+# to run for, on the theory that WinPE's GUI is reliably up well within
+# that window on real hardware/hypervisors this targets.
+LANGUAGE_SCREEN_KEYPRESS_ATTEMPTS = 9
+LANGUAGE_SCREEN_KEYPRESS_INTERVAL_SECONDS = 5
 
 WINRM_REACHABILITY_POLL_INTERVAL_SECONDS = 10
 WINRM_REACHABILITY_MAX_ATTEMPTS = 60  # ~10 minutes
