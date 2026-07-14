@@ -764,6 +764,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                   Update step entirely for deployments where speed matters more than shipping fully
                   patched - see the Windows Update paragraph under "Deployments" below for what the step
                   actually does and its size-skip trade-off.</>,
+                <>An on-by-default <strong>install VMware Tools</strong> toggle. Off skips mounting and
+                  installing Tools entirely - see the VMware Tools paragraph under "Deployments" below for
+                  what that step actually does (and why it mounts/ejects the installer media rather than
+                  leaving a CD-ROM device permanently attached).</>,
               ]}
             />
             <P>

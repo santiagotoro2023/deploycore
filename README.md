@@ -575,10 +575,15 @@ org-scoped copy.
   to install, with optional per-attachment argument overrides, run after
   roles and before post-install scripts, see the App Assets section above),
   and a list of post-install PowerShell scripts (name + script text, run in
-  order after both), and an on-by-default **install Windows updates**
+  order after both), an on-by-default **install Windows updates**
   toggle (see the Deployments pipeline section below for what that step
   actually does and its size-skip trade-off) - off for deployments where
-  speed matters more than shipping fully patched. Each role is installed
+  speed matters more than shipping fully patched - and an on-by-default
+  **install VMware Tools** toggle (see the same section for
+  `mount_tools_installer`/`install_vmware_tools`/eject-after) - off for a
+  non-ESXi host in the future, a host without the Tools ISO in its own
+  depot, or simply a deployment that doesn't need `get_guest_ip()` (e.g.
+  a DHCP deployment reachable some other way already). Each role is installed
   with a plain `Install-WindowsFeature`, nothing more: AD Domain Services
   installs the role binaries only, not a forest/domain promotion or any
   GPO/OU/delegation setup, do that yourself afterward (`Install-ADDSForest`
