@@ -900,6 +900,17 @@ pending → creating_vm → booting → installing_os → post_install → confi
   that already exists and is already empty: the Windows ISO's own
   CD-ROM device, ejected (not removed) by the Setup-complete callback
   handler well before post-install's VMware Tools step ever runs.
+  `vm.MountToolsInstaller()` itself is called directly, not wrapped in
+  `WaitForTask()`: confirmed live (`'NoneType' object has no attribute
+  '_stub'`) and against pyVmomi's own docs that, unlike most vSphere
+  operations, this call is synchronous and returns `None`, not a `Task`
+  to wait on - `WaitForTask(None)` failed on the client side, which
+  meant the exception handler around it treated the whole mount as
+  failed and never learned which unit to eject later, even though the
+  mount itself had already succeeded on the ESXi side by then (confirmed
+  live too: `install_vmware_tools` found the actually-mounted installer
+  and ran it successfully regardless, just with the eject-after-use step
+  silently skipped since no unit number was ever recorded).
   `mount_tools_installer` identifies exactly which CD-ROM device the
   mount landed on (by its backing, not by assuming a fixed unit -
   nothing in the vSphere API contract guarantees which of the VM's

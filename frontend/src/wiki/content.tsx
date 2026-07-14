@@ -1396,7 +1396,16 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               install, dead weight for the rest of the VM's life — it simply runs late enough to reuse a
               device that already exists and is already empty: the Windows ISO's own CD-ROM device, ejected
               (not removed) by the Setup-complete callback handler well before this step ever runs.{" "}
-              <Code>mount_tools_installer</Code> identifies exactly which CD-ROM device the mount landed on
+              <Code>vm.MountToolsInstaller()</Code> itself is called directly, not wrapped in{" "}
+              <Code>WaitForTask()</Code>: confirmed live ("'NoneType' object has no attribute '_stub'") and
+              against pyVmomi's own docs that, unlike most vSphere operations, this call is synchronous and
+              returns <Code>None</Code>, not a <Code>Task</Code> to wait on — <Code>WaitForTask(None)</Code>{" "}
+              failed on the client side, which meant the exception handler around it treated the whole
+              mount as failed and never learned which unit to eject later, even though the mount itself had
+              already succeeded on the ESXi side by then (confirmed live too:{" "}
+              <Code>install_vmware_tools</Code> found the actually-mounted installer and ran it successfully
+              regardless, just with the eject-after-use step silently skipped since no unit number was ever
+              recorded). <Code>mount_tools_installer</Code> identifies exactly which CD-ROM device the mount landed on
               (by its backing, not by assuming a fixed unit — nothing in the vSphere API contract
               guarantees which of the VM's existing devices it picks) and returns that unit number; once{" "}
               <Code>install_vmware_tools</Code> (and, if it actually installed something, the reboot right
