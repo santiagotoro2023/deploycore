@@ -47,13 +47,17 @@ jobs:
           Copy-Item remote-agent/tray/bin/DeployCoreTray.exe remote-agent/wix/DeployCoreTray.exe
           if (-not (Test-Path remote-agent/wix/deploycore.ico)) { throw "icon was not generated" }
 
+      # Pinned to WiX 5: WiX 6+/7 gate behind the paid Open Source Maintenance
+      # Fee EULA (error WIX7015), which can't be accepted non-interactively in
+      # CI. WiX 5 is the last MIT/free line and uses the same v4 schema + the
+      # Wix4UtilCA_X64/WixQuietExec64 custom-action reference this .wxs uses.
       - name: Install WiX
         shell: pwsh
-        run: dotnet tool install --global wix
+        run: dotnet tool install --global wix --version 5.0.2
 
       - name: Add WiX UtilExtension
         shell: pwsh
-        run: wix extension add -g WixToolset.Util.wixext
+        run: wix extension add -g WixToolset.Util.wixext/5.0.2
 
       - name: Build MSI
         shell: pwsh
