@@ -553,7 +553,7 @@ async def _wait_for_guest_settled(
     db, deployment: Deployment, stage: str, client_factory, boot_time_before: str, failure_message: str
 ) -> None:
     """Shared tail of _reboot_and_wait and
-    _shutdown_remove_floppy_and_power_on below: both trigger a restart
+    _shutdown_remove_media_and_power_on below: both trigger a restart
     their own way (a guest-initiated shutdown.exe /r, or a full
     hypervisor power cycle), then wait for it to come back the same way
     - WINRM_SETTLE_CONSECUTIVE_CHECKS in a row, not just one (see
@@ -602,30 +602,34 @@ SHUTDOWN_POLL_INTERVAL_SECONDS = 5
 SHUTDOWN_MAX_ATTEMPTS = 24  # ~2 minutes - a clean Windows shutdown is fast, well short of this
 
 
-async def _shutdown_remove_floppy_and_power_on(
+async def _shutdown_remove_media_and_power_on(
     db, deployment: Deployment, stage: str, driver: HypervisorDriver, client: WinRMClient, client_factory,
-    failure_message: str,
+    failure_message: str, cdrom_units: set[int] = frozenset(),
 ) -> None:
-    """Piggybacks the floppy device's one-time removal onto a reboot
-    that's already happening anyway (the VMware Tools driver install
-    right before this needs one regardless, see run_post_install) -
-    HypervisorDriver.remove_floppy only works while the VM is genuinely
-    powered off (confirmed against the vSphere API's own
-    InvalidPowerState/not_allowed_in_current_state requirement), unlike
-    every other reboot in this pipeline, which is a guest-initiated
-    restart that never actually reaches poweredOff at the hypervisor
-    level. shutdown.exe /s, not /r: same reasoning as
-    WinRMClient.reboot's own choice of shutdown.exe over
-    Restart-Computer, just powering off instead of restarting.
+    """Piggybacks the floppy device's (and any given CD-ROM devices')
+    one-time removal onto a reboot that's already happening anyway (the
+    VMware Tools driver install right before this needs one regardless,
+    see run_post_install) - HypervisorDriver.remove_floppy/remove_cdrom
+    only work while the VM is genuinely powered off (confirmed against
+    the vSphere API's own InvalidPowerState/not_allowed_in_current_state
+    requirement), unlike every other reboot in this pipeline, which is a
+    guest-initiated restart that never actually reaches poweredOff at
+    the hypervisor level. cdrom_units is normally just whichever unit
+    mount_tools_installer reported (see run_post_install) - detach_iso
+    alone (ejecting, not removing) was all that ever ran for it before,
+    leaving an empty-but-present CD-ROM device on every completed
+    deployment indefinitely, confirmed live. shutdown.exe /s, not /r:
+    same reasoning as WinRMClient.reboot's own choice of shutdown.exe
+    over Restart-Computer, just powering off instead of restarting.
 
     Best-effort throughout, same as everything else around VMware Tools:
     if the guest never actually reaches poweredOff in time, it's powered
-    back on regardless rather than left off indefinitely - the floppy
-    device just doesn't get removed this run, no worse than before this
-    existed. If remove_floppy itself fails, that's logged and moved
-    past too - the device was already harmless (ejected, empty) either
-    way, removing it outright is a nice-to-have, not something worth
-    stalling a deployment over."""
+    back on regardless rather than left off indefinitely - the floppy/
+    CD-ROM devices just don't get removed this run, no worse than
+    before this existed. If an individual removal fails, that's logged
+    and moved past too - each device was already harmless (ejected,
+    empty) either way, removing it outright is a nice-to-have, not
+    something worth stalling a deployment over."""
     boot_time_before = await _get_boot_time(client)
     try:
         client.shutdown()
@@ -642,7 +646,7 @@ async def _shutdown_remove_floppy_and_power_on(
     if not reached_poweroff:
         await log(
             db, deployment, stage,
-            "guest did not reach powered-off in time, continuing without removing the floppy device",
+            "guest did not reach powered-off in time, continuing without removing the floppy/CD-ROM devices",
             level=LogLevel.WARN,
         )
     else:
@@ -653,6 +657,15 @@ async def _shutdown_remove_floppy_and_power_on(
             await log(
                 db, deployment, stage, f"failed to remove the floppy device: {exc}", level=LogLevel.WARN,
             )
+        for unit in cdrom_units:
+            try:
+                await driver.remove_cdrom(deployment.vm_moref, unit)
+                await log(db, deployment, stage, f"CD-ROM device (unit {unit}) removed")
+            except Exception as exc:  # noqa: BLE001 - best-effort, never worth failing a deployment over
+                await log(
+                    db, deployment, stage, f"failed to remove CD-ROM device (unit {unit}): {exc}",
+                    level=LogLevel.WARN,
+                )
 
     # Only power on if it's not already on: if the shutdown never
     # actually took (reached_poweroff False almost always means this,
@@ -988,22 +1001,35 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                 elif tools_result.installed:
                     await log(
                         db, deployment, "post_install",
-                        "VMware Tools installed, shutting down to apply driver updates and remove the floppy device",
+                        "VMware Tools installed, shutting down to apply driver updates and remove leftover media devices",
                     )
-                    await _shutdown_remove_floppy_and_power_on(
+                    # Removes the floppy and the CD-ROM device
+                    # mount_tools_installer used, not just ejects them -
+                    # the one point in the pipeline the VM is genuinely
+                    # powered off, since InvalidPowerState rules it out
+                    # everywhere else. Nothing left to eject below once
+                    # this runs: set to None so the fallback further down
+                    # (for the "mounted but never actually installed"
+                    # case, which never reaches a powered-off VM) doesn't
+                    # try a second time.
+                    await _shutdown_remove_media_and_power_on(
                         db, deployment, "post_install", driver, client,
                         lambda: WinRMClient(guest_ip, template.local_admin_username, template.local_admin_password),
                         "guest did not come back reachable after the VMware Tools reboot",
+                        cdrom_units={tools_cdrom_unit} if tools_cdrom_unit is not None else set(),
                     )
+                    tools_cdrom_unit = None
                 else:
                     await log(db, deployment, "post_install", "no VMware Tools installer found (not an ESXi host, or Tools ISO wasn't mounted)")
 
-                # Cleans up after itself either way - a completed
-                # deployment's VM should look the same whether or not Tools
-                # ever got installed, not carry mounted installer media
-                # around indefinitely just because this run happened to need
-                # it briefly. Only ejects if mount_tools_installer actually
-                # reported a unit above; nothing to eject otherwise.
+                # Fallback, eject-only cleanup: only reached when the
+                # shutdown/full-removal path above never ran (Tools
+                # wasn't actually installed this run, or the mount call
+                # itself failed) - the VM never reaches powered-off in
+                # that case, so full removal isn't possible, but
+                # whatever mount_tools_installer did manage to mount is
+                # still worth ejecting rather than left mounted
+                # indefinitely.
                 if tools_cdrom_unit is not None:
                     try:
                         await driver.detach_iso(deployment.vm_moref, tools_cdrom_unit)

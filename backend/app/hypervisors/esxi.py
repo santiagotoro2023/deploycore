@@ -336,7 +336,7 @@ class ESXiDriver(HypervisorDriver):
             # above: only valid while the VM is powered off (confirmed
             # live, vim.fault.InvalidPowerState, "cannot be performed in
             # the current state (Powered on)" otherwise) - the caller
-            # (provision.py's _shutdown_remove_floppy_and_power_on) only
+            # (provision.py's _shutdown_remove_media_and_power_on) only
             # ever calls this after confirming the VM has actually
             # reached poweredOff.
             device_spec = vim.vm.device.VirtualDeviceSpec()
@@ -367,6 +367,28 @@ class ESXiDriver(HypervisorDriver):
 
     async def detach_iso(self, vm_ref: str, unit: int) -> None:
         await asyncio.to_thread(self._detach_iso_sync, vm_ref, unit)
+
+    def _remove_cdrom_sync(self, vm_ref: str, unit: int) -> None:
+        service_instance = self._connect_sync()
+        try:
+            vm, existing = self._cdrom_device_sync(service_instance, vm_ref, unit)
+            if existing is None:
+                return
+            # Operation.remove, unlike _detach_iso_sync's edit-to-empty
+            # above: only valid while the VM is powered off, same
+            # InvalidPowerState constraint as remove_floppy - only ever
+            # called from provision.py's _shutdown_remove_media_and_power_on,
+            # which confirms poweredOff first.
+            device_spec = vim.vm.device.VirtualDeviceSpec()
+            device_spec.device = existing
+            device_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+            config = vim.vm.ConfigSpec(deviceChange=[device_spec])
+            WaitForTask(vm.ReconfigVM_Task(spec=config))
+        finally:
+            connect.Disconnect(service_instance)
+
+    async def remove_cdrom(self, vm_ref: str, unit: int) -> None:
+        await asyncio.to_thread(self._remove_cdrom_sync, vm_ref, unit)
 
     def _mount_tools_installer_sync(self, vm_ref: str) -> int | None:
         """Called from post-install (see provision.py's run_post_install),

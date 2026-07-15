@@ -694,7 +694,7 @@ Remove-Item -Path $marker -Force -ErrorAction SilentlyContinue
         restart, for the one place this pipeline needs the VM to
         actually reach a powered-off state at the hypervisor level (the
         floppy device can only be removed, not just ejected, while
-        powered off - see provision.py's _shutdown_remove_floppy_and_power_on)."""
+        powered off - see provision.py's _shutdown_remove_media_and_power_on)."""
         return self.run_ps("shutdown.exe /s /t 0 /f")
 
     def is_reachable(self) -> bool:

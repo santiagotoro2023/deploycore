@@ -56,6 +56,15 @@ class HypervisorDriver(ABC):
     async def detach_iso(self, vm_ref: str, unit: int) -> None: ...
 
     @abstractmethod
+    async def remove_cdrom(self, vm_ref: str, unit: int) -> None:
+        """Actually removes the device, unlike detach_iso above - only
+        valid while the VM is powered off (same InvalidPowerState
+        constraint as remove_floppy below), so only ever called from
+        provision.py's _shutdown_remove_media_and_power_on, the one
+        point in the pipeline the VM is genuinely powered off. A no-op,
+        not an error, if the device is already gone."""
+
+    @abstractmethod
     async def mount_tools_installer(self, vm_ref: str) -> int | None:
         """Mounts this hypervisor's own bundled guest-tools installer ISO
         onto whichever CD-ROM device is available, returning that
@@ -88,7 +97,7 @@ class HypervisorDriver(ABC):
         valid while the VM is powered off (confirmed against the vSphere
         API's own requirement, InvalidPowerState/not_allowed_in_current_state
         otherwise), so only ever called from provision.py's
-        _shutdown_remove_floppy_and_power_on, which piggybacks this
+        _shutdown_remove_media_and_power_on, which piggybacks this
         one-time cleanup onto the VMware Tools driver-install reboot -
         already a full power cycle through the hypervisor rather than a
         guest-initiated restart, the one point in the pipeline the VM is
