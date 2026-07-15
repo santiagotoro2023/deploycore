@@ -36,6 +36,18 @@ jobs:
         shell: pwsh
         run: Copy-Item backend/app/services/remote_agent_install.ps1 remote-agent/wix/Install-DeployCoreAgent.ps1
 
+      # Bundle the stock RustDesk client installer itself, fetched here (this
+      # runner has internet) so the install script never needs outbound
+      # internet on the target machine - a VM the DeployCore deployment
+      # pipeline provisions commonly has none. Version must match
+      # $RustDeskVersion in remote_agent_install.ps1.
+      - name: Download RustDesk client installer
+        shell: pwsh
+        run: |
+          $version = "1.3.8"
+          Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/download/$version/rustdesk-$version-x86_64.msi" -OutFile remote-agent/wix/rustdesk-x86_64.msi -UseBasicParsing
+          if (-not (Test-Path remote-agent/wix/rustdesk-x86_64.msi)) { throw "RustDesk client download failed" }
+
       # Build the branded tray companion, then use it to emit the DeployCore
       # .ico (drawn with GDI+, so no ImageMagick/Inkscape needed). Both get
       # staged next to the .wxs for the MSI to bundle.
@@ -64,19 +76,39 @@ jobs:
         working-directory: remote-agent/wix
         run: wix build DeployCoreRemoteAgent.wxs -ext WixToolset.Util.wixext -arch x64 -o DeployCoreRemoteAgent.msi
 
-      # Smoke test: install the package with SKIPRUN=1 (installs files +
-      # exercises the install sequencing without the agent custom action, which
-      # would need a live DeployCore server), confirm it landed, then uninstall.
-      # Catches WiX authoring / sequencing breakage before anything is published.
+      # Smoke test: install with SKIPRUN=1, which still runs RegisterAgentTask
+      # (only RunAgentTask, the one that would need a live server, is gated
+      # off) - so this exercises the exact schtasks /create command, including
+      # its nested quoting of SERVERURL/ENROLLTOKEN, that a real install
+      # depends on. Confirms the task's stored command actually contains the
+      # values it was given, catching a quoting mistake here instead of on a
+      # real deployment. Then cleans up and uninstalls.
       - name: Smoke test install
         shell: pwsh
         working-directory: remote-agent/wix
         run: |
           $msi = "DeployCoreRemoteAgent.msi"
-          $p = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "SKIPRUN=1", "/l*v", "install.log" -Wait -PassThru
+          $testUrl = "http://smoketest.example.com:8000"
+          $testToken = "smoketesttoken123"
+          $p = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "SKIPRUN=1", "SERVERURL=`"$testUrl`"", "ENROLLTOKEN=$testToken", "/l*v", "install.log" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 40; throw "MSI install failed with exit code $($p.ExitCode)" }
-          $script = Join-Path ${env:ProgramFiles} "DeployCore Remote Management Agent\Install-DeployCoreAgent.ps1"
+          $installDir = Join-Path ${env:ProgramFiles} "DeployCore Remote Management Agent"
+          $script = Join-Path $installDir "Install-DeployCoreAgent.ps1"
+          $runCmd = Join-Path $installDir "RunAgentInstall.cmd"
+          $bundledRustDesk = Join-Path $installDir "rustdesk-x86_64.msi"
           if (-not (Test-Path $script)) { throw "Installer did not place the agent script at $script" }
+          if (-not (Test-Path $runCmd)) { throw "Installer did not place the task launcher at $runCmd" }
+          if (-not (Test-Path $bundledRustDesk)) { throw "Installer did not bundle the RustDesk client at $bundledRustDesk" }
+
+          $taskInfo = & schtasks.exe /query /tn DeployCoreAgentInstall /fo list /v 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "RegisterAgentTask did not register the scheduled task: $taskInfo" }
+          $taskToRun = ($taskInfo | Select-String "^Task To Run:") -join "`n"
+          Write-Host "Registered task command: $taskToRun"
+          if ($taskToRun -notmatch [regex]::Escape($runCmd)) { throw "Scheduled task command doesn't reference $runCmd - quoting likely broke: $taskToRun" }
+          if ($taskToRun -notmatch [regex]::Escape($testUrl)) { throw "Scheduled task command lost the SERVERURL value - quoting likely broke: $taskToRun" }
+          if ($taskToRun -notmatch [regex]::Escape($testToken)) { throw "Scheduled task command lost the ENROLLTOKEN value - quoting likely broke: $taskToRun" }
+          & schtasks.exe /delete /tn DeployCoreAgentInstall /f | Out-Null
+
           Start-Process msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn" -Wait
           Write-Host "Smoke test passed."
 

@@ -10,17 +10,33 @@
   RustDesk client, configuring it headless, enrolling) lives in that script,
   so the MSI and the copy-paste one-liner install path stay identical.
 
-  The run happens AFTER InstallFinalize (a commit custom action, no-impersonate
-  so it's elevated), deliberately: the script itself invokes msiexec to install
-  the RustDesk MSI, and a nested msiexec inside our own install transaction
-  would deadlock on the Windows Installer mutex. Running after InstallFinalize
-  is outside the transaction, so the nested install is allowed.
+  The script is NOT run directly from a custom action - confirmed via
+  Microsoft's own _MSIExecute Mutex docs ("set only while processing the
+  InstallExecuteSequence table"), the mutex is held for that ENTIRE table,
+  including anything scheduled after InstallFinalize, not just up to it. Since
+  the script itself invokes a second, nested msiexec.exe (to install the
+  bundled RustDesk client), running it directly from any custom action in this
+  sequence - regardless of position - would collide with the mutex our own
+  outer MSI still holds (this is exactly what produced a detail-free MSI 1603
+  on the first real deployment test). Instead, the custom actions below
+  register a one-time Scheduled Task (as SYSTEM) and immediately trigger it,
+  then return right away - the outer MSI finishes and releases the mutex in
+  seconds, and the actual RustDesk install + enrollment runs moments later,
+  fully outside any MSI transaction.
 
   The MSI also bundles the DeployCore-branded tray companion (DeployCoreTray.exe)
   and its icon (deploycore.ico) - both produced by CI from remote-agent/tray/,
   drawn from the same mark as the browser favicon - and starts the tray in each
   user's session at logon. The one-liner install path does NOT include the tray;
   the .msi is the full branded package.
+
+  It ALSO bundles the stock RustDesk client installer itself
+  (rustdesk-x86_64.msi, fetched by CI from RustDesk's own GitHub release) so
+  the install script never needs outbound internet on the target machine -
+  confirmed necessary after the first real deployment-pipeline test: a
+  provisioned VM with no internet access failed with a bare MSI 1603 and no
+  detail, traced to this download failing. The one-liner path still downloads
+  it (a human runs that with their own internet, normally).
 
   NOTE: MSI custom-action sequencing is exactly the kind of thing that needs
   validating on real Windows - the CI workflow builds this, but the first
@@ -58,6 +74,23 @@
         <Component Id="InstallScript" Guid="*">
           <File Id="InstallPs1" Source="Install-DeployCoreAgent.ps1" KeyPath="yes" />
         </Component>
+        <!-- The Scheduled Task's target (see this file's own header comment
+             for why the task exists at all): a thin batch launcher rather than
+             pointing schtasks /tr straight at powershell.exe keeps that
+             command's own quoting shallow and simple. -->
+        <Component Id="RunScript" Guid="*">
+          <File Id="RunAgentInstallCmd" Source="RunAgentInstall.cmd" KeyPath="yes" />
+        </Component>
+        <!-- The stock RustDesk client installer, fetched by CI (which has
+             internet) and bundled here so the install script never needs
+             outbound internet access on the target machine - only to
+             DeployCore itself, which is where this .msi came from in the
+             first place. See remote_agent_install.ps1 step 2 for why this
+             matters: a VM the deployment pipeline just provisioned commonly
+             has no internet access at all. -->
+        <Component Id="RustDeskInstaller" Guid="*">
+          <File Id="RustDeskMsi" Source="rustdesk-x86_64.msi" KeyPath="yes" />
+        </Component>
         <!-- Separate component (one file each) so WiX can auto-generate GUIDs -
              an unversioned keypath can't share a component with other files.
              Installed next to the script so its branding step can point the
@@ -82,19 +115,48 @@
 
     <Feature Id="Main">
       <ComponentRef Id="InstallScript" />
+      <ComponentRef Id="RunScript" />
+      <ComponentRef Id="RustDeskInstaller" />
       <ComponentRef Id="BrandIcon" />
       <ComponentRef Id="TrayApp" />
     </Feature>
 
-    <!-- Runs the dropped script once, elevated, after the files are in place
-         and the install transaction has committed. -->
+    <!-- Registers a one-time Scheduled Task pointed at RunAgentInstall.cmd
+         (SERVERURL/ENROLLTOKEN passed as its two arguments), running as
+         SYSTEM. /f suppresses any "already exists" prompt (harmless on a
+         reinstall/repair). Deliberately does NOT run yet - see RunAgentTask
+         below and this file's header comment for why the two are split.
+         Runs even under SKIPRUN=1 (registering a task has no live-server
+         dependency) so CI's smoke test can verify this command's quoting is
+         actually correct without needing a real DeployCore server. -->
     <SetProperty
-        Id="RunAgentInstall"
-        Before="RunAgentInstall"
+        Id="RegisterAgentTask"
+        Before="RegisterAgentTask"
         Sequence="execute"
-        Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -File &quot;[INSTALLFOLDER]Install-DeployCoreAgent.ps1&quot; -ServerUrl &quot;[SERVERURL]&quot; -EnrollToken &quot;[ENROLLTOKEN]&quot;" />
+        Value="&quot;[System64Folder]schtasks.exe&quot; /create /f /ru SYSTEM /sc ONCE /st 00:00 /tn DeployCoreAgentInstall /tr &quot;\&quot;[INSTALLFOLDER]RunAgentInstall.cmd\&quot; \&quot;[SERVERURL]\&quot; \&quot;[ENROLLTOKEN]\&quot;&quot;" />
     <CustomAction
-        Id="RunAgentInstall"
+        Id="RegisterAgentTask"
+        BinaryRef="Wix4UtilCA_X64"
+        DllEntry="WixQuietExec64"
+        Execute="commit"
+        Impersonate="no"
+        Return="check" />
+
+    <!-- Triggers the task immediately (schtasks /run signals Task Scheduler
+         and returns right away - it does NOT wait for the task to finish),
+         so this custom action, and the outer MSI's own InstallExecuteSequence
+         along with it, completes in moments. The task's own script (running
+         detached, outside any MSI transaction) does the real work seconds
+         later - the same "installed" -> "enrolled" gap the standalone
+         one-liner install already has, nothing new for ManagedHost's own
+         pending/enrolled UI to handle. -->
+    <SetProperty
+        Id="RunAgentTask"
+        Before="RunAgentTask"
+        Sequence="execute"
+        Value="&quot;[System64Folder]schtasks.exe&quot; /run /tn DeployCoreAgentInstall" />
+    <CustomAction
+        Id="RunAgentTask"
         BinaryRef="Wix4UtilCA_X64"
         DllEntry="WixQuietExec64"
         Execute="commit"
@@ -102,7 +164,8 @@
         Return="check" />
 
     <InstallExecuteSequence>
-      <Custom Action="RunAgentInstall" After="InstallFinalize" Condition="NOT Installed AND NOT SKIPRUN" />
+      <Custom Action="RegisterAgentTask" After="InstallFinalize" Condition="NOT Installed" />
+      <Custom Action="RunAgentTask" After="RegisterAgentTask" Condition="NOT Installed AND NOT SKIPRUN" />
     </InstallExecuteSequence>
   </Package>
 </Wix>
