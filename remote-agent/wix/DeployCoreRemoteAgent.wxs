@@ -57,9 +57,13 @@
       <Directory Id="INSTALLFOLDER" Name="DeployCore Remote Management Agent">
         <Component Id="InstallScript" Guid="*">
           <File Id="InstallPs1" Source="Install-DeployCoreAgent.ps1" KeyPath="yes" />
-          <!-- Next to the script so its branding step can set the Add/Remove
-               Programs DisplayIcon to it (see remote_agent_install.ps1). -->
-          <File Id="BrandIcon" Source="deploycore.ico" />
+        </Component>
+        <!-- Separate component (one file each) so WiX can auto-generate GUIDs -
+             an unversioned keypath can't share a component with other files.
+             Installed next to the script so its branding step can point the
+             Add/Remove Programs DisplayIcon at it (see remote_agent_install.ps1). -->
+        <Component Id="BrandIcon" Guid="*">
+          <File Id="BrandIco" Source="deploycore.ico" KeyPath="yes" />
         </Component>
         <!-- Branded tray companion + a per-machine Run entry so it starts in
              each user's session at logon. Cosmetic only - the headless RustDesk
@@ -78,6 +82,7 @@
 
     <Feature Id="Main">
       <ComponentRef Id="InstallScript" />
+      <ComponentRef Id="BrandIcon" />
       <ComponentRef Id="TrayApp" />
     </Feature>
 
