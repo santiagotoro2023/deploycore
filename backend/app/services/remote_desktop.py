@@ -85,6 +85,27 @@ class RemoteDesktopError(Exception):
     surfaced to the operator as a plain message, never a raw traceback."""
 
 
+def _unwrap(resp: httpx.Response, context: str) -> dict:
+    """rustdesk-api wraps EVERY response as {"code": 0, "message": "success",
+    "data": {...actual payload...}} - confirmed via a live call (a login
+    response really does nest "token" under "data", not top-level, which is
+    exactly the bug this replaces: both _login and create_session_url's
+    share_token read used to look for the field at the wrong level). code 0
+    means success regardless of HTTP status; the real payload is always under
+    "data", never at the top."""
+    try:
+        body = resp.json()
+    except ValueError:
+        raise RemoteDesktopError(f"{context}: non-JSON response (HTTP {resp.status_code})")
+    if resp.status_code != 200:
+        raise RemoteDesktopError(f"{context} failed (HTTP {resp.status_code}): {body.get('message', '')}".rstrip(": "))
+    code = body.get("code")
+    if isinstance(code, int) and code != 0:
+        raise RemoteDesktopError(f"{context} failed: {body.get('message') or f'code {code}'}")
+    data = body.get("data")
+    return data if isinstance(data, dict) else {}
+
+
 async def probe() -> tuple[bool, bool, str | None]:
     """Cheap health check for the setup banner: (configured, reachable, detail).
     `configured` = the admin password is set at all; `reachable` = a real login
@@ -110,9 +131,7 @@ async def _login() -> str:
     payload = {"username": settings.rustdesk_admin_username, "password": settings.rustdesk_admin_password}
     async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
         resp = await client.post(url, json=payload)
-    if resp.status_code != 200:
-        raise RemoteDesktopError(f"RustDesk admin login failed (HTTP {resp.status_code}).")
-    token = resp.json().get("token")
+    token = _unwrap(resp, "RustDesk admin login").get("token")
     if not token:
         raise RemoteDesktopError("RustDesk admin login returned no token.")
     return token
@@ -155,10 +174,9 @@ async def create_session_url(rustdesk_id: str, rustdesk_password: str, host_name
             "address_book/create",
             {"id": rustdesk_id, "password": rustdesk_password, "alias": host_name},
         )
-        if ab_resp.status_code != 200:
-            logger.info("address_book/create for %s returned HTTP %s (may already exist)", rustdesk_id, ab_resp.status_code)
-    except RemoteDesktopError:
-        raise
+        _unwrap(ab_resp, "address_book/create")  # only for its own logging below on failure
+    except RemoteDesktopError as exc:
+        logger.info("address_book/create for %s: %s (may already exist, not fatal)", rustdesk_id, exc)
     except Exception as exc:  # noqa: BLE001 - network hiccup on the best-effort step, share step still tried
         logger.warning("address_book/create for %s failed: %s", rustdesk_id, exc)
 
@@ -166,9 +184,7 @@ async def create_session_url(rustdesk_id: str, rustdesk_password: str, host_name
         "address_book/shareByWebClient",
         {"id": rustdesk_id, "password_type": "fixed", "password": rustdesk_password, "expire": _SHARE_EXPIRE_SECONDS},
     )
-    if share_resp.status_code != 200:
-        raise RemoteDesktopError(f"Could not start a remote session (HTTP {share_resp.status_code}).")
-    share_token = share_resp.json().get("share_token")
+    share_token = _unwrap(share_resp, "Could not start a remote session").get("share_token")
     if not share_token:
         raise RemoteDesktopError("Remote session link was not issued by the RustDesk server.")
 
