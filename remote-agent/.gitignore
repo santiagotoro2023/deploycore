@@ -1,0 +1,10 @@
+# CI build artifacts (staged next to the .wxs at build time, see
+# .github/workflows/build-agent-msi.yml) - not committed.
+tray/bin/
+tray/obj/
+wix/Install-DeployCoreAgent.ps1
+wix/DeployCoreTray.exe
+wix/deploycore.ico
+wix/*.msi
+wix/*.wixpdb
+wix/install.log

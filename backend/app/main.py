@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,8 +16,10 @@ from app.api.routes import (
     disk_layouts,
     hypervisors,
     iso_assets,
+    managed_hosts,
     notifications,
     orgs,
+    remote_agent,
     settings,
     setup,
     templates,
@@ -35,7 +39,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 logger = logging.getLogger("deploycore")
 
-app = FastAPI(title="DeployCore API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Best-effort, fire-and-forget so a slow/absent GitHub release never delays
+    # or blocks startup - the seed logs its own outcome and simply retries on
+    # the next start if it couldn't complete (see remote_agent_seed).
+    async def _seed() -> None:
+        try:
+            from app.db import SessionLocal
+            from app.services.remote_agent_seed import ensure_agent_asset_seeded
+
+            async with SessionLocal() as db:
+                await ensure_agent_asset_seeded(db)
+        except Exception:  # noqa: BLE001 - never let a startup side-task take the API down
+            logger.exception("agent asset seed task failed")
+
+    task = asyncio.create_task(_seed())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="DeployCore API", lifespan=lifespan)
 
 
 @app.exception_handler(Exception)
@@ -75,6 +100,8 @@ app.include_router(dashboard.router)
 app.include_router(notifications.router)
 app.include_router(notifications.prefs_router)
 app.include_router(webhooks.router)
+app.include_router(managed_hosts.router)
+app.include_router(remote_agent.router)
 
 
 @app.get("/api/health")

@@ -1686,6 +1686,329 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
     ],
   },
   {
+    id: "remote-management",
+    label: "Remote Management",
+    articles: [
+      {
+        id: "remote-management-overview",
+        title: "Remote Management",
+        overview: (
+          <>
+            <P>
+              Remote Management lets you see and control an enrolled server or workstation's screen
+              straight from the browser, from anywhere, with no file to download to connect and no VPN.
+              It shows the real machine console, including the Windows login screen, so you can sign in
+              or switch users exactly as if you were sitting at it, plus a Ctrl+Alt+Del button, shared
+              clipboard, and full-screen mode.
+            </P>
+            <P>
+              It works by running a lightweight agent (a stock RustDesk client, installed as a headless
+              Windows service and pointed at DeployCore's own bundled server) on each managed machine.
+              Everything is self-hosted alongside DeployCore, nothing goes through any third-party cloud.
+            </P>
+          </>
+        ),
+        deepDive: (
+          <>
+            <P>
+              <strong>Server side — automatic.</strong> The Remote Management server (RustDesk relay,
+              rendezvous, and web client) ships as part of the DeployCore stack in{" "}
+              <Code>docker compose</Code>. <Code>scripts/setup.sh</Code> generates its secrets, points it
+              at this host's detected address, and configures its admin account, so a normal install
+              brings Remote Management up with no extra steps. If anything still needs attention, the
+              Remote Management tab shows a banner that walks you through it.
+            </P>
+            <P>
+              <strong>The one thing that can't be automated: network reachability.</strong> Agents on the
+              same LAN as DeployCore work out of the box. For agents on other networks or the internet,
+              forward these ports (and allow them through any firewall) to the DeployCore host — the
+              Remote Management tab lists them for your specific address too:
+            </P>
+            <List
+              items={[
+                <><Code>21115/TCP</Code> — NAT type test</>,
+                <><Code>21116/TCP+UDP</Code> — ID / rendezvous server (both protocols)</>,
+                <><Code>21117/TCP</Code> — relay server</>,
+                <><Code>21118/TCP</Code> and <Code>21119/TCP</Code> — web client (over WebSocket)</>,
+                <><Code>21114/TCP</Code> — web client and API (the browser loads the session from here)</>,
+              ]}
+            />
+            <P>
+              Using a domain name instead of a bare IP is fine — point it at the DeployCore host and set{" "}
+              <Code>RUSTDESK_RELAY_HOST</Code> and <Code>RUSTDESK_API_PUBLIC_URL</Code> in <Code>.env</Code>{" "}
+              to it.
+            </P>
+            <P>
+              <strong>Enrolling a host.</strong> Two ways, both end in the machine showing up as enrolled
+              on the Remote Management tab within a minute:
+            </P>
+            <Steps
+              items={[
+                <>
+                  <strong>Deployed by DeployCore:</strong> attach the "DeployCore Remote Management Agent"
+                  App Asset to a template. Every machine deployed from it enrolls automatically — the
+                  per-host token is injected at deploy time.
+                </>,
+                <>
+                  <strong>Any existing machine:</strong> click <strong>Add host</strong>, then either paste
+                  the one-line PowerShell command into an Administrator prompt (easiest, nothing to
+                  download) or download <Code>DeployCoreRemoteAgent.msi</Code> and run it silently with{" "}
+                  <Code>msiexec /i DeployCoreRemoteAgent.msi /qn SERVERURL="…" ENROLLTOKEN=…</Code>.
+                </>,
+              ]}
+            />
+            <P>
+              <strong>Connecting.</strong> Click <strong>Connect</strong> on an enrolled host to open the
+              live screen in the browser. The toolbar has Ctrl+Alt+Del, Reconnect, and Fullscreen; the
+              clipboard is shared both ways while connected, so you can copy on your laptop and paste into
+              the server. Access is organization-scoped: you only see and connect to hosts in an
+              organization you have a role in.
+            </P>
+            <P>
+              <strong>The agent's identity.</strong> The agent runs as a hidden background service with no
+              RustDesk UI on the machine. The <Code>.msi</Code> is built automatically by GitHub Actions on
+              every push that touches the agent and published to a rolling release; DeployCore auto-fetches
+              it on startup and registers it as the global "Remote Agent" App Asset, so the download button
+              and auto-install-on-deploy work with no manual upload. You can also grab it directly from{" "}
+              <a
+                href="https://github.com/santiagotoro2023/deploycore/releases/download/agent-latest/DeployCoreRemoteAgent.msi"
+                className="text-blue-600 hover:underline dark:text-blue-400"
+              >
+                the latest release
+              </a>
+              . See <Code>remote-agent/README.md</Code> in the repo.
+            </P>
+          </>
+        ),
+      },
+      {
+        id: "remote-management-enrolling",
+        title: "Enrolling a host (installing the agent)",
+        overview: (
+          <>
+            <P>
+              A machine appears under Remote Management once its agent enrolls. There are three ways to
+              install it; all end the same way — the host flips to <strong>Enrolled</strong> on the tab
+              within a minute.
+            </P>
+          </>
+        ),
+        deepDive: (
+          <>
+            <P>
+              <strong>1. Deployed by DeployCore (fully automatic).</strong> Attach the "DeployCore Remote
+              Management Agent" App Asset to a deployment template (Templates → the template → Apps). Every
+              machine deployed from that template installs and enrolls the agent during post-install, with
+              its per-host enrollment token injected automatically. Nothing else to do.
+            </P>
+            <P>
+              <strong>2. One-line command (easiest for an existing machine).</strong> Click{" "}
+              <strong>Add host</strong>, give it a name, and copy the PowerShell command shown. Paste it into
+              an <strong>Administrator</strong> PowerShell on the target machine:
+            </P>
+            <P>
+              <Code>{`powershell -ExecutionPolicy Bypass -Command "$env:DC_TOKEN='<token>'; irm <server>/api/remote/install-script | iex"`}</Code>
+            </P>
+            <P>
+              It downloads and configures everything itself — nothing to download by hand first. (This path
+              applies the DeployCore name/publisher/service branding, but does not install the tray icon or
+              custom icon; those come with the <Code>.msi</Code>.)
+            </P>
+            <P>
+              <strong>3. The <Code>.msi</Code> (full branded package).</strong> Download it from the{" "}
+              <strong>Add host</strong> dialog (or the direct release link), then run it silently:
+            </P>
+            <P>
+              <Code>{`msiexec /i DeployCoreRemoteAgent.msi /qn SERVERURL="<server>" ENROLLTOKEN=<token>`}</Code>
+            </P>
+            <P>
+              This is also exactly what the deployment pipeline runs under the hood. It additionally installs
+              the DeployCore-branded tray companion and icon.
+            </P>
+            <P>
+              <strong>What the agent does on the machine:</strong> installs a stock RustDesk client as a
+              hidden Windows service (so it survives reboots and is reachable at the login screen), generates
+              a permanent access password locally, and reports its ID + password back to DeployCore. The
+              password is generated on the machine and only ever travels over the one HTTPS enrollment call —
+              DeployCore never chooses it.
+            </P>
+          </>
+        ),
+      },
+      {
+        id: "remote-management-network",
+        title: "Network & firewall setup",
+        overview: (
+          <>
+            <P>
+              Agents on the same network as DeployCore work with no setup. To reach a machine on a different
+              network or over the internet, a few ports need to reach the DeployCore host — this is the one
+              part that can't be automated from inside a container. The Remote Management tab lists the exact
+              ports for your address; this is the reference.
+            </P>
+          </>
+        ),
+        deepDive: (
+          <>
+            <P>
+              <strong>What's already automatic.</strong> <Code>scripts/setup.sh</Code> generates all secrets,
+              configures the server, and sets the relay address to this host's detected LAN IP — so agents on
+              the same network work immediately. It also detects your public IP and prints the internet-access
+              steps below at the end of the install. The two things it cannot do for you are forwarding ports
+              on your router/firewall and choosing a public address; those are below.
+            </P>
+            <P>
+              <strong>The ports.</strong> All of these must reach the DeployCore host from wherever the agents
+              are:
+            </P>
+            <List
+              items={[
+                <><Code>21115/TCP</Code> — NAT type test</>,
+                <><Code>21116/TCP and 21116/UDP</Code> — ID / rendezvous server (both are required)</>,
+                <><Code>21117/TCP</Code> — relay server</>,
+                <><Code>21118/TCP</Code> — web client, ID over WebSocket</>,
+                <><Code>21119/TCP</Code> — web client, relay over WebSocket</>,
+                <><Code>21114/TCP</Code> — web client + API; the browser loads the live session from here</>,
+              ]}
+            />
+            <P>
+              <strong>Scenario A — DeployCore behind a home/office router (NAT).</strong>
+            </P>
+            <Steps
+              items={[
+                <>In your router admin, add port-forwarding rules sending <Code>21114–21119 TCP</Code> and{" "}
+                  <Code>21116 UDP</Code> to this host's LAN IP.</>,
+                <>Find your public IP (the installer prints it; or visit an "what's my IP" site).</>,
+                <>In <Code>.env</Code> set <Code>RUSTDESK_RELAY_HOST=&lt;public-ip-or-domain&gt;</Code> and{" "}
+                  <Code>RUSTDESK_API_PUBLIC_URL=http://&lt;public-ip-or-domain&gt;:21114</Code>.</>,
+                <>Run <Code>docker compose up -d</Code> to apply.</>,
+              ]}
+            />
+            <P>
+              <strong>Scenario B — DeployCore on a cloud VM (AWS/Azure/GCP/VPS).</strong>
+            </P>
+            <Steps
+              items={[
+                <>In the provider's firewall / security group, allow inbound <Code>21114–21119 TCP</Code> and{" "}
+                  <Code>21116 UDP</Code> (plus <Code>443</Code> for the web UI).</>,
+                <>Use the VM's public IP or a domain pointed at it for <Code>RUSTDESK_RELAY_HOST</Code> and{" "}
+                  <Code>RUSTDESK_API_PUBLIC_URL</Code> in <Code>.env</Code>, then <Code>docker compose up -d</Code>.</>,
+              ]}
+            />
+            <P>
+              <strong>DNS (optional but recommended).</strong> Point an A record (e.g.{" "}
+              <Code>remote.yourcompany.com</Code>) at the DeployCore host's public IP and use that domain for
+              both <Code>RUSTDESK_RELAY_HOST</Code> and <Code>RUSTDESK_API_PUBLIC_URL</Code>. Cleaner than a
+              bare IP and survives your IP changing.
+            </P>
+            <P>
+              <strong>Note on "works from the internet but not from the LAN".</strong> Some routers don't route
+              a public address back to a machine inside the same network (no "NAT hairpin"). If local browsers
+              or agents can't reach the public address, add a local DNS override, or keep the LAN IP for local
+              use — the agents themselves connect fine from outside either way.
+            </P>
+            <P>
+              You don't have to memorize any of this — the banner on the Remote Management tab shows the live
+              port list for your host and turns green once the server is reachable.
+            </P>
+          </>
+        ),
+      },
+      {
+        id: "remote-management-session",
+        title: "Connecting & using a session",
+        overview: (
+          <>
+            <P>
+              Click <strong>Connect</strong> on any enrolled host to open its live screen in the browser —
+              the real console, including the Windows login screen before anyone signs in.
+            </P>
+          </>
+        ),
+        deepDive: (
+          <>
+            <P>The session toolbar gives you:</P>
+            <List
+              items={[
+                <><strong>Ctrl+Alt+Del</strong> — send the secure attention sequence (e.g. to reach the
+                  Windows login/lock screen or Task Manager).</>,
+                <><strong>Fullscreen</strong> — expand the remote screen to fill your browser/display, like a
+                  VNC or ESXi console.</>,
+                <><strong>Reconnect</strong> — re-establish the session (starts a fresh secure link).</>,
+                <><strong>Shared clipboard</strong> — copy on your computer and paste into the remote machine,
+                  and vice-versa, automatically while connected.</>,
+              ]}
+            />
+            <P>
+              <strong>Logging in / switching users.</strong> Because the agent runs as a service, you see the
+              real console even at the Windows login screen — sign in, switch users, or approve a UAC prompt
+              exactly as if you were sitting at the machine, without needing credentials to establish the
+              connection first.
+            </P>
+            <P>
+              <strong>Who can connect.</strong> Access is organization-scoped: you only see and connect to
+              hosts in an organization you hold a role in (operator or above to connect). Nothing about a
+              host in another organization is visible.
+            </P>
+          </>
+        ),
+      },
+      {
+        id: "remote-management-troubleshooting",
+        title: "Troubleshooting Remote Management",
+        overview: (
+          <>
+            <P>
+              Most issues surface as a banner on the Remote Management tab or a message in the session view.
+              Here's what each one means and how to fix it.
+            </P>
+          </>
+        ),
+        deepDive: (
+          <>
+            <P>
+              <strong>Banner: "Finish setting up Remote Management" / server not reachable.</strong> The
+              RustDesk server isn't up or DeployCore can't log into it. If you installed with{" "}
+              <Code>scripts/setup.sh</Code> this is normally automatic — re-run it. Otherwise bring the
+              service up and set its admin password (the banner shows this command):
+            </P>
+            <P>
+              <Code>{`docker compose up -d rustdesk`}</Code>
+            </P>
+            <P>
+              <Code>{`docker compose exec -w /app rustdesk ./apimain reset-admin-pwd "$(grep '^RUSTDESK_ADMIN_PASSWORD=' .env | cut -d= -f2-)"`}</Code>
+            </P>
+            <P>
+              <strong>A host stays "Pending", never "Enrolled".</strong> The agent installed but couldn't
+              report back. Check that the machine can reach <Code>APP_PUBLIC_URL</Code> (the enrollment call
+              goes there), and that <Code>APP_PUBLIC_URL</Code> isn't <Code>localhost</Code>. Re-running the
+              install command is safe — enrollment is idempotent.
+            </P>
+            <P>
+              <strong>"Download .msi" button 404s.</strong> DeployCore auto-fetches the agent installer from
+              its GitHub release on startup; if the release doesn't exist yet (CI hasn't built it) or the
+              server had no internet at startup, the file isn't seeded. Restart the api container once the
+              release exists, or upload the <Code>.msi</Code> as a global App Asset and mark it{" "}
+              <strong>Set as agent</strong>. The one-line install path works regardless.
+            </P>
+            <P>
+              <strong>Can connect on the LAN but not from outside.</strong> A ports/firewall issue — see
+              "Network &amp; firewall setup". Confirm all of <Code>21114–21119</Code> (TCP, plus UDP on
+              21116) reach the host and that <Code>RUSTDESK_RELAY_HOST</Code> is your externally-reachable
+              address, not a LAN IP.
+            </P>
+            <P>
+              <strong>Session view stays black or won't load.</strong> Use <strong>Reconnect</strong>. If it
+              persists, the host may be offline or the agent service stopped — check the host is powered on
+              and reachable; the agent service ("DeployCore Remote Management Agent" in services.msc) should
+              be running.
+            </P>
+          </>
+        ),
+      },
+    ],
+  },
+  {
     id: "integrations-ops",
     label: "Integrations & operations",
     articles: [

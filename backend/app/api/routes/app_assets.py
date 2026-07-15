@@ -12,7 +12,7 @@ from app.models.app_asset import AppAsset
 from app.models.deployment import Deployment
 from app.models.iso_asset import UploadStatus
 from app.models.user import Role, User
-from app.schemas.app_asset import AppAssetCreate, AppAssetRead, AppAssetUpdate
+from app.schemas.app_asset import AppAssetCreate, AppAssetRead, AppAssetSetRemoteAgent, AppAssetUpdate
 from app.security.rbac import get_current_user, require_role
 from app.services import app_asset_upload, audit
 
@@ -254,6 +254,48 @@ async def update_global_app_asset(
     audit.record(
         db, action="app_asset.update_global", target_type="app_asset",
         user_id=current_user.id, target_id=app_asset.id, detail=updates,
+    )
+    await db.commit()
+    await db.refresh(app_asset)
+    return app_asset
+
+
+@router.post(
+    "/api/app-assets/global/{app_id}/set-remote-agent",
+    response_model=AppAssetRead,
+    dependencies=[_admin_global],
+)
+async def set_remote_agent_app_asset(
+    app_id: uuid.UUID, body: AppAssetSetRemoteAgent, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AppAsset:
+    """Designates (or un-designates) this global asset as THE DeployCore
+    Remote Management Agent installer - the one file managed_hosts.py's
+    agent-installer download route and worker/tasks/provision.py's
+    per-deployment enrollment injection both look for via
+    AppAsset.is_remote_agent (see its own field docstring). Only one asset
+    can hold this at a time: enabling it here clears it from every other
+    asset first, rather than leaving multiple candidates for those two
+    call sites to pick between.
+
+    Uploading a real, working agent installer isn't something this route
+    does - that installer (stock RustDesk configured headless + a small
+    DeployCore-branded tray companion + the enrollment glue script, see
+    remote_management_architecture project notes) has to be built and
+    uploaded through the normal global-app-asset upload flow first, same
+    as any other app asset; this route only flips the designation once
+    that upload is sitting there complete."""
+    app_asset = await _get_global_app_asset(db, app_id)
+    if body.enabled and app_asset.upload_status != UploadStatus.COMPLETE:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "upload must be complete before this can be the remote agent")
+    if body.enabled:
+        await db.execute(
+            AppAsset.__table__.update().where(AppAsset.is_remote_agent.is_(True)).values(is_remote_agent=False)
+        )
+    app_asset.is_remote_agent = body.enabled
+    audit.record(
+        db, action="app_asset.set_remote_agent", target_type="app_asset",
+        user_id=current_user.id, target_id=app_asset.id, detail={"enabled": body.enabled},
     )
     await db.commit()
     await db.refresh(app_asset)

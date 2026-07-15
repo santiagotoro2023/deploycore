@@ -1,4 +1,4 @@
-import { Pencil, Trash2, UploadCloud } from "lucide-react";
+import { MonitorSmartphone, Pencil, Trash2, UploadCloud } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError, getToken } from "../api/client";
 import Badge from "../components/Badge";
@@ -21,8 +21,19 @@ export default function AppAssets() {
   const [editApp, setEditApp] = useState<AppAsset | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<AppAsset | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [remoteAgentError, setRemoteAgentError] = useState<string | null>(null);
 
   const isGlobalAdmin = !!user && roleAtLeast(user.global_role, "admin");
+
+  async function setRemoteAgent(app: AppAsset, enabled: boolean) {
+    setRemoteAgentError(null);
+    try {
+      await api.post(`/app-assets/global/${app.id}/set-remote-agent`, { enabled });
+      await load();
+    } catch (err) {
+      setRemoteAgentError(err instanceof ApiError ? err.message : "Failed to update.");
+    }
+  }
 
   async function load() {
     if (!selectedOrgId) return;
@@ -78,6 +89,12 @@ export default function AppAssets() {
         )}
       </div>
 
+      {remoteAgentError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
+          {remoteAgentError}
+        </div>
+      )}
+
       <DataTable<AppAsset>
         rows={apps}
         loading={!loaded}
@@ -92,7 +109,24 @@ export default function AppAssets() {
             header: "Default install args",
             render: (a) => <code className="text-xs">{a.default_install_args || "(none)"}</code>,
           },
-          { key: "scope", header: "Scope", render: (a) => (a.org_id ? selectedOrg?.name ?? "Organization" : "Global") },
+          {
+            key: "scope",
+            header: "Scope",
+            render: (a) => (
+              <div className="flex items-center gap-1.5">
+                {a.org_id ? selectedOrg?.name ?? "Organization" : "Global"}
+                {a.is_remote_agent && (
+                  <span
+                    className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                    title="This is the DeployCore Remote Management Agent installer"
+                  >
+                    <MonitorSmartphone size={11} strokeWidth={1.75} />
+                    Remote Agent
+                  </span>
+                )}
+              </div>
+            ),
+          },
           { key: "size", header: "Size", render: (a) => (a.size_bytes ? `${(a.size_bytes / 1e6).toFixed(1)} MB` : "(unknown)") },
           { key: "status", header: "Status", render: (a) => <Badge value={a.upload_status} />, shrink: true },
           {
@@ -101,6 +135,16 @@ export default function AppAssets() {
             render: (a) =>
               (a.org_id ? canManage && a.org_id === selectedOrgId : isGlobalAdmin) && (
                 <div className="flex items-center gap-1.5">
+                  {!a.org_id && isGlobalAdmin && a.upload_status === "complete" && (
+                    <button
+                      className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                      title={a.is_remote_agent ? "Unset as Remote Management Agent" : "Set as the Remote Management Agent installer"}
+                      onClick={() => setRemoteAgent(a, !a.is_remote_agent)}
+                    >
+                      <MonitorSmartphone size={12} strokeWidth={1.75} />
+                      {a.is_remote_agent ? "Unset agent" : "Set as agent"}
+                    </button>
+                  )}
                   <button
                     className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
                     onClick={() => setEditApp(a)}

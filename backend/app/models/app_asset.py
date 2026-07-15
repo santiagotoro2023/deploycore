@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import BigInteger, ForeignKey, String
+from sqlalchemy import BigInteger, Boolean, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,3 +41,10 @@ class AppAsset(UUIDPKMixin, TimestampMixin, Base):
     upload_status: Mapped[UploadStatus] = enum_column(
         UploadStatus, "upload_status", default=UploadStatus.PENDING, nullable=False
     )
+    # True for exactly one seeded, global asset: the DeployCore Remote
+    # Management Agent installer (see services/remote_agent.py). Lets
+    # worker/tasks/provision.py special-case it - a live, per-deployment
+    # enrollment token gets appended to its install_args at deploy time,
+    # something no ordinary app asset needs (see the 0043 migration's
+    # own comment for why a static install_args string can't carry that).
+    is_remote_agent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

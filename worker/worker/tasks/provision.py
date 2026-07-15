@@ -17,6 +17,7 @@ from app.models.deployment import Deployment, DeploymentState, IpMode, LogLevel
 from app.models.disk_layout import DiskLayout
 from app.models.hypervisor import HypervisorHost
 from app.models.iso_asset import IsoAsset, IsoKind
+from app.models.managed_host import ManagedHost
 from app.models.template import DeploymentTemplate, DomainJoinTiming
 from app.services import notifications, settings_resolver, webhooks
 from app.services.deployment_service import DeploymentStateMachine, InvalidTransition, log
@@ -129,6 +130,30 @@ async def _get_virtio_iso(db, org_id: uuid.UUID) -> IsoAsset | None:
         )
     )
     return result.scalars().first()
+
+
+async def _get_or_create_managed_host(db, deployment: Deployment) -> ManagedHost:
+    """The one seeded, global is_remote_agent AppAsset (see AppAsset's own
+    field docstring) is otherwise identical for every deployment - this is
+    what makes each deployment's agent enroll as its own distinct
+    ManagedHost rather than all sharing one enroll_token. Looked up by
+    deployment_id first, not created unconditionally: run_post_install can
+    legitimately run more than once for the same deployment (a redelivered
+    arq job, or an operator's "Retry post-install" - see this module's own
+    docstrings above), and re-running the app-install loop must reuse the
+    same host record and enroll_token rather than orphaning a fresh one
+    every time."""
+    result = await db.execute(select(ManagedHost).where(ManagedHost.deployment_id == deployment.id))
+    host = result.scalars().first()
+    if host is not None:
+        return host
+    host = ManagedHost(
+        org_id=deployment.org_id, deployment_id=deployment.id, name=deployment.hostname,
+        created_by_user_id=deployment.created_by_user_id,
+    )
+    db.add(host)
+    await db.flush()
+    return host
 
 
 async def _cleanup_answer_floppy(driver: HypervisorDriver, deployment: Deployment) -> None:
@@ -1180,6 +1205,26 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         )
                         continue
                     install_args = entry.get("install_args") or app_asset.default_install_args
+                    if app_asset.is_remote_agent:
+                        # The agent installer is one seeded, global asset,
+                        # identical for every deployment (see AppAsset.
+                        # is_remote_agent's own docstring) - template-level
+                        # install_args is static and can't carry values
+                        # unique to this one deployment, so the DeployCore
+                        # URL and this host's own enroll token are appended
+                        # here instead, the one point in the pipeline that's
+                        # actually deployment-specific. These are MSI
+                        # properties (NAME=value, consumed by the agent
+                        # .msi's install custom action - see
+                        # remote-agent/wix/) - the same SERVERURL/ENROLLTOKEN
+                        # the Remote Management page's copyable install
+                        # command passes for standalone (non-deployed) hosts.
+                        managed_host = await _get_or_create_managed_host(db, deployment)
+                        await db.commit()
+                        server_url = get_settings().app_public_url
+                        install_args = (
+                            f'{install_args} SERVERURL="{server_url}" ENROLLTOKEN={managed_host.enroll_token}'.strip()
+                        )
                     await log(db, deployment, "post_install", f"installing {app_asset.name}")
                     download_url = (
                         f"{callback_base_url}/api/deployments/{deployment.id}/app-assets/{app_asset.id}/download"

@@ -17,6 +17,8 @@ import Hypervisors from "./pages/Hypervisors";
 import IsoAssets from "./pages/IsoAssets";
 import Login from "./pages/Login";
 import Organizations from "./pages/Organizations";
+import RemoteManagement from "./pages/RemoteManagement";
+import RemoteSession from "./pages/RemoteSession";
 import SettingsPage from "./pages/Settings";
 import SetupWizard from "./pages/SetupWizard";
 import Templates from "./pages/Templates";
@@ -56,6 +58,8 @@ function AppRoutes() {
         <Route path="deployments" element={<Deployments />} />
         <Route path="deployments/new" element={<DeploymentWizard />} />
         <Route path="deployments/:id" element={<DeploymentDetail />} />
+        <Route path="remote-management" element={<RemoteManagement />} />
+        <Route path="remote-management/:id" element={<RemoteSession />} />
         <Route path="templates" element={<Templates />} />
         <Route path="disk-layouts" element={<DiskLayouts />} />
         <Route path="hypervisors" element={<Hypervisors />} />

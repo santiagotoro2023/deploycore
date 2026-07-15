@@ -19,6 +19,10 @@ class AppAssetUpdate(BaseModel):
     default_install_args: str | None = None
 
 
+class AppAssetSetRemoteAgent(BaseModel):
+    enabled: bool
+
+
 class AppAssetRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -31,3 +35,8 @@ class AppAssetRead(BaseModel):
     size_bytes: int
     default_install_args: str
     upload_status: UploadStatus
+    # Seed-only, not user-settable via Create/Update - provision.py trusts
+    # this flag to special-case the one global agent asset (inject a live
+    # per-deployment enroll token into install_args), so it must not be
+    # something an uploaded, arbitrary app can just opt itself into.
+    is_remote_agent: bool

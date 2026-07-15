@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- net48: on every Windows 10 / Server 2012R2+ by default, so the tray app
+       needs no runtime installed on the managed machine. WinForms for the
+       NotifyIcon. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>DeployCoreTray</AssemblyName>
+    <Deterministic>true</Deterministic>
+    <Company>DeployCore</Company>
+    <Product>DeployCore Remote Management Agent</Product>
+  </PropertyGroup>
+</Project>

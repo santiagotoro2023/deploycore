@@ -1,0 +1,100 @@
+name: Build Remote Management Agent MSI
+
+# Produces DeployCoreRemoteAgent.msi on a real Windows runner (it can't be built
+# on the Linux hosts DeployCore otherwise uses) and publishes it so DeployCore
+# can auto-fetch it (see backend app/services/remote_agent_seed.py).
+#
+# Runs automatically whenever the agent's own files change on main, so a normal
+# `git push` is enough - no tag needed. It keeps a rolling "agent-latest"
+# pre-release whose asset URL is stable
+# (…/releases/download/agent-latest/DeployCoreRemoteAgent.msi), which is what
+# the README, Wiki, and the DeployCore auto-seed all point at. Pushing a real
+# `agent-v*` tag additionally publishes a normal versioned release.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/services/remote_agent_install.ps1"
+      - "remote-agent/wix/**"
+      - ".github/workflows/build-agent-msi.yml"
+    tags:
+      - "agent-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The MSI wraps the SAME script the running server serves for the
+      # one-liner install - copy it in so there's a single source of truth.
+      - name: Stage installer script
+        shell: pwsh
+        run: Copy-Item backend/app/services/remote_agent_install.ps1 remote-agent/wix/Install-DeployCoreAgent.ps1
+
+      # Build the branded tray companion, then use it to emit the DeployCore
+      # .ico (drawn with GDI+, so no ImageMagick/Inkscape needed). Both get
+      # staged next to the .wxs for the MSI to bundle.
+      - name: Build tray app + icon
+        shell: pwsh
+        run: |
+          dotnet build remote-agent/tray/DeployCoreTray.csproj -c Release -o remote-agent/tray/bin
+          Start-Process -FilePath remote-agent/tray/bin/DeployCoreTray.exe -ArgumentList '--export-icon','deploycore.ico' -WorkingDirectory remote-agent/wix -Wait
+          Copy-Item remote-agent/tray/bin/DeployCoreTray.exe remote-agent/wix/DeployCoreTray.exe
+          if (-not (Test-Path remote-agent/wix/deploycore.ico)) { throw "icon was not generated" }
+
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix
+
+      - name: Add WiX UtilExtension
+        shell: pwsh
+        run: wix extension add -g WixToolset.Util.wixext
+
+      - name: Build MSI
+        shell: pwsh
+        working-directory: remote-agent/wix
+        run: wix build DeployCoreRemoteAgent.wxs -ext WixToolset.Util.wixext -arch x64 -o DeployCoreRemoteAgent.msi
+
+      # Smoke test: install the package with SKIPRUN=1 (installs files +
+      # exercises the install sequencing without the agent custom action, which
+      # would need a live DeployCore server), confirm it landed, then uninstall.
+      # Catches WiX authoring / sequencing breakage before anything is published.
+      - name: Smoke test install
+        shell: pwsh
+        working-directory: remote-agent/wix
+        run: |
+          $msi = "DeployCoreRemoteAgent.msi"
+          $p = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "SKIPRUN=1", "/l*v", "install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 40; throw "MSI install failed with exit code $($p.ExitCode)" }
+          $script = Join-Path ${env:ProgramFiles} "DeployCore Remote Management Agent\Install-DeployCoreAgent.ps1"
+          if (-not (Test-Path $script)) { throw "Installer did not place the agent script at $script" }
+          Start-Process msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn" -Wait
+          Write-Host "Smoke test passed."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeployCoreRemoteAgent
+          path: remote-agent/wix/DeployCoreRemoteAgent.msi
+
+      # Rolling pre-release with a stable download URL - refreshed on every
+      # qualifying push to main so DeployCore's auto-seed always finds a build.
+      - name: Publish rolling agent-latest release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: agent-latest
+          name: Remote Management Agent (latest)
+          prerelease: true
+          files: remote-agent/wix/DeployCoreRemoteAgent.msi
+
+      # Versioned release when a real agent-v* tag is pushed.
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: remote-agent/wix/DeployCoreRemoteAgent.msi

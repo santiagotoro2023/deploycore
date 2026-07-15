@@ -86,6 +86,33 @@ export interface AppAsset {
   size_bytes: number;
   default_install_args: string;
   upload_status: UploadStatus;
+  is_remote_agent: boolean;
+}
+
+export interface ManagedHost {
+  id: string;
+  org_id: string;
+  deployment_id: string | null;
+  name: string;
+  enrolled: boolean;
+  enroll_token: string;
+  rustdesk_id: string | null;
+  last_seen_at: string | null;
+  created_at: string;
+}
+
+export interface RemotePort {
+  port: number;
+  proto: string;
+  purpose: string;
+}
+
+export interface RemoteStatus {
+  configured: boolean;
+  reachable: boolean;
+  detail: string | null;
+  relay_host: string;
+  ports: RemotePort[];
 }
 
 export interface AppInstallEntry {
