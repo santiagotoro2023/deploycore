@@ -85,9 +85,16 @@ services:
         condition: service_started
       frontend:
         condition: service_started
+      rustdesk:
+        condition: service_started
     ports:
       - "80:80"
       - "443:443"
+      # A dedicated HTTPS listener for the embedded RustDesk web client - see
+      # proxy/entrypoint.sh's own comment for why this isn't just proxied
+      # under a sub-path of 443 instead (webclient2's own JS makes absolute,
+      # root-relative calls that need to actually be at the origin's root).
+      - "8444:8444"
     volumes:
       - tls_certs:/data/tls
       - caddy_data:/data

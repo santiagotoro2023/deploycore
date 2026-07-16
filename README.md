@@ -257,7 +257,7 @@ too):
 | 21116 | TCP+UDP | ID / rendezvous server (both protocols) |
 | 21117 | TCP | Relay server |
 | 21118, 21119 | TCP | Web client (over WebSocket) |
-| 21114 | TCP | Web client + API (browser loads the session here) |
+| 8444 | TCP | Web client, over HTTPS (browser loads the session here) |
 
 You set the public address in the app, not in files: **Settings → Remote
 Management** takes a public IP or domain and, on Apply, rewrites the config and

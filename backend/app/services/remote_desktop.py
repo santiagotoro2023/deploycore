@@ -76,20 +76,30 @@ async def resolve_app_public_url(db: AsyncSession) -> str:
     return get_settings().app_public_url.rstrip("/")
 
 
-def public_url_for() -> str:
-    """The browser loads the embedded web client from here - a path-only,
-    same-origin URL (proxy/entrypoint.sh's Caddyfile reverse-proxies
-    /rustdesk-webclient/* to the rustdesk container's own port 21114,
-    stripping the prefix), not a direct http://<host>:21114 URL. Confirmed
-    live as a real bug: DeployCore's own UI is served over HTTPS, and a
-    plain HTTP iframe embedded in an HTTPS page is exactly the kind of
-    "mixed active content" browsers block by default - the embedded session
-    showed a black screen with no visible error, because the RustDesk
-    protocol's own WebSocket connections never got a chance to open. A
-    path with no scheme/host at all sidesteps needing to know or guess the
-    operator's own external address entirely - the browser resolves it
-    against the current page's origin, whatever that happens to be."""
-    return "/rustdesk-webclient"
+async def public_url_for(db: AsyncSession) -> str:
+    """The browser loads the embedded web client from here - Caddy's own
+    dedicated :8444 HTTPS listener (proxy/entrypoint.sh), reverse-proxying
+    straight to the rustdesk container's port 21114 with NO path rewriting,
+    using the same Settings-configured Remote Management host as the
+    relay/rendezvous ports already do (resolve_public_host). Two real bugs
+    found the hard way got to this point, in order:
+
+    1. A direct http://<host>:21114 URL - a plain HTTP iframe embedded in
+       DeployCore's own HTTPS-served UI is exactly the "mixed active
+       content" browsers block by default. Confirmed live: the embedded
+       session showed a black screen with no visible error at all, since
+       the RustDesk protocol's own WebSocket connections never got a
+       chance to open.
+    2. Proxying it under a /rustdesk-webclient/ sub-path of DeployCore's
+       own :443 (same origin, no separate port) traded that for an endless
+       loading spinner - webclient2's own JS makes absolute, root-relative
+       calls (e.g. /api/...) that only resolve correctly when it's actually
+       served from its origin's root, not a sub-path a browser has no way
+       to know to prepend to those requests.
+
+    A dedicated port with no rewriting sidesteps both."""
+    host = await resolve_public_host(db)
+    return f"https://{host}:8444"
 
 _TIMEOUT_SECONDS = 15
 _SHARE_EXPIRE_SECONDS = 60 * 60  # a connect session link good for an hour
@@ -105,7 +115,12 @@ RELAY_PORTS = [
     {"port": 21117, "proto": "TCP", "purpose": "Relay server"},
     {"port": 21118, "proto": "TCP", "purpose": "Web client (ID over WebSocket)"},
     {"port": 21119, "proto": "TCP", "purpose": "Web client (relay over WebSocket)"},
-    {"port": 21114, "proto": "TCP", "purpose": "Web client + API (the browser loads the session from here)"},
+    # NOT 21114 - the browser no longer loads the session from there
+    # directly (see public_url_for()'s own docstring for the two real bugs
+    # that led here). 8444 is Caddy's own dedicated HTTPS listener for it,
+    # sharing this instance's own certificate - the one that actually needs
+    # forwarding for access from outside this network.
+    {"port": 8444, "proto": "TCP", "purpose": "Web client (the browser loads the session from here, over HTTPS)"},
 ]
 
 # Cached api-token from the last successful admin login. Cleared and re-fetched
@@ -221,9 +236,9 @@ async def create_session_url(rustdesk_id: str, rustdesk_password: str, host_name
     a one-time expiring share link for it, and returns the embeddable web-client
     URL. rustdesk_password is the host's own permanent/unattended password,
     decrypted from ManagedHost.rustdesk_key by the caller. public_url is the
-    browser-facing base URL (public_url_for() - a path-only, same-origin URL,
-    see its own docstring for why), so the embedded session loads through the
-    same HTTPS origin as the rest of the app, not a separate http:// one."""
+    browser-facing base URL (public_url_for() - its own dedicated HTTPS
+    port, see its own docstring for why), so the embedded session actually
+    connects instead of showing a black screen or spinning forever."""
     # Idempotent by intent: re-adding a peer already in the address book is a
     # harmless no-op / update, and this is the only place the current password
     # gets refreshed onto the rustdesk-api side, so it runs every session

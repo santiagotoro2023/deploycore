@@ -60,23 +60,29 @@ render_caddyfile() {
 
 :443 {
 	$cert_block
-
-	# The embedded RustDesk web client (rustdesk-api's own webclient2, port
-	# 21114) is proxied through the SAME HTTPS origin as the rest of the
-	# app, not loaded directly as its own http://<host>:21114 URL - a plain
-	# HTTP iframe inside this HTTPS page is exactly the "mixed active
-	# content" browsers block by default, confirmed live as the actual
-	# cause of the embedded session showing a black screen with no visible
-	# error (the RustDesk protocol's own WebSocket connections never got a
-	# chance to open at all). See services/remote_desktop.py's
-	# public_url_for(), which builds a path-only, same-origin URL for
-	# exactly this reason - no external host/port for it to guess at.
-	handle /rustdesk-webclient/* {
-		uri strip_prefix /rustdesk-webclient
-		reverse_proxy rustdesk:21114
-	}
-
 	reverse_proxy frontend:5173
+}
+
+# The embedded RustDesk web client (rustdesk-api's own webclient2, port
+# 21114) gets its OWN HTTPS listener, sharing the same certificate strategy,
+# rather than being loaded directly as its own http://<host>:21114 URL or
+# proxied under a sub-path of :443. Two real bugs found the hard way, in
+# order: (1) a plain HTTP iframe inside this HTTPS-served app is exactly the
+# "mixed active content" browsers block by default - confirmed live as the
+# cause of a black screen with no visible error, the RustDesk protocol's own
+# WebSocket connections never got a chance to open at all. (2) Proxying it
+# under a /rustdesk-webclient/ sub-path of :443 (the first fix attempted)
+# just traded that for an endless loading spinner - webclient2's own JS
+# makes absolute, root-relative calls (e.g. /api/...) that only resolve
+# correctly when the app is actually served from its origin's root, not a
+# sub-path a browser has no way to know to prepend to those requests.
+# A dedicated port with NO path rewriting sidesteps both: see
+# services/remote_desktop.py's public_url_for(), which builds this port's
+# own URL using the Settings-configured Remote Management host (the same
+# address already used for the relay/rendezvous ports).
+:8444 {
+	$cert_block
+	reverse_proxy rustdesk:21114
 }
 EOF
 }
