@@ -62,30 +62,44 @@ upload the `.msi` as a global App Asset yourself, then **Set as agent**.
 > The PowerShell one-liner path depends on none of this and is the guaranteed
 > install method.
 
-## Branding — what's DeployCore, what still says "RustDesk"
+## Branding — RustDesk should be invisible, not a second "DeployCore" program
 
 We install the **stock** RustDesk client (no source recompile — that's the
-deliberate call to avoid owning a Rust/Flutter build pipeline), then relabel
-everything installer-level tweaks can reach.
+deliberate call to avoid owning a Rust/Flutter build pipeline), then hide
+everything installer-level tweaks can reach, rather than relabeling it — a
+renamed "DeployCore..." entry sitting next to the real "DeployCore Remote
+Management Agent" entry would still look like two separate programs, which
+defeats the point.
 
-**Shows as DeployCore:**
+**Shows as DeployCore (the only things visible at all):**
 - The whole browser/operator experience.
-- The notification-area **tray icon** (`.msi` installs it) — the DeployCore mark
-  and name "DeployCore Remote Management Agent". This is the `remote-agent/tray/`
-  companion app; the RustDesk tray itself is hidden (`hide-tray=Y`) since it
-  can't be re-branded without a recompile.
-- Add/Remove Programs entry — renamed to "DeployCore Remote Management Agent",
-  publisher "DeployCore", DeployCore icon. Done by the install script's branding
-  step + the MSI's `ARPPRODUCTICON`.
-- The Windows service's display name in services.msc — "DeployCore Remote
-  Management Agent".
-- The `.msi` wrapper package name and icon.
+- The notification-area **tray icon** — the DeployCore mark and name. This is
+  the `remote-agent/tray/` companion app; it ships with the `.msi` only.
+- The `.msi` wrapper package's own Add/Remove Programs entry (name, publisher,
+  icon) and the Windows service's display name in services.msc.
 - **No "being controlled" window** during a session — suppressed with
   `allow-hide-cm=Y` (permitted because we use a permanent password).
 
-**The icon is the same mark everywhere** — the tray, Add/Remove Programs, and the
-MSI icon are all drawn (by the tray app, GDI+, in CI) from the same DeployCore
-mark as the browser favicon (`frontend/public/favicon.svg`) and the in-app logo.
+**Actively hidden/suppressed, not shown at all:**
+- **RustDesk's own Add/Remove Programs entry** — `SystemComponent=1` on its
+  uninstall registry key, the standard mechanism bundled/dependency installers
+  use to keep a product out of the visible list entirely. Not renamed - hidden.
+- **Desktop/Start Menu shortcuts and the virtual printer** — suppressed via
+  documented RustDesk MSI properties (`CREATEDESKTOPSHORTCUTS=N` etc.), plus a
+  belt-and-suspenders sweep that deletes any `RustDesk.lnk` left behind anyway
+  (confirmed some builds ignore the properties) across every user profile.
+- **An auto-launched interactive GUI window and its tray icon** — confirmed
+  live: some RustDesk builds auto-launch the GUI right after install,
+  regardless of the shortcut properties, running as whichever user happens to
+  be logged in and reading a totally separate, unconfigured per-user config
+  (not the one the install script writes for the actual managed service). The
+  script kills any `rustdesk.exe` process immediately after install, before
+  it can register itself anywhere further.
+- RustDesk's own tray icon on the actual managed service - `hide-tray=Y`.
+
+**The icon is the same mark everywhere** — the tray and the `.msi`'s own icon
+are both drawn (by the tray app, GDI+, in CI) from the same DeployCore mark as
+the browser favicon (`frontend/public/favicon.svg`) and the in-app logo.
 
 **Still says "RustDesk"** (would need a source recompile to change):
 - The `rustdesk.exe` process name in Task Manager.
@@ -96,6 +110,6 @@ mark as the browser favicon (`frontend/public/favicon.svg`) and the in-app logo.
 These are low-visibility (you have to open Task Manager or browse Program Files),
 and none are seen by the DeployCore operator in normal use.
 
-**Note:** the tray icon and the custom `.ico` ship only with the `.msi` (CI
-builds them); the copy-paste one-liner install path applies the name/publisher
-/service branding and hides the CM window, but has no tray app or custom icon.
+**Note:** the tray icon ships with the `.msi` only; the copy-paste one-liner
+install path still hides/suppresses everything RustDesk-side, just without a
+tray app of its own.

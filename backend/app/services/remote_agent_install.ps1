@@ -4,9 +4,15 @@
 
     Installs a stock RustDesk client as a headless Windows service, points it
     at this DeployCore instance's self-hosted server, and enrolls the machine
-    so it shows up under Remote Management. No RustDesk branding is shown on
-    the machine (the service runs with hide-tray); DeployCore's own branded
-    tray companion (installed separately by the .msi) is the only local UI.
+    so it shows up under Remote Management. RustDesk itself is meant to be
+    fully invisible - absorbed into "the Agent" rather than a second, separate
+    program - so this also: installs with no Desktop/Start Menu shortcuts or
+    virtual printer, kills any interactive RustDesk GUI instance that
+    auto-launches post-install (confirmed some builds do this regardless of
+    the shortcut properties), and hides RustDesk's own Add/Remove Programs
+    entry outright (not just renames it - two "DeployCore..." entries would
+    still look like two separate programs). DeployCore's own branded tray
+    companion (installed separately by the .msi) is the only local UI shown.
 
     This is the single source of truth for the install logic. It is:
       * served as-is by  GET /api/remote/install-script  (with the server URL
@@ -91,21 +97,47 @@ $cfg = Invoke-RestMethod -Uri "$ServerUrl/api/remote/agent-config/$EnrollToken" 
 #    DeployCore itself, which is where the .msi carrying the bundled copy came
 #    from in the first place. Only the one-liner path (a human running this
 #    manually, normally with their own internet) ever needs the download.
+# No shortcuts, no printer - RustDesk is meant to be invisible, absorbed into
+# "the Agent" rather than a second visible program (documented RustDesk MSI
+# properties; default is to create a desktop shortcut, which is exactly the
+# stray icon a real install surfaced).
+$noTraceArgs = "CREATESTARTMENUSHORTCUTS=`"N`"", "CREATEDESKTOPSHORTCUTS=`"N`"", "INSTALLPRINTER=`"N`""
 if (-not (Test-Path $RustDeskExe)) {
     $bundled = if ($PSScriptRoot) { Join-Path $PSScriptRoot "rustdesk-x86_64.msi" } else { $null }
     if ($bundled -and (Test-Path $bundled)) {
         Write-Step "Installing bundled RustDesk $RustDeskVersion..."
-        Start-Process msiexec.exe -ArgumentList "/i", "`"$bundled`"", "/qn" -Wait
+        Start-Process msiexec.exe -ArgumentList (@("/i", "`"$bundled`"", "/qn") + $noTraceArgs) -Wait
     } else {
         Write-Step "No bundled RustDesk installer found - downloading $RustDeskVersion..."
         $msi = Join-Path $env:TEMP "rustdesk-$RustDeskVersion.msi"
         Invoke-WebRequest -Uri $RustDeskMsiUrl -OutFile $msi -UseBasicParsing
         Write-Step "Installing..."
-        Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn" -Wait
+        Start-Process msiexec.exe -ArgumentList (@("/i", "`"$msi`"", "/qn") + $noTraceArgs) -Wait
         Remove-Item $msi -Force -ErrorAction SilentlyContinue
     }
 }
 if (-not (Test-Path $RustDeskExe)) { throw "RustDesk did not install to $RustDeskExe" }
+
+# Some RustDesk builds auto-launch the interactive GUI right after install
+# (confirmed live: a tray icon and desktop shortcut showed up even though
+# nothing in this script asked for either) - that instance runs as whichever
+# user is logged in, reading ITS OWN per-user config (not the one written to
+# the SYSTEM profile below), so it's an unconfigured, fully vanilla RustDesk
+# window with no relation to the managed service this script sets up. Kill it
+# before it can register itself anywhere further (autostart, etc.) - the
+# actual agent is the hidden background service installed below, not this.
+Get-Process -Name "rustdesk" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+# Remove any Desktop/Start Menu shortcuts RustDesk's installer created despite
+# the properties above (belt and suspenders - confirmed some builds ignore
+# them), for every user profile, not just the one currently logged in.
+Get-ChildItem "$env:SystemDrive\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    @(
+        Join-Path $_.FullName "Desktop\RustDesk.lnk"
+        Join-Path $_.FullName "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\RustDesk.lnk"
+    ) | Where-Object { Test-Path $_ } | Remove-Item -Force -ErrorAction SilentlyContinue
+}
+Remove-Item "$env:PUBLIC\Desktop\RustDesk.lnk" -Force -ErrorAction SilentlyContinue
 
 # 3. Write the client config pointed at our server, headless (no tray/window).
 #    verification-method=use-permanent-password + a permanent password below is
@@ -144,17 +176,21 @@ Start-Process $RustDeskExe -ArgumentList "--password", $permanentPassword -Wait
 $rustdeskId = (& $RustDeskExe --get-id).Trim()
 if (-not $rustdeskId) { throw "Could not read the RustDesk ID (--get-id returned nothing)." }
 
-# 5. Brand what installer-level tweaks can reach, so a user poking around
-#    Windows sees "DeployCore", not "RustDesk". This does NOT recompile
-#    anything - it just relabels the stock client's own registrations:
-#      * the Add/Remove Programs entry (display name + publisher + icon), and
-#      * the Windows service's display name (the service key stays "RustDesk",
-#        but services.msc shows the friendly name).
-#    What it deliberately can't reach without a source recompile: the
-#    rustdesk.exe process name, the C:\Program Files\RustDesk folder, and the
-#    in-session "being controlled" banner.
+# 5. RustDesk is meant to be invisible - absorbed into "the Agent," not a
+#    second visible program - so its OWN Add/Remove Programs entry is hidden
+#    outright (SystemComponent=1, the standard mechanism bundled/dependency
+#    installers use to keep an installed product out of the visible list)
+#    rather than just relabeled to another "DeployCore..." entry, which would
+#    leave two confusingly-identical-looking entries instead of one. This
+#    does NOT recompile anything - RustDesk's actual files/service are
+#    unmodified, only its own uninstall registry entry's visibility changes.
+#    The Windows service is also renamed (service key stays "RustDesk", only
+#    the display name/description shown in services.msc changes).
+#    What none of this reaches without a source recompile: the rustdesk.exe
+#    process name, the C:\Program Files\RustDesk folder, and the in-session
+#    "being controlled" banner.
 $BrandName = "DeployCore Remote Management Agent"
-Write-Step "Applying branding..."
+Write-Step "Hiding RustDesk's own presence..."
 try {
     $uninstallRoots = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -164,13 +200,7 @@ try {
         Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
             $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
             if ($props.DisplayName -like "RustDesk*") {
-                Set-ItemProperty $_.PSPath -Name DisplayName -Value $BrandName
-                Set-ItemProperty $_.PSPath -Name Publisher -Value "DeployCore"
-                # Point the entry's icon at our own .ico if the installer dropped
-                # one next to this script (the .msi does; the one-liner path skips
-                # it and just keeps the renamed entry without a custom icon).
-                $ico = Join-Path $PSScriptRoot "deploycore.ico"
-                if (Test-Path $ico) { Set-ItemProperty $_.PSPath -Name DisplayIcon -Value $ico }
+                Set-ItemProperty $_.PSPath -Name SystemComponent -Value 1 -Type DWord
             }
         }
     }
@@ -178,7 +208,7 @@ try {
     & sc.exe config RustDesk DisplayName= "$BrandName" | Out-Null
     & sc.exe description RustDesk "Secure remote management by DeployCore." | Out-Null
 } catch {
-    Write-Step "Branding step skipped ($($_.Exception.Message)) - the agent still works."
+    Write-Step "Hiding step skipped ($($_.Exception.Message)) - the agent still works."
 }
 
 # 6. Report ID + password home so the host flips to 'enrolled' in DeployCore.
