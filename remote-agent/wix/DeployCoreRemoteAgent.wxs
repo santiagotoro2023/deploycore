@@ -58,10 +58,22 @@
   depends on none of this.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- CI passes -d BuildVersion=1.0.<run number>.0 so every published build
+       has a genuinely higher ProductVersion than the last (MajorUpgrade
+       below only fires on a real version increase) - defaulted here only for
+       a manual/local `wix build` with no -d given. A static version here was
+       a real, confirmed bug: re-running `msiexec /i` for what Windows
+       Installer considered "the same product, same version" (even after the
+       files had been manually deleted rather than properly uninstalled) was
+       silently treated as a no-op/repair rather than a fresh install -
+       RegisterAgentTask/RunAgentTask's own `Condition="NOT Installed"` (see
+       below) then evaluates false, and nothing happens: no error, no log,
+       no new enrollment attempt. -->
+  <?define BuildVersion="1.0.0.0" ?>
   <Package
       Name="DeployCore Remote Management Agent"
       Manufacturer="DeployCore"
-      Version="1.0.0.0"
+      Version="$(var.BuildVersion)"
       UpgradeCode="6f3d1c2a-9b7e-4d51-8a2c-2e6f4b1d9a30"
       Scope="perMachine">
 
@@ -224,9 +236,23 @@
            when this file previously scheduled these after InstallFinalize.
            After InstallFiles specifically because RegisterAgentTask's /tr
            command references RunAgentInstall.cmd, which needs to actually
-           exist on disk by then - true once InstallFiles has run. -->
-      <Custom Action="RegisterAgentTask" After="InstallFiles" Condition="NOT Installed" />
-      <Custom Action="RunAgentTask" After="RegisterAgentTask" Condition="NOT Installed AND NOT SKIPRUN" />
+           exist on disk by then - true once InstallFiles has run.
+
+           Condition is "NOT REMOVE", not "NOT Installed" - confirmed live as
+           a real bug: `Installed` is set (non-empty) on ANY repeat install of
+           a product Windows Installer already has a record of, including a
+           same-version reinstall/repair after files were deleted by hand
+           instead of a real uninstall - so "NOT Installed" silently skipped
+           BOTH actions on every retry against a VM that had a previous
+           attempt on it, with no error at all (matches "msiexec returns
+           immediately, no log, nothing happens" exactly). REMOVE is only set
+           to "ALL" during a genuine uninstall, which is the one case these
+           actions should NOT run - "NOT REMOVE" (also true during upgrades
+           via MajorUpgrade, which uninstalls the old product with REMOVE set
+           mid-sequence, and true during ordinary reinstalls/repairs) is the
+           standard, correct MSI idiom for "run except when uninstalling". -->
+      <Custom Action="RegisterAgentTask" After="InstallFiles" Condition="NOT REMOVE" />
+      <Custom Action="RunAgentTask" After="RegisterAgentTask" Condition="NOT REMOVE AND NOT SKIPRUN" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

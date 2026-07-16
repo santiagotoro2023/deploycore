@@ -20,7 +20,7 @@ from app.services import remote_desktop
 
 router = APIRouter(prefix="/api/remote", tags=["remote-agent"])
 
-_INSTALL_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "services" / "remote_agent_install.ps1"
+_INSTALL_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "services" / "remote_agent_install.ps1"
 
 
 async def _host_for_token(db: AsyncSession, enroll_token: str) -> ManagedHost:

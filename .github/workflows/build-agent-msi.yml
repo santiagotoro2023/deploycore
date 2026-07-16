@@ -71,10 +71,16 @@ jobs:
         shell: pwsh
         run: wix extension add -g WixToolset.Util.wixext/5.0.2
 
+      # A static ProductVersion was a real, confirmed bug: Windows Installer
+      # treats a repeat `msiexec /i` of what it considers "the same product,
+      # same version" as a no-op/repair, not a fresh install - MajorUpgrade
+      # (below) only fires on an actual version increase. run_number always
+      # goes up, so every published build is guaranteed installable over
+      # whatever was there before, even a same-content-different-build case.
       - name: Build MSI
         shell: pwsh
         working-directory: remote-agent/wix
-        run: wix build DeployCoreRemoteAgent.wxs -ext WixToolset.Util.wixext -arch x64 -o DeployCoreRemoteAgent.msi
+        run: wix build DeployCoreRemoteAgent.wxs -ext WixToolset.Util.wixext -arch x64 -d BuildVersion="1.0.${{ github.run_number }}.0" -o DeployCoreRemoteAgent.msi
 
       # Smoke test: install with SKIPRUN=1, which still runs RegisterAgentTask
       # (only RunAgentTask, the one that would need a live server, is gated
@@ -131,8 +137,27 @@ jobs:
           if ($taskToRun -notmatch [regex]::Escape($runCmd)) { throw "Scheduled task command doesn't reference $runCmd - quoting likely broke: $taskToRun" }
           & schtasks.exe /delete /tn DeployCoreAgentInstall /f | Out-Null
 
+          # Repeat-install check: catches a real, previously-shipped bug where
+          # RegisterAgentTask/RunAgentTask were conditioned on "NOT Installed"
+          # instead of "NOT REMOVE" - `Installed` is set on ANY repeat install
+          # of a product Windows Installer already has a record of (not just
+          # uninstalls), so a second `msiexec /i` of the same product silently
+          # skipped both actions with no error at all - exactly what a user
+          # retrying a failed/manually-cleaned-up install would hit. Confirms
+          # the task gets registered again on a plain repeat install, not just
+          # on the very first one.
+          $p2 = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "SKIPRUN=1", "SERVERURL=`"$testUrl`"", "ENROLLTOKEN=$testToken", "/l*v", "reinstall.log" -Wait -PassThru
+          if ($p2.ExitCode -ne 0) {
+              Write-Host "--- repeat-install custom action trace ---"
+              Get-Content reinstall.log | Select-String "^Action start|^Action ended|Return value|CustomAction|Error \d|^MSI \(c\)" | ForEach-Object { Write-Host $_.Line }
+              throw "Repeat MSI install failed with exit code $($p2.ExitCode)"
+          }
+          $taskInfo2 = & schtasks.exe /query /tn DeployCoreAgentInstall /fo list /v 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "RegisterAgentTask did not re-register the scheduled task on a repeat install (this is the NOT Installed vs NOT REMOVE bug): $taskInfo2" }
+          & schtasks.exe /delete /tn DeployCoreAgentInstall /f | Out-Null
+
           Start-Process msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn" -Wait
-          Write-Host "Smoke test passed."
+          Write-Host "Smoke test passed (including repeat-install)."
 
       # Always, pass or fail - a failure needs the full log to diagnose (the
       # console tail alone hid the real cause of the first real failure), and
@@ -142,7 +167,9 @@ jobs:
         if: always()
         with:
           name: install-log
-          path: remote-agent/wix/install.log
+          path: |
+            remote-agent/wix/install.log
+            remote-agent/wix/reinstall.log
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
