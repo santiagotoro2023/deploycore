@@ -59,7 +59,18 @@ async def _remote_size(client: httpx.AsyncClient, url: str) -> int | None:
     return None
 
 
-async def ensure_agent_asset_seeded(db: AsyncSession) -> None:
+async def ensure_agent_asset_seeded(db: AsyncSession, *, force: bool = False) -> None:
+    """force=True skips the cheap size-based freshness check entirely and
+    always re-downloads. Confirmed live this matters: two genuinely different
+    CI builds landed at the exact same byte size (a WiX version-string change
+    that happened to not shift the MSI's total padded size at all) - the
+    size-only check would have reported "already up to date" and silently
+    kept serving the older, buggy build forever. The api-startup path still
+    uses the cheap check (worth avoiding a 22MB re-download on every restart,
+    and a rare false-negative there self-corrects on the next genuinely
+    differently-sized build); the on-demand "Check for update" button
+    (app_assets.py's refresh-agent route) passes force=True specifically so
+    a user-triggered check is never subject to this false-negative at all."""
     settings = get_settings()
     url = settings.remote_agent_msi_url
     if not url:
@@ -69,7 +80,7 @@ async def ensure_agent_asset_seeded(db: AsyncSession) -> None:
     existing_file_ok = existing is not None and bool(existing.storage_path) and Path(existing.storage_path).exists()
 
     async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT_SECONDS, follow_redirects=True) as client:
-        if existing_file_ok:
+        if existing_file_ok and not force:
             remote_size = await _remote_size(client, url)
             if remote_size is not None and remote_size == existing.size_bytes:
                 return  # already up to date, nothing to do

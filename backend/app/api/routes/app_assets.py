@@ -316,10 +316,15 @@ async def refresh_remote_agent_asset(db: AsyncSession = Depends(get_db)) -> AppA
     to be a real, recurring source of confusion during active iteration on
     the agent script - a rebuild-and-restart's own timing relative to a CI
     publish is otherwise invisible and easy to get wrong. Read-only from the
-    caller's point of view if nothing changed (ensure_agent_asset_seeded is
-    itself the same idempotent, size-comparing check main.py's startup hook
-    uses) - this just lets it run right now instead of waiting."""
-    await remote_agent_seed.ensure_agent_asset_seeded(db)
+    caller's point of view if nothing changed - but unlike main.py's own
+    startup call, this one passes force=True: confirmed live that two
+    genuinely different CI builds can land at the exact same byte size (a
+    version-string change that didn't happen to shift the MSI's padded
+    size), which the cheap size-only check main.py uses at startup can't
+    tell apart. A user explicitly clicking "check for update" needs a real
+    answer, not a coin-flip - so this always re-downloads and re-compares,
+    trading a few seconds and 22MB of bandwidth for certainty."""
+    await remote_agent_seed.ensure_agent_asset_seeded(db, force=True)
     result = await db.execute(select(AppAsset).where(AppAsset.is_remote_agent.is_(True)))
     asset = result.scalars().first()
     if asset is None:
