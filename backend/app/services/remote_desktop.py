@@ -219,9 +219,22 @@ async def create_session_url(rustdesk_id: str, rustdesk_password: str, host_name
     # rather than only on first connect. A non-200 here isn't necessarily
     # fatal (the peer may already be present), so it's logged, not raised -
     # the share step below is the real gate.
+    # /api/admin/address_book/create (NOT /my/) requires an explicit user_id
+    # in the body - it's the "admin manages another user's address book on
+    # their behalf" endpoint, per rustdesk-api's own Go source
+    # (AddressBookForm.UserId, checked as `if t.UserId == 0 { ParamsError }`
+    # with no session-based fallback). We never sent one, so this call has
+    # ALWAYS failed with ParamsError - silently, since the except block below
+    # only ever logged it as "may already exist, not fatal". The peer was
+    # never actually added, which is exactly why shareByWebClient below (a
+    # DIFFERENT endpoint that correctly resolves the user from the session,
+    # confirmed via its own `u := CurUser(c)`) then failed with "Item not
+    # found" every time - confirmed live. /my/address_book/create is the
+    # correct, session-scoped counterpart (`t.UserId = u.Id` from CurUser(c),
+    # same pattern as shareByWebClient) - no user_id needed in the body.
     try:
         ab_resp = await _admin_post(
-            "address_book/create",
+            "my/address_book/create",
             {"id": rustdesk_id, "password": rustdesk_password, "alias": host_name},
         )
         _unwrap(ab_resp, "address_book/create")  # only for its own logging below on failure
