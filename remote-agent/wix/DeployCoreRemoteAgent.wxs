@@ -157,6 +157,34 @@
       </Directory>
     </StandardDirectory>
 
+    <!-- The Scheduled Task's own /tr target lives here, NOT under
+         INSTALLFOLDER - confirmed live as a real bug: quotes authored around
+         "[INSTALLFOLDER]RunAgentInstall.cmd" (a path containing three spaces,
+         "Program Files" + "DeployCore Remote Management Agent") did not
+         survive the round trip through WixQuietExec64 into the registered
+         task. `schtasks /query /tn ... /xml` on a real failing install showed
+         the Action had been split at the first space -
+         <Command>C:\Program</Command><Arguments>Files\...\
+         RunAgentInstall.cmd</Arguments> - so Task Scheduler tried to launch
+         the nonexistent "C:\Program" (error 0x80070002, ERROR_FILE_NOT_FOUND)
+         instead of the real file, which was sitting right there on disk the
+         whole time. CommonAppDataFolder (C:\ProgramData\) has no spaces in
+         it at all, so a target path under here needs no quoting to begin
+         with - there's nothing left for that round trip to lose. This one
+         file's only job is to invoke the real RunAgentInstall.cmd (still
+         under INSTALLFOLDER, unchanged) with ITS OWN quoting - a completely
+         different, already-proven-safe context (plain cmd.exe script
+         content, parsed once, at actual run time - not a command line
+         built up through several layers of property substitution and
+         custom-action escaping first). -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="AGENTDATADIR" Name="DeployCore">
+        <Component Id="TaskLauncher" Guid="*">
+          <File Id="RunAgentTaskCmd" Source="run-agent-task.cmd" Name="run.cmd" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
     <Feature Id="Main">
       <ComponentRef Id="InstallScript" />
       <ComponentRef Id="RunScript" />
@@ -164,16 +192,22 @@
       <ComponentRef Id="RustDeskInstaller" />
       <ComponentRef Id="BrandIcon" />
       <ComponentRef Id="TrayApp" />
+      <ComponentRef Id="TaskLauncher" />
     </Feature>
 
-    <!-- Registers a Scheduled Task pointed at RunAgentInstall.cmd (bare path,
-         no arguments - it reads SERVERURL/ENROLLTOKEN from agent-params.ini,
-         see AgentParams above, specifically to avoid trusting Task Scheduler
-         to correctly re-parse a quoted multi-argument /tr command at actual
-         execution time), running as SYSTEM. /f suppresses any "already
-         exists" prompt (harmless on a reinstall/repair). Deliberately does
-         NOT run yet - see RunAgentTask below and this file's header comment
-         for why the two are split.
+    <!-- Registers a Scheduled Task pointed at run-agent-task.cmd under
+         C:\ProgramData\DeployCore\ (see TaskLauncher/AGENTDATADIR above -
+         NOT RunAgentInstall.cmd directly under INSTALLFOLDER, whose path
+         contains spaces that a real install proved don't survive this /tr
+         value's round trip through WixQuietExec64 intact). Bare path, no
+         arguments either way - SERVERURL/ENROLLTOKEN are read from
+         agent-params.ini, see AgentParams above, specifically to avoid
+         trusting Task Scheduler to correctly re-parse a quoted
+         multi-argument /tr command at actual execution time. Runs as
+         SYSTEM. /f suppresses any "already exists" prompt (harmless on a
+         reinstall/repair). Deliberately does NOT run yet - see
+         RunAgentTask below and this file's header comment for why the two
+         are split.
 
          Trigger is ONSTART (with a 30s delay for networking to come up), NOT
          ONCE - confirmed necessary live: the DeployCore deployment pipeline
@@ -192,13 +226,17 @@
          registered-but-abandoned.
 
          Runs even under SKIPRUN=1 (registering a task has no live-server
-         dependency) so CI's smoke test can verify this command's quoting is
-         actually correct without needing a real DeployCore server. -->
+         dependency) so CI's smoke test can exercise it without needing a
+         real DeployCore server - it now actually runs the registered task
+         and confirms it succeeds, not just that the registration command's
+         text looks right (that alone previously missed the /tr
+         quote-loss bug entirely, since SKIPRUN=1 never exercised real
+         execution). -->
     <SetProperty
         Id="RegisterAgentTask"
         Before="RegisterAgentTask"
         Sequence="execute"
-        Value="&quot;[System64Folder]schtasks.exe&quot; /create /f /ru SYSTEM /sc onstart /delay 0000:30 /tn DeployCoreAgentInstall /tr &quot;[INSTALLFOLDER]RunAgentInstall.cmd&quot;" />
+        Value="&quot;[System64Folder]schtasks.exe&quot; /create /f /ru SYSTEM /sc onstart /delay 0000:30 /tn DeployCoreAgentInstall /tr [AGENTDATADIR]run.cmd" />
     <CustomAction
         Id="RegisterAgentTask"
         BinaryRef="Wix4UtilCA_X64"

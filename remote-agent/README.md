@@ -42,6 +42,31 @@ to a plain file instead means the Scheduled Task's own `/tr` is just a bare
 path with nothing for Task Scheduler to mis-split, removing that whole class
 of risk.
 
+**The Scheduled Task's `/tr` target lives under `C:\ProgramData\DeployCore\`
+(`run-agent-task.cmd`), not directly at the script under `C:\Program
+Files\DeployCore Remote Management Agent\`.** Confirmed live via `schtasks
+/query /tn DeployCoreAgentInstall /xml` on a real failing install: quotes
+authored around that Program-Files path (which contains three spaces) did
+not survive the round trip from the `.wxs` through `WixQuietExec64` into the
+actually-registered task - Task Scheduler's own stored `<Command>` had been
+silently split at the first space (`C:\Program` as the command,
+`Files\DeployCore Remote Management Agent\RunAgentInstall.cmd` as a bogus
+argument), so every real execution attempt failed instantly with
+`0x80070002` (file not found) and produced zero log output, indistinguishable
+from the task never running at all. `schtasks /query /fo list` alone doesn't
+reveal this - it renders the path cleanly either way; only the raw `/xml`
+dump shows the actual stored `<Command>`/`<Arguments>` split. Since
+`C:\ProgramData\` has no spaces in it at all, a target path there needs no
+quoting to begin with, so there's nothing left for that round trip to lose.
+`run-agent-task.cmd`'s only job is to invoke the real
+`RunAgentInstall.cmd` with its own (separately, already-safe) quoting - a
+plain `.cmd` file's content, parsed once by `cmd.exe` at actual run time,
+not a command line built up through several layers of MSI property
+substitution and custom-action escaping first. CI's smoke test now actually
+*executes* the registered task (not just checks its stored command text) and
+asserts `agent-install.log` gets created, specifically so this exact class of
+bug can't ship silently again.
+
 It's delivered two ways, both using that same script:
 
 1. **One-liner (easiest, no download).** The Remote Management tab shows a

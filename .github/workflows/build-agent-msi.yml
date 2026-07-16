@@ -130,12 +130,48 @@ jobs:
           if ($paramsContent -notmatch [regex]::Escape($testUrl)) { throw "agent-params.ini is missing the SERVERURL value: $paramsContent" }
           if ($paramsContent -notmatch [regex]::Escape($testToken)) { throw "agent-params.ini is missing the ENROLLTOKEN value: $paramsContent" }
 
+          $taskLauncher = Join-Path $env:ProgramData "DeployCore\run.cmd"
+          $agentLog = Join-Path $env:ProgramData "DeployCore\agent-install.log"
+          if (-not (Test-Path $taskLauncher)) { throw "TaskLauncher component did not place the no-space launcher at $taskLauncher" }
+
           $taskInfo = & schtasks.exe /query /tn DeployCoreAgentInstall /fo list /v 2>&1
           if ($LASTEXITCODE -ne 0) { throw "RegisterAgentTask did not register the scheduled task: $taskInfo" }
           $taskToRun = ($taskInfo | Select-String "^Task To Run:") -join "`n"
           Write-Host "Registered task command: $taskToRun"
-          if ($taskToRun -notmatch [regex]::Escape($runCmd)) { throw "Scheduled task command doesn't reference $runCmd - quoting likely broke: $taskToRun" }
+          if ($taskToRun -notmatch [regex]::Escape($taskLauncher)) { throw "Scheduled task command doesn't reference $taskLauncher - quoting likely broke: $taskToRun" }
+
+          # Actually EXECUTE the registered task, not just check its stored
+          # command text - confirmed live as a real, previously-missed gap:
+          # the stored text can look completely correct via `schtasks
+          # /query /fo list` while Task Scheduler's own internal XML has
+          # silently split a quoted, space-containing /tr path at the first
+          # space (`schtasks /query ... /xml` on a real failing install
+          # showed exactly this: <Command>C:\Program</Command><Arguments>
+          # Files\...\RunAgentInstall.cmd</Arguments>), which only shows up
+          # by actually trying to run it (result 0x80070002, file not
+          # found) - SKIPRUN=1 never exercised this at all before. The
+          # fake server address means the script itself will fail quickly
+          # once it actually starts (no real DeployCore to call) - that's
+          # fine, this only checks that Task Scheduler could FIND and
+          # LAUNCH the chain at all the way through to the real script
+          # (proven by agent-install.log existing - Start-Transcript is
+          # the very first thing Install-DeployCoreAgent.ps1 does, before
+          # any validation that could fail first).
+          & schtasks.exe /run /tn DeployCoreAgentInstall | Out-Null
+          $launched = $false
+          for ($i = 0; $i -lt 15; $i++) {
+              Start-Sleep -Seconds 2
+              if (Test-Path $agentLog) { $launched = $true; break }
+          }
+          if (-not $launched) {
+              $finalTaskInfo = & schtasks.exe /query /tn DeployCoreAgentInstall /fo list /v 2>&1
+              Write-Host "Task state after /run: $finalTaskInfo"
+              throw "Scheduled task did not actually launch the agent script (no $agentLog after 30s) - Task Scheduler could register the task but not execute it, likely the same /tr quoting-loss bug this test exists to catch"
+          }
+          Write-Host "Scheduled task executed successfully (agent-install.log was created)."
+
           & schtasks.exe /delete /tn DeployCoreAgentInstall /f | Out-Null
+          Remove-Item $agentLog -Force -ErrorAction SilentlyContinue
 
           # Repeat-install check: catches a real, previously-shipped bug where
           # RegisterAgentTask/RunAgentTask were conditioned on "NOT Installed"
