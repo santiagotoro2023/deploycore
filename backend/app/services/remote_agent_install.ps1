@@ -328,27 +328,47 @@ if (-not $svcReady) {
     Write-Step "RustDesk service did not reach Running within 20s - State=$($svcInfo.State) ExitCode=$($svcInfo.ExitCode) (continuing anyway - --get-id below will fail clearly if it's genuinely not up)"
 }
 
+# Both --password and --get-id below capture stderr/exit code explicitly,
+# not just stdout via a bare `& $RustDeskExe ...` call - confirmed live as a
+# real gap: RustDesk's own ID generation (Config::gen_id() -> get_auto_id())
+# is 100% local (derived from the machine's MAC address via the
+# mac_address crate) with no network/rendezvous-server round trip at all,
+# so it should never legitimately come back empty - if it does anyway, the
+# process is failing before reaching that code, and a Rust panic writes to
+# STDERR while a nonzero native exit code raises no PowerShell error unless
+# explicitly checked. A bare `& program.exe` capturing only stdout would
+# show silent empty output either way, with the real reason invisible.
+$rdStdErrDir = "$env:ProgramData\DeployCore"
+
+$passStdout = Join-Path $rdStdErrDir "rustdesk-password-stdout.log"
+$passStderr = Join-Path $rdStdErrDir "rustdesk-password-stderr.log"
 $bytes = New-Object 'System.Byte[]' 18
 [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
 $permanentPassword = [Convert]::ToBase64String($bytes) -replace '[+/=]', 'x'
-Start-Process $RustDeskExe -ArgumentList "--password", $permanentPassword -Wait
+$passProc = Start-Process $RustDeskExe -ArgumentList "--password", $permanentPassword -Wait -PassThru -RedirectStandardOutput $passStdout -RedirectStandardError $passStderr
+$passStderrContent = Get-Content $passStderr -Raw -ErrorAction SilentlyContinue
+if ($passProc.ExitCode -ne 0 -or $passStderrContent) {
+    Write-Step "--password exit code $($passProc.ExitCode)$(if ($passStderrContent) { " - stderr: $passStderrContent" })"
+}
 
 # --get-id talks to the running service over IPC, which can lag a moment
-# behind Get-Service's own "Running" status - retry rather than crash on the
-# first empty response. Confirmed live: `(& $RustDeskExe --get-id).Trim()`
-# throws PowerShell's own "cannot call a method on a null-valued expression"
-# when --get-id prints NOTHING (not even an empty string), which happened
-# before this fix and produced a far less useful error than the one already
-# written below for exactly this case - guard the null before calling
-# .Trim() at all, and give the IPC a few chances to come up first.
+# behind Get-Service's own "Running" status - retry rather than give up on
+# the first empty response, and log stderr/exit code on every failed
+# attempt so a genuine, reproducible crash (as opposed to a one-off timing
+# miss) shows up clearly instead of silently repeating 10 times.
 $rustdeskId = $null
 for ($i = 0; $i -lt 10; $i++) {
-    $idOutput = & $RustDeskExe --get-id
+    $idStdout = Join-Path $rdStdErrDir "rustdesk-getid-stdout.log"
+    $idStderr = Join-Path $rdStdErrDir "rustdesk-getid-stderr.log"
+    $idProc = Start-Process $RustDeskExe -ArgumentList "--get-id" -Wait -PassThru -RedirectStandardOutput $idStdout -RedirectStandardError $idStderr
+    $idOutput = Get-Content $idStdout -Raw -ErrorAction SilentlyContinue
     if ($idOutput) { $rustdeskId = $idOutput.Trim() }
     if ($rustdeskId) { break }
+    $idStderrContent = Get-Content $idStderr -Raw -ErrorAction SilentlyContinue
+    Write-Step "--get-id attempt $($i + 1): exit code $($idProc.ExitCode), stdout empty$(if ($idStderrContent) { ", stderr: $idStderrContent" })"
     Start-Sleep -Seconds 2
 }
-if (-not $rustdeskId) { throw "Could not read the RustDesk ID (--get-id returned nothing after repeated attempts) - the RustDesk service is likely not actually running; check the service-start diagnostics above." }
+if (-not $rustdeskId) { throw "Could not read the RustDesk ID (--get-id returned nothing after repeated attempts) - see the per-attempt exit code/stderr logged above for the actual reason." }
 
 # 5. RustDesk is meant to be invisible - absorbed into "the Agent," not a
 #    second visible program - so its OWN Add/Remove Programs entry is hidden
