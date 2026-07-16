@@ -1,4 +1,4 @@
-import { MonitorSmartphone, Pencil, Trash2, UploadCloud } from "lucide-react";
+import { MonitorSmartphone, Pencil, RefreshCw, Trash2, UploadCloud } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError, getToken } from "../api/client";
 import Badge from "../components/Badge";
@@ -22,8 +22,16 @@ export default function AppAssets() {
   const [confirmDelete, setConfirmDelete] = useState<AppAsset | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [remoteAgentError, setRemoteAgentError] = useState<string | null>(null);
+  const [refreshingAgent, setRefreshingAgent] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   const isGlobalAdmin = !!user && roleAtLeast(user.global_role, "admin");
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   async function setRemoteAgent(app: AppAsset, enabled: boolean) {
     setRemoteAgentError(null);
@@ -32,6 +40,20 @@ export default function AppAssets() {
       await load();
     } catch (err) {
       setRemoteAgentError(err instanceof ApiError ? err.message : "Failed to update.");
+    }
+  }
+
+  async function refreshAgent() {
+    setRemoteAgentError(null);
+    setRefreshingAgent(true);
+    try {
+      const asset = await api.post<AppAsset>("/app-assets/global/refresh-agent");
+      await load();
+      setToast(`Agent installer is current${asset.size_bytes ? ` (${(asset.size_bytes / 1e6).toFixed(1)} MB)` : ""}.`);
+    } catch (err) {
+      setRemoteAgentError(err instanceof ApiError ? err.message : "Failed to check for a newer agent installer.");
+    } finally {
+      setRefreshingAgent(false);
     }
   }
 
@@ -95,6 +117,12 @@ export default function AppAssets() {
         </div>
       )}
 
+      {toast && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400">
+          {toast}
+        </div>
+      )}
+
       <DataTable<AppAsset>
         rows={apps}
         loading={!loaded}
@@ -143,6 +171,17 @@ export default function AppAssets() {
                     >
                       <MonitorSmartphone size={12} strokeWidth={1.75} />
                       {a.is_remote_agent ? "Unset agent" : "Set as agent"}
+                    </button>
+                  )}
+                  {!a.org_id && isGlobalAdmin && a.is_remote_agent && (
+                    <button
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                      title="Check GitHub for a newer agent build now, instead of waiting for the next api restart"
+                      onClick={refreshAgent}
+                      disabled={refreshingAgent}
+                    >
+                      <RefreshCw size={12} strokeWidth={1.75} className={refreshingAgent ? "animate-spin" : undefined} />
+                      {refreshingAgent ? "Checking..." : "Check for update"}
                     </button>
                   )}
                   <button

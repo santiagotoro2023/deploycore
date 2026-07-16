@@ -14,7 +14,7 @@ from app.models.iso_asset import UploadStatus
 from app.models.user import Role, User
 from app.schemas.app_asset import AppAssetCreate, AppAssetRead, AppAssetSetRemoteAgent, AppAssetUpdate
 from app.security.rbac import get_current_user, require_role
-from app.services import app_asset_upload, audit
+from app.services import app_asset_upload, audit, remote_agent_seed
 
 router = APIRouter(tags=["app-assets"])
 
@@ -300,6 +300,31 @@ async def set_remote_agent_app_asset(
     await db.commit()
     await db.refresh(app_asset)
     return app_asset
+
+
+@router.post(
+    "/api/app-assets/global/refresh-agent",
+    response_model=AppAssetRead,
+    dependencies=[_admin_global],
+)
+async def refresh_remote_agent_asset(db: AsyncSession = Depends(get_db)) -> AppAsset:
+    """Forces an immediate re-check of the agent .msi's own GitHub release,
+    on demand, rather than waiting for the api container's next restart (the
+    only other time this normally runs - see remote_agent_seed.py's own
+    lifespan-hook wiring in main.py). Exists specifically because "did the
+    api container actually pick up the newest build yet" was confirmed live
+    to be a real, recurring source of confusion during active iteration on
+    the agent script - a rebuild-and-restart's own timing relative to a CI
+    publish is otherwise invisible and easy to get wrong. Read-only from the
+    caller's point of view if nothing changed (ensure_agent_asset_seeded is
+    itself the same idempotent, size-comparing check main.py's startup hook
+    uses) - this just lets it run right now instead of waiting."""
+    await remote_agent_seed.ensure_agent_asset_seeded(db)
+    result = await db.execute(select(AppAsset).where(AppAsset.is_remote_agent.is_(True)))
+    asset = result.scalars().first()
+    if asset is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no agent installer is available yet - check the remote_agent_msi_url setting and that the CI build has published a release")
+    return asset
 
 
 @router.delete(
