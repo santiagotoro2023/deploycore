@@ -102,6 +102,23 @@ render_caddyfile() {
 		reverse_proxy rustdesk:21114
 	}
 
+	# Missed on the first pass: index.html's very first <script> tag loads
+	# this BEFORE webclient2 itself (rustdesk-api's http/controller/web
+	# ConfigJs handler, only registered when WebClient==1, same source as
+	# above) - it's what sets the client's own understanding of its api-
+	# server to "" via localStorage, which is what makes the /api/shared-peer
+	# call below resolve as a same-origin root-relative fetch in the first
+	# place. Without this handle block it fell through to the frontend
+	# reverse_proxy instead, 404'd, silently never ran - confirmed live: the
+	# browser's own Network tab showed both this AND shared-peer 404ing
+	# together, api-server staying literally the string "null", and
+	# shared-peer's fetch becoming the relative path "null/api/shared-peer",
+	# which then also 404'd (resolving under /webclient2/ and matching the
+	# handle block above, hitting rustdesk-api's own static 404 for it).
+	handle /webclient-config/* {
+		reverse_proxy rustdesk:21114
+	}
+
 	# The one specific API call webclient2 needs for anonymous, share-token-
 	# based sessions (redeeming the token DeployCore mints server-side, see
 	# services/remote_desktop.py's create_session_url()) - confirmed via
