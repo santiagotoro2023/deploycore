@@ -312,15 +312,43 @@ try {
         Write-Step "Win32_Service state: State=$($svcInfo.State) ExitCode=$($svcInfo.ExitCode) StartMode=$($svcInfo.StartMode) PathName=$($svcInfo.PathName)"
     }
 }
-Start-Sleep -Seconds 3
+# Wait for the service to actually reach Running before touching it via IPC
+# (--password/--get-id below) - Start-Service can return without throwing
+# before the process has finished initializing its IPC listener, and
+# Get-Service's own "Running" flag is the best readiness signal available
+# without RustDesk exposing a dedicated health check.
+$svcReady = $false
+for ($i = 0; $i -lt 20; $i++) {
+    $svc = Get-Service -Name RustDesk -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") { $svcReady = $true; break }
+    Start-Sleep -Seconds 1
+}
+if (-not $svcReady) {
+    $svcInfo = Get-CimInstance Win32_Service -Filter "Name='RustDesk'" -ErrorAction SilentlyContinue
+    Write-Step "RustDesk service did not reach Running within 20s - State=$($svcInfo.State) ExitCode=$($svcInfo.ExitCode) (continuing anyway - --get-id below will fail clearly if it's genuinely not up)"
+}
 
 $bytes = New-Object 'System.Byte[]' 18
 [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
 $permanentPassword = [Convert]::ToBase64String($bytes) -replace '[+/=]', 'x'
 Start-Process $RustDeskExe -ArgumentList "--password", $permanentPassword -Wait
 
-$rustdeskId = (& $RustDeskExe --get-id).Trim()
-if (-not $rustdeskId) { throw "Could not read the RustDesk ID (--get-id returned nothing)." }
+# --get-id talks to the running service over IPC, which can lag a moment
+# behind Get-Service's own "Running" status - retry rather than crash on the
+# first empty response. Confirmed live: `(& $RustDeskExe --get-id).Trim()`
+# throws PowerShell's own "cannot call a method on a null-valued expression"
+# when --get-id prints NOTHING (not even an empty string), which happened
+# before this fix and produced a far less useful error than the one already
+# written below for exactly this case - guard the null before calling
+# .Trim() at all, and give the IPC a few chances to come up first.
+$rustdeskId = $null
+for ($i = 0; $i -lt 10; $i++) {
+    $idOutput = & $RustDeskExe --get-id
+    if ($idOutput) { $rustdeskId = $idOutput.Trim() }
+    if ($rustdeskId) { break }
+    Start-Sleep -Seconds 2
+}
+if (-not $rustdeskId) { throw "Could not read the RustDesk ID (--get-id returned nothing after repeated attempts) - the RustDesk service is likely not actually running; check the service-start diagnostics above." }
 
 # 5. RustDesk is meant to be invisible - absorbed into "the Agent," not a
 #    second visible program - so its OWN Add/Remove Programs entry is hidden
