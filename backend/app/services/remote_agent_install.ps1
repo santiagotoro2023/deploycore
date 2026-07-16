@@ -265,7 +265,9 @@ Write-Step "Installing service..."
 # spaces or nested quotes to mangle, so they were never actually at risk.
 & sc.exe stop RustDesk 2>&1 | Out-Null
 & sc.exe delete RustDesk 2>&1 | Out-Null
+Write-Step "Creating the throwaway import-config service..."
 New-Service -Name RustDesk -BinaryPathName "`"$RustDeskExe`" --import-config `"$configPath`"" -DisplayName "RustDesk Service" -StartupType Automatic | Out-Null
+Write-Step "Starting the throwaway import-config service..."
 # This throwaway service's only job is to run --import-config briefly and
 # exit while RustDesk writes out its config - not to stay running - so a
 # "failed to start" here (it may exit before SCM even considers it started)
@@ -277,9 +279,50 @@ Start-Service -Name RustDesk -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 & sc.exe stop RustDesk 2>&1 | Out-Null
 & sc.exe delete RustDesk 2>&1 | Out-Null
+# sc.exe delete only MARKS a service for deletion - it doesn't complete
+# until every open handle to it closes, which isn't guaranteed to happen
+# within the same instant the command returns. A brief wait here (confirmed
+# not present before) gives Windows a chance to actually finish removing it
+# before the next New-Service tries to recreate the exact same service name.
+$deleteWaited = 0
+while ((Get-Service -Name RustDesk -ErrorAction SilentlyContinue) -and $deleteWaited -lt 10) {
+    Start-Sleep -Milliseconds 500
+    $deleteWaited += 0.5
+}
 
+Write-Step "Creating the real RustDesk service..."
 New-Service -Name RustDesk -BinaryPathName "`"$RustDeskExe`" --service" -DisplayName "RustDesk Service" -StartupType Automatic | Out-Null
-Start-Service -Name RustDesk
+Write-Step "Starting the real RustDesk service..."
+try {
+    Start-Service -Name RustDesk
+} catch {
+    # The generic .NET ServiceController exception ("the service cannot be
+    # started") hides the actual Win32 reason - surface Win32_Service's own
+    # ExitCode/State (the Service Control Manager's real status for this
+    # exact service) and try running the binary directly for a few seconds
+    # as a fallback diagnostic, since a crash-on-launch, a missing
+    # dependency, or an AV block will usually show up immediately that way
+    # even when SCM's own error message doesn't say why.
+    $svcInfo = Get-CimInstance Win32_Service -Filter "Name='RustDesk'" -ErrorAction SilentlyContinue
+    Write-Step "Start-Service failed: $($_.Exception.Message)"
+    if ($svcInfo) {
+        Write-Step "Win32_Service state: State=$($svcInfo.State) ExitCode=$($svcInfo.ExitCode) StartMode=$($svcInfo.StartMode) PathName=$($svcInfo.PathName)"
+    }
+    Write-Step "Attempting to run the binary directly for diagnosis..."
+    try {
+        $diagProc = Start-Process -FilePath $RustDeskExe -ArgumentList "--service" -PassThru -RedirectStandardError "$env:ProgramData\DeployCore\rustdesk-direct-stderr.log" -RedirectStandardOutput "$env:ProgramData\DeployCore\rustdesk-direct-stdout.log"
+        Start-Sleep -Seconds 3
+        if ($diagProc.HasExited) {
+            Write-Step "Direct run exited immediately with code $($diagProc.ExitCode) - see rustdesk-direct-std*.log next to this transcript"
+        } else {
+            Write-Step "Direct run is still running after 3s (PID $($diagProc.Id)) - the binary itself launches fine, so the problem is specific to how the Service Control Manager is starting it"
+            Stop-Process -Id $diagProc.Id -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Step "Direct run also failed: $($_.Exception.Message)"
+    }
+    throw
+}
 Start-Sleep -Seconds 3
 
 $bytes = New-Object 'System.Byte[]' 18
