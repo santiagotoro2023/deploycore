@@ -1236,6 +1236,20 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         # command passes for standalone (non-deployed) hosts.
                         managed_host = await _get_or_create_managed_host(db, deployment)
                         await db.commit()
+                        if managed_host.enrolled:
+                            # A "Retry post-install" after the agent actually
+                            # finished enrolling on its own in the background
+                            # since the last attempt failed - it keeps
+                            # retrying independently (ONSTART-resume, see the
+                            # agent script's own docstring), so this can
+                            # legitimately already be done by the time an
+                            # operator retries. Nothing left to do; re-running
+                            # the installer would just be redundant.
+                            await log(
+                                db, deployment, "post_install",
+                                f"Remote Management agent already enrolled (ID {managed_host.rustdesk_id})",
+                            )
+                            continue
                         server_url = await remote_desktop.resolve_app_public_url(db)
                         install_args = (
                             f'{install_args} SERVERURL="{server_url}" ENROLLTOKEN={managed_host.enroll_token}'.strip()
@@ -1267,13 +1281,26 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         # "installed" above only means the wrapper .msi
                         # registered itself - the agent's actual work is
                         # still running in the background at this point.
-                        # Best-effort, not fatal: Remote Management is an
-                        # add-on, not core to "this VM deployed successfully"
-                        # - if it's genuinely still not done after this wait,
-                        # the agent keeps retrying on its own (it's scheduled
-                        # to resume on every boot until it succeeds, surviving
-                        # even the reboot a few steps below), so a WARN here
-                        # is accurate, not a lie papering over a real failure.
+                        #
+                        # Deliberately fatal, not best-effort: an earlier
+                        # version of this just logged a WARN and let the
+                        # deployment continue to "completed" - reasoning that
+                        # Remote Management is an add-on, not core to "this VM
+                        # deployed successfully". In practice that made a
+                        # genuinely broken agent install (wrong server
+                        # address, a firewall blocking it, a bug in the
+                        # installer) invisible - deployments always showed
+                        # "completed" even when Remote Management would in
+                        # fact never come up, with no obvious way to retry
+                        # just that part. Raising here instead fails the
+                        # deployment from POST_INSTALL (a state
+                        # _KEEPABLE_ON_FAILURE_STATES preserves the VM for),
+                        # which surfaces the problem clearly and makes "Retry
+                        # post-install" available - and safe to use: the
+                        # managed_host.enrolled check above means a retry
+                        # after the agent's own background retry (it keeps
+                        # trying independently, surviving reboots) already
+                        # succeeded just skips straight past this.
                         await log(db, deployment, "post_install", "waiting for the Remote Management agent to finish enrolling...")
                         enrolled = False
                         for _ in range(REMOTE_AGENT_ENROLL_MAX_ATTEMPTS):
@@ -1285,12 +1312,12 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         if enrolled:
                             await log(db, deployment, "post_install", f"Remote Management agent enrolled (ID {managed_host.rustdesk_id})")
                         else:
-                            await log(
-                                db, deployment, "post_install",
-                                "Remote Management agent did not finish enrolling within the wait window - "
-                                "it will keep retrying on its own (including across the reboot below); "
-                                "check the Remote Management tab shortly.",
-                                level=LogLevel.WARN,
+                            raise RuntimeError(
+                                "Remote Management agent did not finish enrolling within the wait window "
+                                f"({REMOTE_AGENT_ENROLL_MAX_ATTEMPTS * REMOTE_AGENT_ENROLL_POLL_INTERVAL_SECONDS}s). "
+                                "Check the Instance URL in Settings -> Remote Management is reachable from this VM, "
+                                "then use \"Retry post-install\" once fixed - the agent may also still succeed on its "
+                                "own in the background, in which case a retry will detect that and skip straight past."
                             )
                 deployment.app_asset_access_token = None
                 await db.commit()
