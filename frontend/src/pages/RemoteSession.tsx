@@ -56,6 +56,28 @@ export default function RemoteSession() {
     };
   }, [selectedOrgId, id, connect]);
 
+  // Redeeming the share_token is handled entirely by the embedded client's
+  // own client-side JS (lejianwen/rustdesk-api-web's ljw.js, confirmed via
+  // its source) - it registers the peer and its saved password into that
+  // page's localStorage, but does NOT navigate anywhere itself, landing on
+  // the address book tab with the peer listed and one extra manual click
+  // needed. The SAME app's own admin panel opens an already-known peer via
+  // a `#/<id>` hash route instead (confirmed in its toWebClientLink()) -
+  // now that this session is same-origin, we can drive that exact
+  // navigation ourselves right after, taking the operator straight to the
+  // connect screen for this specific host instead of leaving them on the
+  // address book list. The delay is arbitrary (there's no "peer registered"
+  // event to wait on instead) but matches the one already in use below for
+  // the same reason.
+  useEffect(() => {
+    if (!embedUrl || !host?.rustdesk_id) return;
+    const timer = setTimeout(() => {
+      const win = iframeRef.current?.contentWindow;
+      if (win) win.location.hash = `/${host.rustdesk_id}`;
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [embedUrl, host?.rustdesk_id]);
+
   // The embedded web client owns its own keyboard once focused, so a
   // Ctrl+Alt+Del button here can't be a synthetic key event (it wouldn't
   // cross the iframe boundary, and the browser swallows the real combo).
@@ -86,16 +108,17 @@ export default function RemoteSession() {
         setRdpCreds(creds);
         setShowCreds(true);
         if (creds.username || creds.password) {
-          // A short delay for the embedded client to actually finish
-          // loading/connecting before it could plausibly act on this -
-          // arbitrary, since there's no "ready" signal to wait on instead.
+          // Longer than the #/<id> navigation delay above (1500ms) - this
+          // needs that navigation to have already landed on the actual
+          // connect screen first, not the address book tab it starts on.
+          // Still arbitrary, since there's no "ready" signal for either step.
           setTimeout(() => {
             if (cancelled) return;
             iframeRef.current?.contentWindow?.postMessage(
               { type: "type_credentials", username: creds.username ?? "", password: creds.password ?? "" },
               "*"
             );
-          }, 1500);
+          }, 3000);
         }
       })
       .catch(() => {
