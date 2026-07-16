@@ -266,7 +266,14 @@ Write-Step "Installing service..."
 & sc.exe stop RustDesk 2>&1 | Out-Null
 & sc.exe delete RustDesk 2>&1 | Out-Null
 New-Service -Name RustDesk -BinaryPathName "`"$RustDeskExe`" --import-config `"$configPath`"" -DisplayName "RustDesk Service" -StartupType Automatic | Out-Null
-Start-Service -Name RustDesk
+# This throwaway service's only job is to run --import-config briefly and
+# exit while RustDesk writes out its config - not to stay running - so a
+# "failed to start" here (it may exit before SCM even considers it started)
+# is expected, not an error. The original `sc.exe start ... | Out-Null`
+# never checked this exit code either; -ErrorAction SilentlyContinue keeps
+# that same tolerance now that Start-Service (unlike a bare native-exe call
+# whose exit code goes unchecked) throws by default.
+Start-Service -Name RustDesk -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 & sc.exe stop RustDesk 2>&1 | Out-Null
 & sc.exe delete RustDesk 2>&1 | Out-Null
