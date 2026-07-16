@@ -121,6 +121,21 @@ LANGUAGE_SCREEN_KEYPRESS_INTERVAL_SECONDS = 5
 WINRM_REACHABILITY_POLL_INTERVAL_SECONDS = 10
 WINRM_REACHABILITY_MAX_ATTEMPTS = 60  # ~10 minutes
 
+# The Remote Management agent's real work (download/install RustDesk,
+# configure, create its service, enroll) runs detached from the msiexec call
+# that installs the thin wrapper .msi - see remote-agent/wix's own comments
+# for why (a nested msiexec inside a custom action deadlocks the Windows
+# Installer mutex). That means install_app's own "installed" signal fires as
+# soon as the wrapper registers itself, well before the agent has actually
+# finished - and this pipeline's own unconditional final reboot (a few steps
+# below) doesn't know to wait, so it can - and did, confirmed live - kill the
+# agent's background work mid-flight. This poll makes the pipeline actually
+# wait for the real completion signal (ManagedHost.enrolled, set by the
+# agent's own enrollment call) before moving on, so deployments only reach
+# the reboot once Remote Management is genuinely done, not just registered.
+REMOTE_AGENT_ENROLL_POLL_INTERVAL_SECONDS = 10
+REMOTE_AGENT_ENROLL_MAX_ATTEMPTS = 30  # ~5 minutes
+
 
 async def _get_virtio_iso(db, org_id: uuid.UUID) -> IsoAsset | None:
     result = await db.execute(
@@ -1246,6 +1261,37 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                     if not result.ok:
                         raise RuntimeError(f"installing {app_asset.name} failed (exit {result.status_code}): {result.stderr}")
                     await log(db, deployment, "post_install", f"{app_asset.name} installed")
+
+                    if app_asset.is_remote_agent:
+                        # See REMOTE_AGENT_ENROLL_MAX_ATTEMPTS's own comment:
+                        # "installed" above only means the wrapper .msi
+                        # registered itself - the agent's actual work is
+                        # still running in the background at this point.
+                        # Best-effort, not fatal: Remote Management is an
+                        # add-on, not core to "this VM deployed successfully"
+                        # - if it's genuinely still not done after this wait,
+                        # the agent keeps retrying on its own (it's scheduled
+                        # to resume on every boot until it succeeds, surviving
+                        # even the reboot a few steps below), so a WARN here
+                        # is accurate, not a lie papering over a real failure.
+                        await log(db, deployment, "post_install", "waiting for the Remote Management agent to finish enrolling...")
+                        enrolled = False
+                        for _ in range(REMOTE_AGENT_ENROLL_MAX_ATTEMPTS):
+                            await db.refresh(managed_host)
+                            if managed_host.enrolled:
+                                enrolled = True
+                                break
+                            await asyncio.sleep(REMOTE_AGENT_ENROLL_POLL_INTERVAL_SECONDS)
+                        if enrolled:
+                            await log(db, deployment, "post_install", f"Remote Management agent enrolled (ID {managed_host.rustdesk_id})")
+                        else:
+                            await log(
+                                db, deployment, "post_install",
+                                "Remote Management agent did not finish enrolling within the wait window - "
+                                "it will keep retrying on its own (including across the reboot below); "
+                                "check the Remote Management tab shortly.",
+                                level=LogLevel.WARN,
+                            )
                 deployment.app_asset_access_token = None
                 await db.commit()
 
