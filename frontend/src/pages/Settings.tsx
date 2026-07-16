@@ -593,6 +593,7 @@ interface BackupFile {
 
 interface RemoteManagementConfig {
   host: string;
+  app_public_url: string;
   ports: { port: number; proto: string; purpose: string }[];
   apply_status: { stage: string; error: string | null } | null;
 }
@@ -600,6 +601,7 @@ interface RemoteManagementConfig {
 function RemoteManagementPanel() {
   const [config, setConfig] = useState<RemoteManagementConfig | null>(null);
   const [host, setHost] = useState("");
+  const [appPublicUrl, setAppPublicUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -608,6 +610,7 @@ function RemoteManagementPanel() {
     const c = await api.get<RemoteManagementConfig>("/settings/remote-management");
     setConfig(c);
     setHost(c.host);
+    setAppPublicUrl(c.app_public_url);
   }
 
   useEffect(() => {
@@ -628,7 +631,7 @@ function RemoteManagementPanel() {
     setSaving(true);
     setSaved(false);
     try {
-      await api.put("/settings/remote-management", { host });
+      await api.put("/settings/remote-management", { host, app_public_url: appPublicUrl });
       setSaved(true);
       await load();
     } catch (err) {
@@ -661,6 +664,22 @@ function RemoteManagementPanel() {
         />
         <p className="mb-3 text-xs text-neutral-400">
           Just the host — no <code>https://</code> or port; DeployCore adds those.
+        </p>
+
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+          Instance URL agents use to reach DeployCore itself
+        </label>
+        <input
+          className="mb-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+          value={appPublicUrl}
+          onChange={(e) => setAppPublicUrl(e.target.value)}
+          placeholder="http://192.168.1.50:8000"
+        />
+        <p className="mb-3 text-xs text-neutral-400">
+          A different concern from the relay host above — this is where an installed agent calls back to enroll and
+          fetch its config (also what the copy-paste install command downloads the script from). Set by{" "}
+          <code>scripts/setup.sh</code> at install time from this host's detected LAN IP; edit it here if that IP has
+          since changed, or agents will silently never enroll.
         </p>
 
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}

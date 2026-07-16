@@ -113,6 +113,7 @@ export interface RemoteStatus {
   detail: string | null;
   relay_host: string;
   ports: RemotePort[];
+  app_public_url: string;
 }
 
 export interface AppInstallEntry {

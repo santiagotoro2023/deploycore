@@ -43,6 +43,18 @@ logger = logging.getLogger(__name__)
 # working LAN Remote Management with nothing set.
 REMOTE_HOST_SETTING_KEY = "remote_management_host"
 
+# Same live-DB-override pattern as REMOTE_HOST_SETTING_KEY, but for the
+# DeployCore API/UI's own address (what an agent uses to reach THIS
+# instance for enroll/config - a different concern from remote_management_host,
+# which is only the RustDesk relay/rendezvous address). Previously only
+# settable via the APP_PUBLIC_URL env var (set once by scripts/setup.sh at
+# install time, never revisited) - confirmed live as a real gap: nothing let
+# a user fix it later without SSHing in and hand-editing .env, and the
+# frontend's copy-paste install commands fell back to window.location.origin
+# instead (whatever address the operator's OWN browser happened to be on),
+# which isn't guaranteed reachable from a target machine's network at all.
+APP_PUBLIC_URL_SETTING_KEY = "app_public_url_override"
+
 
 async def resolve_public_host(db: AsyncSession) -> str:
     result = await db.execute(
@@ -52,6 +64,16 @@ async def resolve_public_host(db: AsyncSession) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return get_settings().rustdesk_relay_host
+
+
+async def resolve_app_public_url(db: AsyncSession) -> str:
+    result = await db.execute(
+        select(Setting.value).where(Setting.scope == SettingScope.GLOBAL, Setting.key == APP_PUBLIC_URL_SETTING_KEY)
+    )
+    value = result.scalar_one_or_none()
+    if isinstance(value, str) and value.strip():
+        return value.strip().rstrip("/")
+    return get_settings().app_public_url.rstrip("/")
 
 
 def public_url_for(host: str) -> str:

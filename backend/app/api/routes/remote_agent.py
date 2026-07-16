@@ -43,6 +43,7 @@ async def remote_status(db: AsyncSession = Depends(get_db)) -> RemoteStatus:
         detail=detail,
         relay_host=await remote_desktop.resolve_public_host(db),
         ports=[RemotePort(**p) for p in remote_desktop.RELAY_PORTS],
+        app_public_url=await remote_desktop.resolve_app_public_url(db),
     )
 
 
@@ -74,7 +75,7 @@ async def agent_config(enroll_token: str, db: AsyncSession = Depends(get_db)) ->
 
 
 @router.get("/install-script")
-async def install_script() -> Response:
+async def install_script(db: AsyncSession = Depends(get_db)) -> Response:
     """Serves the PowerShell agent installer, with this instance's own URL
     baked in as the default server, so the copy-paste one-liner on the Remote
     Management tab only has to carry the enroll token. Unauthenticated on
@@ -85,7 +86,7 @@ async def install_script() -> Response:
         script = _INSTALL_SCRIPT_PATH.read_text()
     except FileNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "install script not found")
-    script = script.replace("__DEPLOYCORE_SERVER__", get_settings().app_public_url)
+    script = script.replace("__DEPLOYCORE_SERVER__", await remote_desktop.resolve_app_public_url(db))
     return Response(content=script, media_type="text/plain")
 
 

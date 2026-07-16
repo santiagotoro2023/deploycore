@@ -45,13 +45,22 @@ class RemoteStatus(BaseModel):
     """Drives the Remote Management setup banner. `configured` = the server-side
     secret is set; `reachable` = the rustdesk-api server answered a real login.
     relay_host/ports tell the user exactly what to forward/allow (the one setup
-    step that can't be automated from inside a container)."""
+    step that can't be automated from inside a container). `app_public_url` is
+    the SAME value provision.py injects as an agent's SERVERURL - surfaced here
+    so the frontend's copy-paste install commands use this instance's one real
+    address (config.app_public_url, normally auto-set by setup.sh from this
+    host's LAN IP) instead of window.location.origin, which is whatever address
+    the operator's own browser happens to be pointed at right now (a port
+    forward, VPN, or otherwise) and is not guaranteed reachable from a target
+    machine on the LAN - confirmed live as a real source of enrollment
+    failures when the two diverged."""
 
     configured: bool
     reachable: bool
     detail: str | None
     relay_host: str
     ports: list[RemotePort]
+    app_public_url: str
 
 
 class ManagedHostSession(BaseModel):

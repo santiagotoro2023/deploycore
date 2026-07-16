@@ -593,6 +593,7 @@ async def run_update_check(
 
 class RemoteManagementConfigUpdate(BaseModel):
     host: str
+    app_public_url: str | None = None
 
 
 def _sanitize_host(raw: str) -> str:
@@ -616,6 +617,7 @@ async def get_remote_management_config(db: AsyncSession = Depends(get_db)) -> di
     works with nothing set."""
     return {
         "host": await remote_desktop.resolve_public_host(db),
+        "app_public_url": await remote_desktop.resolve_app_public_url(db),
         "ports": remote_desktop.RELAY_PORTS,
         "apply_status": await _get_setting_value(db, "remote_management_apply_status"),
     }
@@ -643,8 +645,23 @@ async def set_remote_management_config(
     await _set_global_setting_value(db, "remote_management_host", host)
     await _set_global_setting_value(db, "remote_management_apply_status", {"stage": "applying", "error": None})
     await _set_global_setting_value(db, "remote_management_apply_requested", True)
+
+    # Separate from the RustDesk relay host above: this is the address agents
+    # use to reach DeployCore's OWN api (enroll/config), previously only
+    # settable via the APP_PUBLIC_URL env var at first-run setup.sh time with
+    # no way to fix it later short of SSHing in - confirmed live as a real gap.
+    # Takes effect immediately (a live DB read, like the host above) - no
+    # updater/.env/restart step needed, unlike the RustDesk relay containers.
+    app_public_url = (body.app_public_url or "").strip().rstrip("/")
+    if app_public_url:
+        if not re.match(r"^https?://", app_public_url):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "the instance URL must start with http:// or https://")
+        await _set_global_setting_value(db, remote_desktop.APP_PUBLIC_URL_SETTING_KEY, app_public_url)
+    else:
+        await _set_global_setting_value(db, remote_desktop.APP_PUBLIC_URL_SETTING_KEY, None)
+
     audit.record(
         db, action="settings.remote_management_updated", target_type="settings",
-        user_id=current_user.id, detail={"host": host},
+        user_id=current_user.id, detail={"host": host, "app_public_url": app_public_url or None},
     )
     await db.commit()

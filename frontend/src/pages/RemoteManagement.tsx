@@ -183,7 +183,9 @@ export default function RemoteManagement() {
         />
       )}
 
-      {installHost && <InstallCommandModal orgId={selectedOrgId} host={installHost} onClose={() => setInstallHost(null)} />}
+      {installHost && (
+        <InstallCommandModal orgId={selectedOrgId} host={installHost} appPublicUrl={status?.app_public_url} onClose={() => setInstallHost(null)} />
+      )}
 
       <ConfirmDialog
         open={!!confirmDelete}
@@ -429,15 +431,55 @@ function CopyableCommand({ command }: { command: string }) {
   );
 }
 
-function InstallCommandModal({ orgId, host, onClose }: { orgId: string; host: ManagedHost; onClose: () => void }) {
+// PowerShell's -EncodedCommand expects base64 of the script as UTF-16LE -
+// used instead of a plain -Command "..." string so this is immune to the
+// calling shell's own quoting/interpolation rules. Confirmed live this
+// matters: a double-quoted -Command "$env:DC_TOKEN='...'; ..." gets its
+// $env:DC_TOKEN assignment silently expanded by the OUTER shell (evaluating
+// to empty, since DC_TOKEN isn't set yet there) when pasted into an
+// already-open PowerShell window rather than cmd.exe/Run - the only context
+// that string was ever actually safe in - producing a mangled token and a
+// silent enrollment failure with no obvious cause.
+function toPowerShellEncodedCommand(script: string): string {
+  const bytes = new Uint8Array(script.length * 2);
+  for (let i = 0; i < script.length; i++) {
+    const code = script.charCodeAt(i);
+    bytes[i * 2] = code & 0xff;
+    bytes[i * 2 + 1] = (code >> 8) & 0xff;
+  }
+  let binary = "";
+  bytes.forEach((b) => (binary += String.fromCharCode(b)));
+  return btoa(binary);
+}
+
+function InstallCommandModal({
+  orgId,
+  host,
+  appPublicUrl,
+  onClose,
+}: {
+  orgId: string;
+  host: ManagedHost;
+  appPublicUrl?: string;
+  onClose: () => void;
+}) {
   const downloadUrl = `/api/organizations/${orgId}/managed-hosts/agent-installer`;
-  const origin = window.location.origin;
+  // The SAME address the automated deployment pipeline uses for a freshly
+  // provisioned VM (provision.py's own SERVERURL, from config.app_public_url)
+  // - not window.location.origin, which is just whatever address the
+  // operator's own browser happens to be pointed at right now (a port
+  // forward, VPN, etc.) and is not guaranteed reachable from the target
+  // machine's own network. Confirmed live as a real cause of enrollment
+  // failures when the two diverged. Falls back to the browser's own origin
+  // only if /api/remote/status hasn't loaded yet.
+  const serverUrl = appPublicUrl || window.location.origin;
+  const script = `$env:DC_TOKEN='${host.enroll_token}'; irm ${serverUrl}/api/remote/install-script | iex`;
   // Easiest path: one line in an elevated PowerShell, no file to download - the
   // script self-configures from this instance (server key, relay address) using
   // the enroll token. Mirrors Tailscale/RMM onboarding.
-  const oneLiner = `powershell -ExecutionPolicy Bypass -Command "$env:DC_TOKEN='${host.enroll_token}'; irm ${origin}/api/remote/install-script | iex"`;
+  const oneLiner = `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${toPowerShellEncodedCommand(script)}`;
   // File path: the same silent install the deployment pipeline uses.
-  const msiCommand = `msiexec /i DeployCoreRemoteAgent.msi /qn SERVERURL="${origin}" ENROLLTOKEN=${host.enroll_token}`;
+  const msiCommand = `msiexec /i DeployCoreRemoteAgent.msi /qn SERVERURL="${serverUrl}" ENROLLTOKEN=${host.enroll_token}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
@@ -445,7 +487,9 @@ function InstallCommandModal({ orgId, host, onClose }: { orgId: string; host: Ma
         <h2 className="mb-1 text-sm font-semibold">Install the Remote Management Agent</h2>
         <p className="mb-4 text-xs text-neutral-500">
           Run this on <strong>{host.name}</strong>. It installs silently in the background - the host shows as enrolled
-          here within a minute.
+          here within a minute. Will register with this instance at{" "}
+          <code className="rounded bg-neutral-100 px-1 dark:bg-neutral-800">{serverUrl}</code> — make sure that address
+          is reachable from {host.name} (Settings → Remote Management if it needs changing).
         </p>
 
         <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">

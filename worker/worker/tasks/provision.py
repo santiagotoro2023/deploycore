@@ -19,7 +19,7 @@ from app.models.hypervisor import HypervisorHost
 from app.models.iso_asset import IsoAsset, IsoKind
 from app.models.managed_host import ManagedHost
 from app.models.template import DeploymentTemplate, DomainJoinTiming
-from app.services import notifications, settings_resolver, webhooks
+from app.services import notifications, remote_desktop, settings_resolver, webhooks
 from app.services.deployment_service import DeploymentStateMachine, InvalidTransition, log
 from app.services.floppy_builder import build_and_upload_answer_floppy
 from app.services.template_effective import resolve_template
@@ -1236,7 +1236,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                         # command passes for standalone (non-deployed) hosts.
                         managed_host = await _get_or_create_managed_host(db, deployment)
                         await db.commit()
-                        server_url = get_settings().app_public_url
+                        server_url = await remote_desktop.resolve_app_public_url(db)
                         install_args = (
                             f'{install_args} SERVERURL="{server_url}" ENROLLTOKEN={managed_host.enroll_token}'.strip()
                         )
