@@ -124,13 +124,15 @@ RELAY_PORTS = [
     {"port": 21115, "proto": "TCP", "purpose": "NAT type test"},
     {"port": 21116, "proto": "TCP+UDP", "purpose": "ID / rendezvous server (both TCP and UDP)"},
     {"port": 21117, "proto": "TCP", "purpose": "Relay server"},
-    {"port": 21118, "proto": "TCP", "purpose": "Web client (ID over WebSocket)"},
-    {"port": 21119, "proto": "TCP", "purpose": "Web client (relay over WebSocket)"},
-    # Deliberately NOT 21114 (or a dedicated port for it) - the embedded
-    # session now loads through DeployCore's own :443 origin, proxied at the
-    # exact /webclient2/ path the client expects (see proxy/entrypoint.sh
-    # and public_url_for()'s own docstring for the three real bugs that led
-    # here) - nothing extra to forward for it, same as the rest of this app.
+    # Deliberately NOT 21114, 21118, or 21119 - the embedded web client's own
+    # HTTP asset loading, share-token API call, AND its actual ID/relay
+    # WebSocket connections all go through DeployCore's own :443 origin now
+    # (webclient2's /, /api/shared-peer, /ws/id, /ws/relay - see
+    # proxy/entrypoint.sh, confirmed live against the browser's own console,
+    # not just source reading). Nothing extra to forward for any of it, same
+    # as the rest of this app. Only real native RustDesk desktop clients
+    # (not this browser flow) would ever need 21116/21117 reachable
+    # directly, which is what this list is actually for.
 ]
 
 # Cached api-token from the last successful admin login. Cleared and re-fetched

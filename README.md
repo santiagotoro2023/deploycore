@@ -285,7 +285,6 @@ too):
 | 21115 | TCP | NAT type test |
 | 21116 | TCP+UDP | ID / rendezvous server (both protocols) |
 | 21117 | TCP | Relay server |
-| 21118, 21119 | TCP | Web client (over secure WebSocket, TLS-terminated by the same proxy as the rest of the app) |
 
 You set the public address in the app, not in files: **Settings → Remote
 Management** takes a public IP or domain and, on Apply, rewrites the config and

@@ -90,16 +90,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # webclient2's own JS always dials wss:// for its ID/relay WebSocket
-      # connections when the page itself loaded over https (confirmed via
-      # lejianwen/rustdesk-api-web's connection.ts: `SCHEMA =
-      # location.protocol=="https:"?"wss://":"ws://"`), straight to
-      # RUSTDESK_RELAY_HOST on 21116/21117 + 2/+3 - so these two ports need
-      # the same TLS termination as :443, not the rustdesk container's own
-      # plain-WS listener directly (see rustdesk service below, and the
-      # matching handle blocks in proxy/entrypoint.sh).
-      - "21118:21118"
-      - "21119:21119"
     volumes:
       - tls_certs:/data/tls
       - caddy_data:/data
@@ -164,8 +154,12 @@ services:
       - "21116:21116"
       - "21116:21116/udp"
       - "21117:21117"
-      # 21118/21119 (the WebSocket variants of 21116/21117) are published by
-      # the proxy service instead, TLS-terminated - see its own port comments.
+      # Deliberately NOT 21118/21119 (the WebSocket variants of 21116/21117) -
+      # the web client reaches those through the proxy service's /ws/id and
+      # /ws/relay paths on :443 instead (confirmed live, see
+      # proxy/entrypoint.sh), never hitting these ports directly. Only the
+      # proxy container needs to reach them, over the internal docker
+      # network, which needs no host port published at all.
     volumes:
       - rustdesk_server_data:/data
       - rustdesk_api_data:/app/data

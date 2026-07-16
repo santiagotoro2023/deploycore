@@ -118,23 +118,29 @@ render_caddyfile() {
 		reverse_proxy rustdesk:21114
 	}
 
+	# The actual RustDesk protocol connection (ID/rendezvous + relay), once
+	# the address-book/share-token part above is done. Confirmed live, not
+	# guessed: an earlier attempt assumed webclient2 dials wss://<host>:21118
+	# and :21119 directly (a reasonable read of the STOCK web client's source,
+	# resources/web/js/src/connection.ts) and gave those ports their own
+	# TLS-terminating listeners - but Firefox's own console showed the
+	# deployed v2 client actually requests wss://<host>/ws/id, a PATH on this
+	# SAME origin/port, not a separate port at all (that line exists in the
+	# stock source too, just commented out there - the v2 build evidently
+	# ships it enabled). /ws/id and /ws/relay are hbbs/hbbr's own path names
+	# for their websocket listeners (rendezvous_server.rs / relay_server.rs
+	# both log "Listening on websocket :21118/:21119" - Caddy just needs to
+	# get an upgraded connection to that same port, the path is only how the
+	# client picks which one).
+	handle /ws/id {
+		reverse_proxy rustdesk:21118
+	}
+
+	handle /ws/relay {
+		reverse_proxy rustdesk:21119
+	}
+
 	reverse_proxy frontend:5173
-}
-
-# webclient2's own JS dials these two directly as wss://<host>:21118 and
-# :21119 (the ID/relay rendezvous connections, offset +2/+3 from
-# RUSTDESK_RELAY_HOST's 21116/21117 - confirmed via connection.ts's
-# getrUriFromRs()), never through a path under :443, so they need their own
-# TLS-terminating listeners here rather than a handle block above. Same cert
-# as :443 - one trust decision covers both, since it's the same host.
-:21118 {
-	$cert_block
-	reverse_proxy rustdesk:21118
-}
-
-:21119 {
-	$cert_block
-	reverse_proxy rustdesk:21119
 }
 EOF
 }
