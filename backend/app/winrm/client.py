@@ -418,10 +418,34 @@ if ($missing) {{
         Checks HKLM + WOW6432Node primarily (SYSTEM-context installs
         should land there); HKCU is still checked too as cheap defense
         in depth, though it's no longer the primary expected signal now
-        that nothing installs "as a particular interactive user" here."""
+        that nothing installs "as a particular interactive user" here.
+
+        The registry-diff heuristic below is skipped entirely for
+        kind == "msi", not applied and tolerant of it finding nothing:
+        confirmed live as a real bug on a "Retry post-install" run (a
+        deployment that already installed some MSI successfully once,
+        then failed at a LATER step and got retried) - the retried
+        `msiexec /i` of the same, already-registered product is a
+        legitimate reinstall/repair from Windows Installer's point of
+        view, so it rewrites the EXISTING Uninstall registry key rather
+        than creating a new one. Since that key is already present in
+        $before (left over from the earlier successful attempt), the
+        strict "did a key appear that wasn't there before" diff can
+        never be satisfied, and a perfectly successful reinstall was
+        reported as a 10-minute timeout failure. This diff heuristic
+        exists at all to catch self-relaunching EXE stubs that exit 0
+        immediately while the real work continues in a detached child
+        process - a structural non-issue for MSI, where `msiexec /i
+        ... -Wait` genuinely blocks for the ENTIRE InstallExecuteSequence
+        (every deferred/commit custom action scheduled before
+        InstallFinalize included), not just until some child process
+        happens to detach. msiexec's own exit code (0 or 3010) is
+        already a fully authoritative, synchronous signal for MSI kind -
+        trusted directly, without the extra heuristic on top of it."""
         url = _ps_single_quote(download_url)
         path = _ps_single_quote(remote_path)
-        if kind == "msi":
+        is_msi = kind == "msi"
+        if is_msi:
             if "allusers" not in install_args.lower():
                 install_args = f"{install_args} ALLUSERS=1".strip()
             # A single raw argument-list string, not an array: msiexec (like
@@ -434,6 +458,24 @@ if ($missing) {{
             arg_list = _ps_single_quote(install_args)
             run_line = f"$p = Start-Process -FilePath {path} -ArgumentList {arg_list} -Wait -PassThru"
         task_name = f"AppInstall_{uuid.uuid4().hex[:12]}"
+        if is_msi:
+            verify_block = """
+        "OK:installed (exit $($p.ExitCode)$(if ($p.ExitCode -eq 3010) { ', reboot required' }))" | Set-Content -Path '{RESULT_PATH}' -Force"""
+            before_line = ""
+        else:
+            verify_block = """
+        $confirmed = $false
+        for ($i = 0; $i -lt 120; $i++) {
+            $after = @(Get-UninstallEntries)
+            if (@($after | Where-Object { $before -notcontains $_ }).Count -gt 0) { $confirmed = $true; break }
+            Start-Sleep -Seconds 5
+        }
+        if ($confirmed) {
+            "OK:installed (exit $($p.ExitCode)$(if ($p.ExitCode -eq 3010) { ', reboot required' }))" | Set-Content -Path '{RESULT_PATH}' -Force
+        } else {
+            "FAIL:installer exited with code $($p.ExitCode) but no new registry Uninstall entry appeared within 10 minutes afterward (self-relaunching stub, or an installer that genuinely didn't complete)" | Set-Content -Path '{RESULT_PATH}' -Force
+        }"""
+            before_line = "$before = @(Get-UninstallEntries)"
         script = f"""
 function Get-UninstallEntries {{
     Get-ItemProperty @(
@@ -444,24 +486,13 @@ function Get-UninstallEntries {{
         Where-Object {{ $_.DisplayName }} | ForEach-Object {{ "$($_.PSDrive.Name):$($_.PSChildName)" }}
 }}
 try {{
-    $before = @(Get-UninstallEntries)
+    {before_line}
     Invoke-WebRequest -Uri {url} -OutFile {path} -UseBasicParsing
     {run_line}
     Remove-Item {path} -Force -ErrorAction SilentlyContinue
     if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {{
         "FAIL:installer exited with code $($p.ExitCode)" | Set-Content -Path '{{RESULT_PATH}}' -Force
-    }} else {{
-        $confirmed = $false
-        for ($i = 0; $i -lt 120; $i++) {{
-            $after = @(Get-UninstallEntries)
-            if (@($after | Where-Object {{ $before -notcontains $_ }}).Count -gt 0) {{ $confirmed = $true; break }}
-            Start-Sleep -Seconds 5
-        }}
-        if ($confirmed) {{
-            "OK:installed (exit $($p.ExitCode)$(if ($p.ExitCode -eq 3010) {{ ', reboot required' }}))" | Set-Content -Path '{{RESULT_PATH}}' -Force
-        }} else {{
-            "FAIL:installer exited with code $($p.ExitCode) but no new registry Uninstall entry appeared within 10 minutes afterward (self-relaunching stub, or an installer that genuinely didn't complete)" | Set-Content -Path '{{RESULT_PATH}}' -Force
-        }}
+    }} else {{{verify_block}
     }}
 }} catch {{
     "FAIL:$($_.Exception.Message)" | Set-Content -Path '{{RESULT_PATH}}' -Force
