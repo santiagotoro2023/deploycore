@@ -10,19 +10,31 @@
   RustDesk client, configuring it headless, enrolling) lives in that script,
   so the MSI and the copy-paste one-liner install path stay identical.
 
-  The script is NOT run directly from a custom action - confirmed via
-  Microsoft's own _MSIExecute Mutex docs ("set only while processing the
-  InstallExecuteSequence table"), the mutex is held for that ENTIRE table,
-  including anything scheduled after InstallFinalize, not just up to it. Since
-  the script itself invokes a second, nested msiexec.exe (to install the
-  bundled RustDesk client), running it directly from any custom action in this
-  sequence - regardless of position - would collide with the mutex our own
-  outer MSI still holds (this is exactly what produced a detail-free MSI 1603
-  on the first real deployment test). Instead, the custom actions below
-  register a one-time Scheduled Task (as SYSTEM) and immediately trigger it,
-  then return right away - the outer MSI finishes and releases the mutex in
-  seconds, and the actual RustDesk install + enrollment runs moments later,
-  fully outside any MSI transaction.
+  The script is NOT run directly from a custom action. Two confirmed reasons,
+  found the hard way across two real failures:
+
+  1. The script itself invokes a second, nested msiexec.exe (to install the
+     bundled RustDesk client) - per Microsoft's own _MSIExecute Mutex docs
+     ("set only while processing the InstallExecuteSequence table"), that
+     mutex is held for this WHOLE table, so a custom action running inside it
+     cannot safely launch another msiexec.exe of its own.
+  2. Custom actions of type deferred/commit (what any elevated, WixQuietExec-
+     based action here is) can ONLY be scheduled between InstallInitialize and
+     InstallFinalize - confirmed via Windows Installer Error 2762 ("the action
+     must be scheduled between InstallInitialize and InstallFinalize") when
+     this file first scheduled its single agent-install action AFTER
+     InstallFinalize. That positioning is what actually produced the
+     detail-free MSI 1603 on the very first real deployment test (this error
+     fires immediately, matching the fast ~46s failure observed) - not a
+     mutex conflict, which was a reasonable but wrong first guess, and not
+     the target VM's internet access, which was also fine.
+
+  The fix for both: the custom actions below (scheduled after InstallFiles,
+  a valid position, not after InstallFinalize) register a one-time Scheduled
+  Task (as SYSTEM) and immediately trigger it, then return right away - the
+  outer MSI finishes normally in moments, and the actual RustDesk install +
+  enrollment runs seconds later from Task Scheduler, fully outside any MSI
+  transaction, sidestepping the mutex concern too.
 
   The MSI also bundles the DeployCore-branded tray companion (DeployCoreTray.exe)
   and its icon (deploycore.ico) - both produced by CI from remote-agent/tray/,
@@ -164,7 +176,15 @@
         Return="check" />
 
     <InstallExecuteSequence>
-      <Custom Action="RegisterAgentTask" After="InstallFinalize" Condition="NOT Installed" />
+      <!-- After InstallFiles, not InstallFinalize: deferred/commit actions can
+           ONLY be scheduled between InstallInitialize and InstallFinalize -
+           confirmed the hard way (Windows Installer Error 2762, "the action
+           must be scheduled between InstallInitialize and InstallFinalize")
+           when this file previously scheduled these after InstallFinalize.
+           After InstallFiles specifically because RegisterAgentTask's /tr
+           command references RunAgentInstall.cmd, which needs to actually
+           exist on disk by then - true once InstallFiles has run. -->
+      <Custom Action="RegisterAgentTask" After="InstallFiles" Condition="NOT Installed" />
       <Custom Action="RunAgentTask" After="RegisterAgentTask" Condition="NOT Installed AND NOT SKIPRUN" />
     </InstallExecuteSequence>
   </Package>
