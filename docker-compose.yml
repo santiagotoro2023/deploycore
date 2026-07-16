@@ -127,6 +127,11 @@ services:
       - RUSTDESK_API_RUSTDESK_API_SERVER=http://127.0.0.1:21114
       - RUSTDESK_API_KEY_FILE=/data/id_ed25519.pub
       - RUSTDESK_API_JWT_KEY=${RUSTDESK_JWT_KEY}
+      # Some of rustdesk-api's own error strings (e.g. its CAPTCHA-required
+      # message) pass straight through into DeployCore's own error surfaces
+      # (services/remote_desktop.py's _unwrap) rather than being translated -
+      # keep them in English rather than the server's default Chinese.
+      - RUSTDESK_API_LANG=en
     ports:
       - "21114:21114"
       - "21115:21115"

@@ -1986,6 +1986,21 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               <Code>{`docker compose exec -w /app rustdesk ./apimain reset-admin-pwd "$(grep '^RUSTDESK_ADMIN_PASSWORD=' .env | cut -d= -f2-)"`}</Code>
             </P>
             <P>
+              <strong>Banner mentions a CAPTCHA, "验证码错误", or a login error right after a fresh
+              install.</strong> The RustDesk server blocks repeated failed admin logins from the same
+              address (3 failed attempts in 5 minutes requires a CAPTCHA DeployCore has no way to solve) -
+              easy to trip by reloading the Remote Management tab a few times in the first minute after
+              install, before the admin password sync has landed. It clears itself (the counter lives in
+              the server's memory, nothing persists), fastest via:
+            </P>
+            <P>
+              <Code>{`docker compose restart rustdesk`}</Code>
+            </P>
+            <P>
+              Reload the tab afterward. DeployCore now caches this check for 30 seconds specifically so
+              ordinary page reloads can't trip this again.
+            </P>
+            <P>
               <strong>A host stays "Pending", never "Enrolled".</strong> The agent installed but couldn't
               report back. Check that the machine can reach <Code>APP_PUBLIC_URL</Code> (the enrollment call
               goes there), and that <Code>APP_PUBLIC_URL</Code> isn't <Code>localhost</Code>. Re-running the

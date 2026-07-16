@@ -24,6 +24,7 @@ hammered.
 """
 
 import logging
+import time
 
 import httpx
 from sqlalchemy import select
@@ -106,21 +107,48 @@ def _unwrap(resp: httpx.Response, context: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# rustdesk-api's own brute-force guard (utils/login_limiter.go, confirmed by
+# reading its source) requires a CAPTCHA after just 3 failed logins from the
+# same IP within a 5-minute sliding window - and our probe() used to do a
+# real, uncached login on every single page load. A few reloads of the Remote
+# Management tab within a minute (e.g. right after a fresh install, before
+# setup.sh's admin-password sync has landed) was enough to trip it for real,
+# confirmed live. Rejected-for-missing-captcha attempts don't add further
+# strikes (also confirmed from source), so this isn't self-reinforcing, but
+# there is no reason to burn even one of the three "free" attempts per reload
+# when the underlying state barely changes second to second. Caching the
+# whole result for a short window makes tripping this from ordinary use
+# essentially impossible without changing the semantics the banner relies on
+# (still reflects reality within _PROBE_CACHE_SECONDS).
+_PROBE_CACHE_SECONDS = 30
+_probe_cache: tuple[float, tuple[bool, bool, str | None]] | None = None
+
+
 async def probe() -> tuple[bool, bool, str | None]:
     """Cheap health check for the setup banner: (configured, reachable, detail).
     `configured` = the admin password is set at all; `reachable` = a real login
     against the rustdesk-api server just succeeded. Never raises - any failure
     becomes reachable=False with a human-readable detail."""
+    global _probe_cache
+    if _probe_cache is not None:
+        cached_at, cached_result = _probe_cache
+        if time.monotonic() - cached_at < _PROBE_CACHE_SECONDS:
+            return cached_result
+
     settings = get_settings()
     if not settings.rustdesk_admin_password:
-        return False, False, "No RustDesk admin password is set yet."
-    try:
-        await _login()
-        return True, True, None
-    except RemoteDesktopError as exc:
-        return True, False, str(exc)
-    except Exception as exc:  # noqa: BLE001 - network/DNS/connection failure to the rustdesk container
-        return True, False, f"Could not reach the Remote Management server: {exc}"
+        result = (False, False, "No RustDesk admin password is set yet.")
+    else:
+        try:
+            await _login()
+            result = (True, True, None)
+        except RemoteDesktopError as exc:
+            result = (True, False, str(exc))
+        except Exception as exc:  # noqa: BLE001 - network/DNS/connection failure to the rustdesk container
+            result = (True, False, f"Could not reach the Remote Management server: {exc}")
+
+    _probe_cache = (time.monotonic(), result)
+    return result
 
 
 async def _login() -> str:
