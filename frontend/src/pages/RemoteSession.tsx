@@ -1,17 +1,23 @@
-import { ArrowLeft, ClipboardCheck, KeySquare, Loader2, Maximize, RefreshCw } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Copy, KeySquare, Loader2, Maximize, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import { ManagedHost } from "../api/types";
+import { ManagedHost, ManagedHostRdpCredentials } from "../api/types";
 import { useOrg } from "../state/org";
 
 export default function RemoteSession() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  // "Connect" (vs. plain "Shadow") - see RemoteManagement.tsx's own two
+  // buttons, both landing here, differing only by this query param.
+  const isConnectMode = searchParams.get("mode") === "connect";
   const { selectedOrgId } = useOrg();
   const [host, setHost] = useState<ManagedHost | null>(null);
   const [embedUrl, setEmbedUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [rdpCreds, setRdpCreds] = useState<ManagedHostRdpCredentials | null>(null);
+  const [showCreds, setShowCreds] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +69,56 @@ export default function RemoteSession() {
     iframeRef.current?.contentWindow?.postMessage({ type: "ctrl_alt_del" }, "*");
   }
 
+  // "Connect" mode only: fetch this host's saved RDP credentials once the
+  // session is up, and attempt the same best-effort postMessage approach as
+  // Ctrl+Alt+Del above - equally unconfirmed to actually be acted on by
+  // webclient2, for the same reason (no documented API). The credentials
+  // panel below is the fallback that always works regardless: shown either
+  // way, with copy buttons, so the operator can type them in manually if the
+  // auto-type attempt didn't take.
+  useEffect(() => {
+    if (!isConnectMode || !selectedOrgId || !id || !embedUrl) return;
+    let cancelled = false;
+    api
+      .get<ManagedHostRdpCredentials>(`/organizations/${selectedOrgId}/managed-hosts/${id}/rdp-credentials`)
+      .then((creds) => {
+        if (cancelled) return;
+        setRdpCreds(creds);
+        setShowCreds(true);
+        if (creds.username || creds.password) {
+          // A short delay for the embedded client to actually finish
+          // loading/connecting before it could plausibly act on this -
+          // arbitrary, since there's no "ready" signal to wait on instead.
+          setTimeout(() => {
+            if (cancelled) return;
+            iframeRef.current?.contentWindow?.postMessage(
+              { type: "type_credentials", username: creds.username ?? "", password: creds.password ?? "" },
+              "*"
+            );
+          }, 1500);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRdpCreds(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnectMode, selectedOrgId, id, embedUrl]);
+
+  function tryAutoType() {
+    if (!rdpCreds) return;
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "type_credentials", username: rdpCreds.username ?? "", password: rdpCreds.password ?? "" },
+      "*"
+    );
+  }
+
+  async function copyToClipboard(value: string) {
+    await navigator.clipboard.writeText(value);
+  }
+
   // Native browser fullscreen on the viewer (iframe + its frame), so the
   // remote screen fills the whole display - the VNC/ESXi-console expectation.
   function toggleFullscreen() {
@@ -104,6 +160,19 @@ export default function RemoteSession() {
               <KeySquare size={14} strokeWidth={1.75} />
               Ctrl+Alt+Del
             </button>
+            {isConnectMode && rdpCreds && (
+              <button
+                className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                title="Retry auto-typing the saved RDP username/password, or show them again"
+                onClick={() => {
+                  setShowCreds(true);
+                  tryAutoType();
+                }}
+              >
+                <KeySquare size={14} strokeWidth={1.75} />
+                RDP credentials
+              </button>
+            )}
             <button
               className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
               title="Fullscreen"
@@ -125,6 +194,42 @@ export default function RemoteSession() {
           </div>
         )}
       </div>
+
+      {isConnectMode && showCreds && rdpCreds && (rdpCreds.username || rdpCreds.password) && (
+        <div className="mb-3 flex items-center gap-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm dark:border-blue-900 dark:bg-blue-950">
+          <span className="text-blue-700 dark:text-blue-400">
+            Tried auto-typing this host's saved RDP credentials into the login screen - if that didn't take, type them
+            in yourself:
+          </span>
+          {rdpCreds.username && (
+            <button
+              className="flex shrink-0 items-center gap-1 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-neutral-900 dark:text-blue-400 dark:hover:bg-neutral-800"
+              onClick={() => copyToClipboard(rdpCreds.username ?? "")}
+              title="Copy username"
+            >
+              <Copy size={12} strokeWidth={1.75} />
+              {rdpCreds.username}
+            </button>
+          )}
+          {rdpCreds.password && (
+            <button
+              className="flex shrink-0 items-center gap-1 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-neutral-900 dark:text-blue-400 dark:hover:bg-neutral-800"
+              onClick={() => copyToClipboard(rdpCreds.password ?? "")}
+              title="Copy password"
+            >
+              <Copy size={12} strokeWidth={1.75} />
+              ••••••••
+            </button>
+          )}
+          <button
+            className="ml-auto shrink-0 text-blue-400 hover:text-blue-600 dark:hover:text-blue-300"
+            title="Dismiss"
+            onClick={() => setShowCreds(false)}
+          >
+            <X size={14} strokeWidth={1.75} />
+          </button>
+        </div>
+      )}
 
       <div
         ref={viewerRef}

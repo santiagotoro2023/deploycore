@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Copy, Download, MonitorSmartphone, Pencil, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Download, KeySquare, MonitorSmartphone, Pencil, Plus, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError, getToken } from "../api/client";
@@ -118,10 +118,23 @@ export default function RemoteManagement() {
                 <button
                   className="flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={!h.enrolled}
-                  title={h.enrolled ? "Connect" : "Waiting for the agent to enroll"}
+                  title={h.enrolled ? "View and control the current screen, as-is" : "Waiting for the agent to enroll"}
                   onClick={() => navigate(`/remote-management/${h.id}`)}
                 >
                   <MonitorSmartphone size={12} strokeWidth={1.75} />
+                  Shadow
+                </button>
+                <button
+                  className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-neutral-800"
+                  disabled={!h.enrolled}
+                  title={
+                    h.enrolled
+                      ? "Open the same screen view, then try auto-typing this host's saved RDP username/password"
+                      : "Waiting for the agent to enroll"
+                  }
+                  onClick={() => navigate(`/remote-management/${h.id}?mode=connect`)}
+                >
+                  <KeySquare size={12} strokeWidth={1.75} />
                   Connect
                 </button>
                 {canManage && !h.enrolled && (
@@ -366,6 +379,9 @@ function EditHostForm({
   onDone: () => void;
 }) {
   const [name, setName] = useState(host.name);
+  const [rdpUsername, setRdpUsername] = useState(host.rdp_username ?? "");
+  const [rdpPassword, setRdpPassword] = useState("");
+  const [clearRdpPassword, setClearRdpPassword] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -375,7 +391,18 @@ function EditHostForm({
     setError(null);
     setSaving(true);
     try {
-      await api.patch(`/organizations/${orgId}/managed-hosts/${host.id}`, { name });
+      const body: Record<string, string> = { name, rdp_username: rdpUsername };
+      // Only include rdp_password at all if the operator actually typed a
+      // new one or explicitly asked to clear it - the current value is
+      // never sent to this form to begin with (see ManagedHostRead's own
+      // rdp_password_set field), so an omitted key here means "leave it
+      // as whatever's already stored", not "no password".
+      if (clearRdpPassword) {
+        body.rdp_password = "";
+      } else if (rdpPassword) {
+        body.rdp_password = rdpPassword;
+      }
+      await api.patch(`/organizations/${orgId}/managed-hosts/${host.id}`, body);
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to save.");
@@ -387,13 +414,49 @@ function EditHostForm({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
       <form onSubmit={onSubmit} className="w-96 rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900 p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold">Rename host</h2>
+        <h2 className="mb-4 text-sm font-semibold">Edit host</h2>
+        <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">Name</label>
         <input
           className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
         />
+
+        <div className="mb-3 border-t border-neutral-200 pt-3 dark:border-neutral-800">
+          <p className="mb-2 text-xs text-neutral-500">
+            Used by "Connect" to try auto-typing into the remote login screen - best-effort, not guaranteed to work
+            on every session.
+          </p>
+          <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">RDP username</label>
+          <input
+            className="mb-3 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900"
+            value={rdpUsername}
+            onChange={(e) => setRdpUsername(e.target.value)}
+            placeholder="e.g. Administrator"
+          />
+          <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">RDP password</label>
+          <input
+            type="password"
+            className="mb-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900 disabled:opacity-50"
+            value={rdpPassword}
+            onChange={(e) => setRdpPassword(e.target.value)}
+            disabled={clearRdpPassword}
+            placeholder={host.rdp_password_set ? "Leave blank to keep the current password" : "No password set"}
+          />
+          <label className="mb-3 flex items-center gap-1.5 text-xs text-neutral-500">
+            <input
+              type="checkbox"
+              checked={clearRdpPassword}
+              onChange={(e) => {
+                setClearRdpPassword(e.target.checked);
+                if (e.target.checked) setRdpPassword("");
+              }}
+            />
+            Clear the stored password
+          </label>
+        </div>
+
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
         <div className="flex justify-end gap-2">
           <button type="button" className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm dark:bg-neutral-900" onClick={onClose} disabled={saving}>

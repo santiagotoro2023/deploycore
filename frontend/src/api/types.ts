@@ -99,6 +99,13 @@ export interface ManagedHost {
   rustdesk_id: string | null;
   last_seen_at: string | null;
   created_at: string;
+  rdp_username: string | null;
+  rdp_password_set: boolean;
+}
+
+export interface ManagedHostRdpCredentials {
+  username: string | null;
+  password: string | null;
 }
 
 export interface RemotePort {

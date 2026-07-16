@@ -10,7 +10,13 @@ from app.db import get_db
 from app.models.app_asset import AppAsset
 from app.models.managed_host import ManagedHost
 from app.models.user import Role, User
-from app.schemas.managed_host import ManagedHostCreate, ManagedHostRead, ManagedHostSession, ManagedHostUpdate
+from app.schemas.managed_host import (
+    ManagedHostCreate,
+    ManagedHostRdpCredentials,
+    ManagedHostRead,
+    ManagedHostSession,
+    ManagedHostUpdate,
+)
 from app.security.rbac import get_current_user, require_role
 from app.services import audit, remote_desktop
 
@@ -123,6 +129,30 @@ async def start_managed_host_session(
     return ManagedHostSession(embed_url=embed_url)
 
 
+@router.get(
+    "/api/organizations/{org_id}/managed-hosts/{host_id}/rdp-credentials",
+    response_model=ManagedHostRdpCredentials,
+    dependencies=[Depends(require_role(Role.OPERATOR))],
+)
+async def get_managed_host_rdp_credentials(
+    org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ManagedHostRdpCredentials:
+    """The ONLY route that ever returns the plaintext RDP password - not the
+    list/get routes (see ManagedHostRead.rdp_password_set) - fetched by the
+    frontend right when "Connect" is clicked, to attempt auto-typing it into
+    the remote session's own login screen. Audit-logged same as starting a
+    session itself, since reading a plaintext credential is exactly the kind
+    of action worth a trail."""
+    host = await _get_org_managed_host(db, org_id, host_id)
+    audit.record(
+        db, action="managed_host.rdp_credentials_viewed", target_type="managed_host", org_id=org_id,
+        user_id=current_user.id, target_id=host.id, detail={"name": host.name},
+    )
+    await db.commit()
+    return ManagedHostRdpCredentials(username=host.rdp_username, password=host.rdp_password)
+
+
 @router.patch(
     "/api/organizations/{org_id}/managed-hosts/{host_id}",
     response_model=ManagedHostRead,
@@ -136,9 +166,15 @@ async def update_managed_host(
     updates = body.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(host, field, value)
+    # Never write the plaintext rdp_password into the audit trail - swap it
+    # for whether it was set/cleared, same as ManagedHostRead never returns
+    # the plaintext over a routine read either.
+    audit_detail = {k: v for k, v in updates.items() if k != "rdp_password"}
+    if "rdp_password" in updates:
+        audit_detail["rdp_password"] = "cleared" if not updates["rdp_password"] else "changed"
     audit.record(
         db, action="managed_host.update", target_type="managed_host", org_id=org_id,
-        user_id=current_user.id, target_id=host.id, detail=updates,
+        user_id=current_user.id, target_id=host.id, detail=audit_detail,
     )
     await db.commit()
     await db.refresh(host)

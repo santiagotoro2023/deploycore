@@ -63,6 +63,16 @@ class ManagedHost(Base, UUIDPKMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Optional, operator-entered RDP credentials for this host - separate
+    # from rustdesk_key above (that's the agent's own unattended-access
+    # password, generated locally by the agent, never chosen by anyone).
+    # These are for the "Connect" button's best-effort auto-type-into-the-
+    # remote-login-screen flow (see services/remote_desktop.py /
+    # RemoteSession.tsx) - a real Windows account's own username/password,
+    # so encrypted at rest the same way rustdesk_key already is.
+    rdp_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rdp_password_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
     @property
     def rustdesk_key(self) -> str | None:
         return crypto.decrypt(self.rustdesk_key_encrypted) if self.rustdesk_key_encrypted else None
@@ -70,3 +80,23 @@ class ManagedHost(Base, UUIDPKMixin, TimestampMixin):
     @rustdesk_key.setter
     def rustdesk_key(self, value: str) -> None:
         self.rustdesk_key_encrypted = crypto.encrypt(value)
+
+    @property
+    def rdp_password(self) -> str | None:
+        return crypto.decrypt(self.rdp_password_encrypted) if self.rdp_password_encrypted else None
+
+    @rdp_password.setter
+    def rdp_password(self, value: str | None) -> None:
+        # Falsy (None or "") clears it rather than encrypting an empty
+        # string - lets the update route treat an explicitly-blank value as
+        # "remove the stored password" (see ManagedHostUpdate's own docstring).
+        self.rdp_password_encrypted = crypto.encrypt(value) if value else None
+
+    @property
+    def rdp_password_set(self) -> bool:
+        """Read-only signal for the frontend (ManagedHostRead) - whether a
+        password is on file, without ever returning the plaintext over the
+        list/get routes. The plaintext is only ever returned by the dedicated
+        rdp-credentials route, fetched on demand right when Connect is
+        clicked, not as part of routine host reads."""
+        return self.rdp_password_encrypted is not None

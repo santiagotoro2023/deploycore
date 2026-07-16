@@ -11,6 +11,15 @@ class ManagedHostCreate(BaseModel):
 
 class ManagedHostUpdate(BaseModel):
     name: str | None = None
+    rdp_username: str | None = None
+    # Omit entirely to leave the stored password unchanged (the frontend's
+    # edit form never receives the current plaintext, so it can't send it
+    # back by default - see ManagedHostRead.rdp_password_set); send "" to
+    # explicitly clear it, any other value to replace it. Only fields set
+    # in the request at all reach the model at all (route uses
+    # exclude_unset=True), so a plain omitted field is a true no-op, not
+    # accidentally cleared - "" is the only way to actually clear it.
+    rdp_password: str | None = None
 
 
 class ManagedHostRead(BaseModel):
@@ -33,6 +42,12 @@ class ManagedHostRead(BaseModel):
     rustdesk_id: str | None
     last_seen_at: datetime | None
     created_at: datetime
+    rdp_username: str | None
+    # NOT the plaintext password - just whether one is on file, so the edit
+    # form can show "leave blank to keep the current password" vs "no
+    # password set" without ever exposing it over a routine read. The
+    # plaintext is only ever returned by the dedicated rdp-credentials route.
+    rdp_password_set: bool
 
 
 class RemotePort(BaseModel):
@@ -69,6 +84,17 @@ class ManagedHostSession(BaseModel):
     into an iframe."""
 
     embed_url: str
+
+
+class ManagedHostRdpCredentials(BaseModel):
+    """The plaintext RDP username/password, returned ONLY by the dedicated
+    rdp-credentials route (never by the routine list/get routes - see
+    ManagedHostRead.rdp_password_set). Fetched by the frontend right when
+    "Connect" is clicked, to attempt auto-typing them into the remote
+    session's own login screen (best-effort - see RemoteSession.tsx)."""
+
+    username: str | None
+    password: str | None
 
 
 class RemoteAgentConfig(BaseModel):
