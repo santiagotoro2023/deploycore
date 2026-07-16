@@ -116,7 +116,7 @@ async def start_managed_host_session(
     host = await _get_org_managed_host(db, org_id, host_id)
     if not host.enrolled or not host.rustdesk_id or host.rustdesk_key is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "this host's agent hasn't enrolled yet")
-    public_url = await remote_desktop.public_url_for(db)
+    public_url = remote_desktop.public_url_for()
     try:
         embed_url = await remote_desktop.create_session_url(host.rustdesk_id, host.rustdesk_key, host.name, public_url)
     except remote_desktop.RemoteDesktopError as exc:

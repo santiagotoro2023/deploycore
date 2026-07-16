@@ -76,30 +76,41 @@ async def resolve_app_public_url(db: AsyncSession) -> str:
     return get_settings().app_public_url.rstrip("/")
 
 
-async def public_url_for(db: AsyncSession) -> str:
-    """The browser loads the embedded web client from here - Caddy's own
-    dedicated :8444 HTTPS listener (proxy/entrypoint.sh), reverse-proxying
-    straight to the rustdesk container's port 21114 with NO path rewriting,
-    using the same Settings-configured Remote Management host as the
-    relay/rendezvous ports already do (resolve_public_host). Two real bugs
-    found the hard way got to this point, in order:
+def public_url_for() -> str:
+    """The browser loads the embedded web client from a PATH on DeployCore's
+    own origin now - "" (empty base; create_session_url appends /webclient2
+    itself) - not a separate host/port at all. Three real bugs found getting
+    here, in order:
 
     1. A direct http://<host>:21114 URL - a plain HTTP iframe embedded in
        DeployCore's own HTTPS-served UI is exactly the "mixed active
-       content" browsers block by default. Confirmed live: the embedded
-       session showed a black screen with no visible error at all, since
-       the RustDesk protocol's own WebSocket connections never got a
-       chance to open.
-    2. Proxying it under a /rustdesk-webclient/ sub-path of DeployCore's
-       own :443 (same origin, no separate port) traded that for an endless
-       loading spinner - webclient2's own JS makes absolute, root-relative
-       calls (e.g. /api/...) that only resolve correctly when it's actually
-       served from its origin's root, not a sub-path a browser has no way
-       to know to prepend to those requests.
+       content" browsers block by default. Confirmed live: a black screen
+       with no visible error, the RustDesk protocol's own WebSocket
+       connections never got a chance to open.
+    2. A dedicated :8444 HTTPS port fixed that, but introduced its own
+       problem: a SEPARATE origin needs its own certificate trust decision,
+       and a browser flatly refuses to let you make that decision from
+       INSIDE an embedded iframe at all (the same restriction that stops a
+       malicious page tricking someone into trusting a bad cert) - so
+       Connect/Shadow silently failed for anyone who hadn't separately
+       visited/trusted that port first, with no way to do so from inside
+       the session itself.
+    3. An earlier same-origin attempt, proxied under a DIFFERENT sub-path
+       (/rustdesk-webclient/, prefix stripped before forwarding), also
+       failed - not because same-origin is impossible, but because that
+       path didn't match what the Flutter web client's own build was
+       compiled for (/webclient2/, confirmed via lejianwen/rustdesk-api's
+       actual source, http/router/router.go's own StaticFS mount), so its
+       root-relative asset/API references resolved incorrectly.
 
-    A dedicated port with no rewriting sidesteps both."""
-    host = await resolve_public_host(db)
-    return f"https://{host}:8444"
+    Proxying webclient2 at the EXACT path it already expects (see
+    proxy/entrypoint.sh's /webclient2/* and /api/shared-peer handle blocks -
+    the latter confirmed, via the same source, to be the one specific API
+    call this anonymous share-token flow actually needs, and confirmed not
+    to collide with anything DeployCore's own API uses) means the embedded
+    session shares DeployCore's own already-trusted origin entirely - no
+    separate certificate, no separate trust decision, for anyone, ever."""
+    return ""
 
 _TIMEOUT_SECONDS = 15
 _SHARE_EXPIRE_SECONDS = 60 * 60  # a connect session link good for an hour
@@ -115,12 +126,11 @@ RELAY_PORTS = [
     {"port": 21117, "proto": "TCP", "purpose": "Relay server"},
     {"port": 21118, "proto": "TCP", "purpose": "Web client (ID over WebSocket)"},
     {"port": 21119, "proto": "TCP", "purpose": "Web client (relay over WebSocket)"},
-    # NOT 21114 - the browser no longer loads the session from there
-    # directly (see public_url_for()'s own docstring for the two real bugs
-    # that led here). 8444 is Caddy's own dedicated HTTPS listener for it,
-    # sharing this instance's own certificate - the one that actually needs
-    # forwarding for access from outside this network.
-    {"port": 8444, "proto": "TCP", "purpose": "Web client (the browser loads the session from here, over HTTPS)"},
+    # Deliberately NOT 21114 (or a dedicated port for it) - the embedded
+    # session now loads through DeployCore's own :443 origin, proxied at the
+    # exact /webclient2/ path the client expects (see proxy/entrypoint.sh
+    # and public_url_for()'s own docstring for the three real bugs that led
+    # here) - nothing extra to forward for it, same as the rest of this app.
 ]
 
 # Cached api-token from the last successful admin login. Cleared and re-fetched
@@ -236,9 +246,8 @@ async def create_session_url(rustdesk_id: str, rustdesk_password: str, host_name
     a one-time expiring share link for it, and returns the embeddable web-client
     URL. rustdesk_password is the host's own permanent/unattended password,
     decrypted from ManagedHost.rustdesk_key by the caller. public_url is the
-    browser-facing base URL (public_url_for() - its own dedicated HTTPS
-    port, see its own docstring for why), so the embedded session actually
-    connects instead of showing a black screen or spinning forever."""
+    browser-facing base URL (public_url_for() - now just "", same-origin,
+    see its own docstring for the three real bugs that led here)."""
     # Idempotent by intent: re-adding a peer already in the address book is a
     # harmless no-op / update, and this is the only place the current password
     # gets refreshed onto the rustdesk-api side, so it runs every session

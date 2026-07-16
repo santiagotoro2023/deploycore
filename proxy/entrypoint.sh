@@ -61,18 +61,13 @@ render_caddyfile() {
 :443 {
 	$cert_block
 
-	# Lets a browser trust EVERY certificate this instance ever issues (both
-	# :443 and :8444, and any future port) with ONE install, instead of
-	# clicking through a per-site warning separately for each origin/port -
-	# confirmed live as a real, recurring pain point once the embedded web
-	# client needed its own port (see :8444 below): a browser flatly refuses
-	# to let you click through a cert warning INSIDE an embedded iframe at
-	# all, so without this there'd be no way to get past it there except
-	# visiting each new origin directly first. The official Caddy Docker
-	# image sets XDG_DATA_HOME=/data (this container's caddy_data volume),
-	# so `tls internal`'s own local CA root always lands at exactly this
-	# path - not served at all once a real uploaded certificate is in use
-	# (self-signed mode only; a real cert needs no local CA trusted at all).
+	# Lets a browser trust EVERY certificate this instance ever issues with
+	# ONE install, instead of clicking through a per-site warning separately
+	# for each origin - relevant if a real certificate isn't in use (self-
+	# signed mode only; not served at all once one is uploaded). The
+	# official Caddy Docker image sets XDG_DATA_HOME=/data (this container's
+	# caddy_data volume), so `tls internal`'s own local CA root always lands
+	# at exactly this path.
 	handle /ca.crt {
 		root * /data/caddy/pki/authorities/local
 		rewrite * /root.crt
@@ -80,29 +75,50 @@ render_caddyfile() {
 		header Content-Disposition "attachment; filename=deploycore-ca.crt"
 	}
 
-	reverse_proxy frontend:5173
-}
+	# The embedded RustDesk web client (rustdesk-api's own "webclient2",
+	# lejianwen/rustdesk-api's Flutter-web build - confirmed via its actual
+	# source, http/router/router.go's `g.StaticFS("/webclient2", ...)`) is
+	# proxied at the EXACT SAME PATH it's built to expect, on THIS SAME
+	# origin - not a separate port, not a different sub-path. Two real bugs
+	# found getting here, in order: (1) loading it directly as its own
+	# http://<host>:21114 URL is a plain HTTP iframe inside this HTTPS-served
+	# app, exactly the "mixed active content" browsers block by default -
+	# confirmed live as a black screen with no visible error. (2) A dedicated
+	# :8444 HTTPS port fixed that but introduced its own problem: any
+	# separate origin needs its own certificate trust decision, which a
+	# browser flatly refuses to let you make from INSIDE an embedded iframe
+	# at all (the same restriction that stops a malicious page tricking
+	# someone into trusting a bad cert) - so Connect/Shadow silently failed
+	# for anyone who hadn't separately visited/trusted that port first, with
+	# no way to do so from inside the session itself. (3) An EARLIER same-
+	# origin attempt, proxied under a DIFFERENT sub-path (/rustdesk-webclient/)
+	# with the prefix stripped before forwarding, also failed - not because
+	# same-origin is impossible, but because that path didn't match what the
+	# Flutter build's own base-href was compiled for (/webclient2/), so its
+	# root-relative asset/API references resolved incorrectly. Proxying the
+	# IDENTICAL path it already expects avoids that entirely - confirmed via
+	# its own source this needs no rewriting.
+	handle /webclient2/* {
+		reverse_proxy rustdesk:21114
+	}
 
-# The embedded RustDesk web client (rustdesk-api's own webclient2, port
-# 21114) gets its OWN HTTPS listener, sharing the same certificate strategy,
-# rather than being loaded directly as its own http://<host>:21114 URL or
-# proxied under a sub-path of :443. Two real bugs found the hard way, in
-# order: (1) a plain HTTP iframe inside this HTTPS-served app is exactly the
-# "mixed active content" browsers block by default - confirmed live as the
-# cause of a black screen with no visible error, the RustDesk protocol's own
-# WebSocket connections never got a chance to open at all. (2) Proxying it
-# under a /rustdesk-webclient/ sub-path of :443 (the first fix attempted)
-# just traded that for an endless loading spinner - webclient2's own JS
-# makes absolute, root-relative calls (e.g. /api/...) that only resolve
-# correctly when the app is actually served from its origin's root, not a
-# sub-path a browser has no way to know to prepend to those requests.
-# A dedicated port with NO path rewriting sidesteps both: see
-# services/remote_desktop.py's public_url_for(), which builds this port's
-# own URL using the Settings-configured Remote Management host (the same
-# address already used for the relay/rendezvous ports).
-:8444 {
-	$cert_block
-	reverse_proxy rustdesk:21114
+	# The one specific API call webclient2 needs for anonymous, share-token-
+	# based sessions (redeeming the token DeployCore mints server-side, see
+	# services/remote_desktop.py's create_session_url()) - confirmed via
+	# lejianwen/rustdesk-api's actual source (http/router/api.go's
+	# WebClientRoutes(): `frg.POST("/shared-peer", w.SharedPeer)`, registered
+	# OUTSIDE any auth-gated group, unlike its sibling /server-config routes
+	# which need a login this anonymous flow never has). Confirmed this
+	# doesn't collide with anything DeployCore's own API uses (grepped this
+	# app's own route definitions directly) - DeployCore's own auth lives at
+	# /api/auth/*, not a bare /api/login, so there's no ambiguity for Caddy
+	# to resolve between the two apps' /api/* namespaces at all past this one
+	# specific path.
+	handle /api/shared-peer {
+		reverse_proxy rustdesk:21114
+	}
+
+	reverse_proxy frontend:5173
 }
 EOF
 }

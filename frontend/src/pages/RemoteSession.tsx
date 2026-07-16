@@ -18,7 +18,6 @@ export default function RemoteSession() {
   const [connecting, setConnecting] = useState(false);
   const [rdpCreds, setRdpCreds] = useState<ManagedHostRdpCredentials | null>(null);
   const [showCreds, setShowCreds] = useState(false);
-  const [showCertHint, setShowCertHint] = useState(true);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
 
@@ -195,41 +194,6 @@ export default function RemoteSession() {
           </div>
         )}
       </div>
-
-      {/* The embedded session loads from its own HTTPS origin (a separate
-          port from this app's own, see backend's public_url_for() for why),
-          with its own self-signed certificate a browser has to be told to
-          trust separately - confirmed live that this can't be done from
-          INSIDE the embedded iframe at all (browsers deliberately refuse to
-          let you click through a cert warning inside a frame), so it
-          otherwise silently stays blank/unresponsive with no obvious next
-          step. Links to /ca.crt (Caddy's own local Certificate Authority
-          root, served from THIS app's own origin - see
-          RemoteManagement.tsx's own matching hint and proxy/entrypoint.sh)
-          rather than the embedded session's own :8444 origin directly -
-          installing that ONE file as a trusted root covers every port this
-          instance ever uses, not just this one session. One-time per
-          browser/machine; not needed at all once a real certificate is
-          uploaded (Settings -> HTTPS certificate). */}
-      {embedUrl && showCertHint && (
-        <div className="mb-3 flex items-center gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm dark:border-amber-900 dark:bg-amber-950/40">
-          <span className="text-amber-800 dark:text-amber-400">
-            First time connecting from this browser? If the screen below stays blank, this machine hasn't trusted
-            this instance's certificate yet - see the one-command fix on the{" "}
-            <Link to="/remote-management" className="text-blue-600 hover:underline dark:text-blue-400">
-              Remote Management
-            </Link>{" "}
-            page (under "Using the default self-signed certificate?"), then come back and hit Reconnect.
-          </span>
-          <button
-            className="ml-auto shrink-0 text-amber-500 hover:text-amber-700 dark:hover:text-amber-300"
-            title="Dismiss"
-            onClick={() => setShowCertHint(false)}
-          >
-            <X size={14} strokeWidth={1.75} />
-          </button>
-        </div>
-      )}
 
       {isConnectMode && showCreds && rdpCreds && (rdpCreds.username || rdpCreds.password) && (
         <div className="mb-3 flex items-center gap-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm dark:border-blue-900 dark:bg-blue-950">

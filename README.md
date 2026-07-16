@@ -191,34 +191,37 @@ uploaded certificate expired, **Switch to self-signed temporarily** does
 exactly that without discarding the uploaded certificate, and **Use this
 certificate again** switches back to it, no re-upload needed.
 
-**Remote Management's embedded sessions need one extra step under the
-self-signed default.** The embedded web-client view runs on its own HTTPS
-port (8444) so it isn't blocked as mixed content, which means it's a
-separate origin with its own self-signed certificate a browser has to
-trust separately - and a browser flatly refuses to let you click through a
-certificate warning *inside* an embedded frame at all (the same
-restriction that stops a malicious page from tricking someone into
-trusting a bad cert), so without doing anything Connect/Shadow just stays
-blank with no obvious next step. This is a hard limit of how TLS trust
-works, not something DeployCore's own code can route around - a server
-can't unilaterally make a browser trust it, and there's no way to make
-RustDesk's own bundled web client share DeployCore's own origin (its
-JavaScript makes calls to fixed paths that collide with DeployCore's own
-API). The only way to make a self-signed certificate trusted with zero
-per-machine steps at all is a real domain name + an automatically-issued
-Let's Encrypt certificate, which needs DNS you control - not an option for
-a bare LAN IP with no domain.
+**Remote Management's embedded sessions need no separate step at all** -
+they share this same origin and certificate, not a different port. Getting
+there took a few real, load-bearing bugs, worth knowing about if you're
+touching this code: an early version loaded the web client from its own
+`http://<host>:21114` URL, which browsers block as mixed content inside an
+HTTPS page; a later version gave it a dedicated HTTPS port instead, which
+fixed that but meant a *separate* certificate a browser has to trust
+separately - and a browser flatly refuses to let you click through a
+certificate warning *inside* an embedded frame at all, so anyone who
+hadn't visited that port directly first got a silent, unexplained failure.
+The actual fix: RustDesk's bundled web client (`webclient2`) is proxied at
+the *exact* path it's built to expect (`/webclient2/`, confirmed against
+its own source), on DeployCore's own `:443` origin, alongside the one
+specific API call it needs for anonymous share-token sessions
+(`/api/shared-peer`, also confirmed against source, and confirmed not to
+collide with anything DeployCore's own API uses). Whatever already lets a
+browser load the rest of DeployCore - a real certificate, or having
+already clicked through the self-signed warning once - covers Remote
+Management automatically, for anyone who can already reach this instance
+at all.
 
-Given that, the smallest possible one-time step: the Remote Management
-page's own "Using the default self-signed certificate?" section has a
+If you'd rather skip that initial self-signed warning for the whole
+instance (not specific to Remote Management), the Remote Management page's
+own "Still on the default self-signed certificate?" section has a
 copy-paste **one-line command per OS** that downloads and installs Caddy's
 own locally-generated Certificate Authority root as a trusted root -
 Windows (PowerShell, as Administrator), macOS, and Linux. Run once per
-machine that'll use Remote Management (push it fleet-wide via a GPO
-startup script, RMM, or MDM if you manage more than a couple), and that
-machine trusts every certificate this instance issues, on every port,
-forever - not a per-site exception for just this one session. Not needed
-at all once a real uploaded certificate is in use.
+machine (push it fleet-wide via a GPO startup script, RMM, or MDM if you
+manage more than a couple), and that machine trusts every certificate this
+instance issues, forever. Not needed at all once a real uploaded
+certificate is in use.
 
 This is handled by a small `proxy` service (Caddy) in front of the rest of
 the stack: it terminates TLS on 443 and redirects 80 to it, forwarding

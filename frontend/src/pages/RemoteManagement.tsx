@@ -250,33 +250,27 @@ docker compose exec -w /app rustdesk ./apimain reset-admin-pwd "$(grep '^RUSTDES
         </>
       )}
 
-      {/* The embedded web-client session runs on its own HTTPS port (8444,
-          see services/remote_desktop.py's public_url_for()) so it isn't
-          blocked as mixed content - but that means it's a SEPARATE origin
-          from this app's own :443, with its own self-signed certificate a
-          browser has to be told to trust separately, and confirmed live
-          that can't be done from INSIDE the embedded iframe at all
-          (browsers deliberately refuse to let you click through a cert
-          warning inside a frame - the same restriction that stops a
-          malicious page from tricking someone into trusting a bad cert).
-          Rather than sending people to click through a per-site warning
-          for :8444 specifically (which wouldn't cover any OTHER port this
-          instance might ever use either), this links to /ca.crt - Caddy's
-          own locally-generated Certificate Authority root (see
-          proxy/entrypoint.sh) - installed as a trusted root ONCE, a browser
-          (and the whole OS, for anything else that checks certs) then
-          trusts EVERY certificate this instance issues automatically,
-          forever, on every port, no more warnings anywhere. Not needed at
-          all once a real certificate is uploaded (Settings -> HTTPS
-          certificate) - that's trusted by default already. */}
+      {/* The embedded web-client session shares DeployCore's own origin now
+          (proxied at the exact /webclient2/ path the client expects - see
+          proxy/entrypoint.sh and services/remote_desktop.py's
+          public_url_for() for the three real bugs that led here, including
+          a dedicated-port version of this that needed its own separate
+          certificate trust and got reverted). Whatever already lets this
+          browser load the rest of the DeployCore UI - a real uploaded
+          certificate, or having already clicked through the self-signed
+          warning once for this instance - covers Connect/Shadow too now,
+          automatically, for anyone who can already use DeployCore at all.
+          No separate step for Remote Management specifically. /ca.crt
+          (Caddy's own local Certificate Authority root) is still offered
+          here purely as a convenience for instances still on the
+          self-signed default that want to skip the warning for the WHOLE
+          app too, not because Remote Management needs anything extra. */}
       {ready && (
         <details className="border-t border-neutral-200 px-4 py-2 text-xs text-neutral-500 dark:border-neutral-800">
           <summary className="cursor-pointer">
-            Using the default self-signed certificate? Trust this instance's certificate authority once per
-            machine that'll use Remote Management - otherwise Connect/Shadow silently fail to load (a browser
-            won't let you click through a certificate warning inside an embedded frame). One command, no download
-            wizard - run as Administrator (Windows) or with sudo (macOS/Linux). Push it fleet-wide via GPO/RMM/MDM
-            startup scripts if you manage more than a couple of machines.
+            Still on the default self-signed certificate? Connect/Shadow already work with no extra step, the same
+            way the rest of DeployCore does - but if you'd rather skip the browser warning entirely (for this whole
+            instance, not just Remote Management), trust its certificate authority once per machine.
           </summary>
           <div className="mt-2 space-y-3 pl-4">
             <div>
