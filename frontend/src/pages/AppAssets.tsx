@@ -101,8 +101,8 @@ export default function AppAssets() {
         rowKey={(a) => a.id}
         searchValue={(a) => `${a.name} ${a.filename}`}
         columns={[
-          { key: "name", header: "Name", render: (a) => a.name, sortValue: (a) => a.name },
-          { key: "filename", header: "File", render: (a) => a.filename },
+          { key: "name", header: "Name", render: (a) => <span className="whitespace-nowrap">{a.name}</span>, sortValue: (a) => a.name },
+          { key: "filename", header: "File", render: (a) => <span className="whitespace-nowrap">{a.filename}</span> },
           { key: "kind", header: "Kind", render: (a) => a.kind.toUpperCase(), shrink: true },
           {
             key: "args",
@@ -113,11 +113,11 @@ export default function AppAssets() {
             key: "scope",
             header: "Scope",
             render: (a) => (
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 whitespace-nowrap">
                 {a.org_id ? selectedOrg?.name ?? "Organization" : "Global"}
                 {a.is_remote_agent && (
                   <span
-                    className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-400"
                     title="This is the DeployCore Remote Management Agent installer"
                   >
                     <MonitorSmartphone size={11} strokeWidth={1.75} />
@@ -134,10 +134,10 @@ export default function AppAssets() {
             header: "",
             render: (a) =>
               (a.org_id ? canManage && a.org_id === selectedOrgId : isGlobalAdmin) && (
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 whitespace-nowrap">
                   {!a.org_id && isGlobalAdmin && a.upload_status === "complete" && (
                     <button
-                      className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
                       title={a.is_remote_agent ? "Unset as Remote Management Agent" : "Set as the Remote Management Agent installer"}
                       onClick={() => setRemoteAgent(a, !a.is_remote_agent)}
                     >
@@ -146,13 +146,13 @@ export default function AppAssets() {
                     </button>
                   )}
                   <button
-                    className="flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
                     onClick={() => setEditApp(a)}
                   >
                     <Pencil size={12} strokeWidth={1.75} />
                   </button>
                   <button
-                    className="flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
                     onClick={() => {
                       setDeleteError(null);
                       setConfirmDelete(a);
