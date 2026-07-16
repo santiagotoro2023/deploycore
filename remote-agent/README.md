@@ -29,6 +29,19 @@ transcript log stopped dead at "Installing service..." with no error, ever.
 The script instead runs the same underlying `sc.exe` commands directly - no
 elevation dance, no hang.
 
+**The `.msi` path doesn't pass SERVERURL/ENROLLTOKEN as Scheduled Task
+arguments.** They're written into `agent-params.ini` (next to the script) via
+WiX's own native `IniFile` action at install time, and the script reads them
+from there if not given explicitly. This is deliberate: CI's smoke test can
+only ever verify a Scheduled Task's command is *registered* correctly
+(`SKIPRUN=1` never lets it actually execute) - it can't verify Task Scheduler
+*re-parses* a multi-argument, nested-quoted `/tr` string correctly at real
+execution time. A live deployment showed exactly that gap - the agent
+produced no log at all, consistent with an empty/lost enroll token. Writing
+to a plain file instead means the Scheduled Task's own `/tr` is just a bare
+path with nothing for Task Scheduler to mis-split, removing that whole class
+of risk.
+
 It's delivered two ways, both using that same script:
 
 1. **One-liner (easiest, no download).** The Remote Management tab shows a

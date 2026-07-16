@@ -107,17 +107,28 @@ jobs:
           $script = Join-Path $installDir "Install-DeployCoreAgent.ps1"
           $runCmd = Join-Path $installDir "RunAgentInstall.cmd"
           $bundledRustDesk = Join-Path $installDir "rustdesk-x86_64.msi"
+          $paramsIni = Join-Path $installDir "agent-params.ini"
           if (-not (Test-Path $script)) { throw "Installer did not place the agent script at $script" }
           if (-not (Test-Path $runCmd)) { throw "Installer did not place the task launcher at $runCmd" }
           if (-not (Test-Path $bundledRustDesk)) { throw "Installer did not bundle the RustDesk client at $bundledRustDesk" }
+
+          # SERVERURL/ENROLLTOKEN are written via WiX's own IniFile action, not
+          # passed as Scheduled Task command-line arguments - deliberately, so
+          # there's nothing for Task Scheduler to mis-parse at actual execution
+          # time (a real deployment showed exactly that gap: the agent script
+          # produced no log at all, consistent with an empty/lost enroll
+          # token). Verify the file exists and both values actually landed.
+          if (-not (Test-Path $paramsIni)) { throw "Installer did not write $paramsIni" }
+          $paramsContent = Get-Content $paramsIni -Raw
+          Write-Host "agent-params.ini content:`n$paramsContent"
+          if ($paramsContent -notmatch [regex]::Escape($testUrl)) { throw "agent-params.ini is missing the SERVERURL value: $paramsContent" }
+          if ($paramsContent -notmatch [regex]::Escape($testToken)) { throw "agent-params.ini is missing the ENROLLTOKEN value: $paramsContent" }
 
           $taskInfo = & schtasks.exe /query /tn DeployCoreAgentInstall /fo list /v 2>&1
           if ($LASTEXITCODE -ne 0) { throw "RegisterAgentTask did not register the scheduled task: $taskInfo" }
           $taskToRun = ($taskInfo | Select-String "^Task To Run:") -join "`n"
           Write-Host "Registered task command: $taskToRun"
           if ($taskToRun -notmatch [regex]::Escape($runCmd)) { throw "Scheduled task command doesn't reference $runCmd - quoting likely broke: $taskToRun" }
-          if ($taskToRun -notmatch [regex]::Escape($testUrl)) { throw "Scheduled task command lost the SERVERURL value - quoting likely broke: $taskToRun" }
-          if ($taskToRun -notmatch [regex]::Escape($testToken)) { throw "Scheduled task command lost the ENROLLTOKEN value - quoting likely broke: $taskToRun" }
           & schtasks.exe /delete /tn DeployCoreAgentInstall /f | Out-Null
 
           Start-Process msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn" -Wait

@@ -50,25 +50,61 @@
 [CmdletBinding()]
 param(
     # Falls back to the server this script was served from (the route replaces
-    # the placeholder) and then to the DC_SERVER/DC_TOKEN env vars the one-line
-    # installer sets, so the piped `| iex` form needs no args.
+    # the placeholder), then the DC_SERVER/DC_TOKEN env vars the one-line
+    # installer sets, then agent-params.ini next to this script (written by
+    # the .msi's own WiX IniFile action - see DeployCoreRemoteAgent.wxs) if
+    # still empty, so neither install path needs to pass these positionally.
     [string]$ServerUrl  = $env:DC_SERVER,
     [string]$EnrollToken = $env:DC_TOKEN
 )
 
 $ErrorActionPreference = "Stop"
-if (-not $ServerUrl) { $ServerUrl = "__DEPLOYCORE_SERVER__" }
-if (-not $EnrollToken) { throw "No enroll token. Set `$env:DC_TOKEN or pass -EnrollToken." }
-$ServerUrl = $ServerUrl.TrimEnd("/")
 
 # Always-on log on the machine itself, independent of MSI logging (which
 # nothing here enables by default) - a VM deployed by the DeployCore pipeline
-# has no interactive session to watch this run, and the only thing that
-# reached DeployCore's own deployment log before this existed was a bare
-# "installer exited with code 1603" with no detail on WHY.
+# has no interactive session to watch this run. Started before ANY validation
+# below, deliberately: an earlier version of this script validated
+# $EnrollToken before creating this log, so a run that received an empty/lost
+# token (confirmed live) left literally no trace anywhere that it ever ran.
 $LogPath = "$env:ProgramData\DeployCore\agent-install.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $LogPath) | Out-Null
 Start-Transcript -Path $LogPath -Append | Out-Null
+
+function Write-Step($m) { Write-Host "[DeployCore] $m" }
+
+# Wrapped in its own try/catch (mirroring the main one further down) purely
+# so Stop-Transcript always runs and the log file is always properly
+# finalized, even if this very first step is what throws - exactly the
+# "empty enroll token" case that used to vanish without a trace.
+try {
+    # Reads agent-params.ini (Section [DeployCore], keys ServerUrl/EnrollToken)
+    # if either value is still missing after params/env vars - only meaningful
+    # for the .msi path ($PSScriptRoot is only set when run via -File, which is
+    # how RunAgentInstall.cmd invokes this; the one-liner path has no such file
+    # and already gets both values via DC_SERVER/DC_TOKEN, a no-op there).
+    if ((-not $ServerUrl -or -not $EnrollToken) -and $PSScriptRoot) {
+        $iniPath = Join-Path $PSScriptRoot "agent-params.ini"
+        if (Test-Path $iniPath) {
+            Write-Step "Reading server URL / enroll token from agent-params.ini..."
+            $iniValues = @{}
+            Get-Content $iniPath | ForEach-Object {
+                if ($_ -match '^\s*(\w+)\s*=\s*(.*?)\s*$') { $iniValues[$matches[1]] = $matches[2] }
+            }
+            if (-not $ServerUrl) { $ServerUrl = $iniValues["ServerUrl"] }
+            if (-not $EnrollToken) { $EnrollToken = $iniValues["EnrollToken"] }
+        } else {
+            Write-Step "No agent-params.ini found at $iniPath"
+        }
+    }
+
+    if (-not $ServerUrl) { $ServerUrl = "__DEPLOYCORE_SERVER__" }
+    if (-not $EnrollToken) { throw "No enroll token. Set `$env:DC_TOKEN, pass -EnrollToken, or check agent-params.ini." }
+    $ServerUrl = $ServerUrl.TrimEnd("/")
+} catch {
+    Write-Step "FAILED: $($_.Exception.Message)"
+    Stop-Transcript | Out-Null
+    throw
+}
 
 # Pinned stock RustDesk release - pinned, not 'latest', so an upstream release
 # can't change install behaviour under us without a deliberate bump here. Must
@@ -77,8 +113,6 @@ $RustDeskVersion = "1.3.8"
 $RustDeskMsiUrl  = "https://github.com/rustdesk/rustdesk/releases/download/$RustDeskVersion/rustdesk-$RustDeskVersion-x86_64.msi"
 $InstallDir      = "$env:ProgramFiles\RustDesk"
 $RustDeskExe     = Join-Path $InstallDir "rustdesk.exe"
-
-function Write-Step($m) { Write-Host "[DeployCore] $m" }
 
 # Best-effort: removes the one-time "DeployCoreAgentInstall" Scheduled Task the
 # .msi's custom action registered to run this script (see this file's own

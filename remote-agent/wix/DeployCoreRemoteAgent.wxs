@@ -90,9 +90,28 @@
         <!-- The Scheduled Task's target (see this file's own header comment
              for why the task exists at all): a thin batch launcher rather than
              pointing schtasks /tr straight at powershell.exe keeps that
-             command's own quoting shallow and simple. -->
+             command's own quoting shallow and simple. Takes no arguments -
+             see AgentParams below for why. -->
         <Component Id="RunScript" Guid="*">
           <File Id="RunAgentInstallCmd" Source="RunAgentInstall.cmd" KeyPath="yes" />
+        </Component>
+        <!-- SERVERURL/ENROLLTOKEN, written via WiX's own native IniFile
+             action - not passed as Scheduled Task command-line arguments.
+             Confirmed necessary live: CI's smoke test only ever verifies the
+             /tr command is REGISTERED with the right text (SKIPRUN=1 never
+             actually runs it) - it can't verify Task Scheduler re-parses a
+             deeply nested-quoted /tr string back into the right arguments at
+             ACTUAL execution time, and a real deployment showed exactly that
+             gap: the agent script produced no log at all, consistent with it
+             receiving an empty enroll token and failing before ever writing
+             one (see remote_agent_install.ps1's own top-of-file ordering
+             fix). Writing these to a plain file removes that whole class of
+             risk - the task's own /tr becomes a single bare path, no
+             arguments, nothing for Task Scheduler to mis-split. -->
+        <Component Id="AgentParams" Directory="INSTALLFOLDER" Guid="*">
+          <File Id="AgentParamsIni" Source="agent-params-template.ini" Name="agent-params.ini" KeyPath="yes" />
+          <IniFile Id="SetServerUrl" Directory="INSTALLFOLDER" Name="agent-params.ini" Action="createLine" Section="DeployCore" Key="ServerUrl" Value="[SERVERURL]" />
+          <IniFile Id="SetEnrollToken" Directory="INSTALLFOLDER" Name="agent-params.ini" Action="addLine" Section="DeployCore" Key="EnrollToken" Value="[ENROLLTOKEN]" />
         </Component>
         <!-- The stock RustDesk client installer, fetched by CI (which has
              internet) and bundled here so the install script never needs
@@ -129,16 +148,20 @@
     <Feature Id="Main">
       <ComponentRef Id="InstallScript" />
       <ComponentRef Id="RunScript" />
+      <ComponentRef Id="AgentParams" />
       <ComponentRef Id="RustDeskInstaller" />
       <ComponentRef Id="BrandIcon" />
       <ComponentRef Id="TrayApp" />
     </Feature>
 
-    <!-- Registers a Scheduled Task pointed at RunAgentInstall.cmd
-         (SERVERURL/ENROLLTOKEN passed as its two arguments), running as
-         SYSTEM. /f suppresses any "already exists" prompt (harmless on a
-         reinstall/repair). Deliberately does NOT run yet - see RunAgentTask
-         below and this file's header comment for why the two are split.
+    <!-- Registers a Scheduled Task pointed at RunAgentInstall.cmd (bare path,
+         no arguments - it reads SERVERURL/ENROLLTOKEN from agent-params.ini,
+         see AgentParams above, specifically to avoid trusting Task Scheduler
+         to correctly re-parse a quoted multi-argument /tr command at actual
+         execution time), running as SYSTEM. /f suppresses any "already
+         exists" prompt (harmless on a reinstall/repair). Deliberately does
+         NOT run yet - see RunAgentTask below and this file's header comment
+         for why the two are split.
 
          Trigger is ONSTART (with a 30s delay for networking to come up), NOT
          ONCE - confirmed necessary live: the DeployCore deployment pipeline
@@ -163,7 +186,7 @@
         Id="RegisterAgentTask"
         Before="RegisterAgentTask"
         Sequence="execute"
-        Value="&quot;[System64Folder]schtasks.exe&quot; /create /f /ru SYSTEM /sc onstart /delay 0000:30 /tn DeployCoreAgentInstall /tr &quot;\&quot;[INSTALLFOLDER]RunAgentInstall.cmd\&quot; \&quot;[SERVERURL]\&quot; \&quot;[ENROLLTOKEN]\&quot;&quot;" />
+        Value="&quot;[System64Folder]schtasks.exe&quot; /create /f /ru SYSTEM /sc onstart /delay 0000:30 /tn DeployCoreAgentInstall /tr &quot;[INSTALLFOLDER]RunAgentInstall.cmd&quot;" />
     <CustomAction
         Id="RegisterAgentTask"
         BinaryRef="Wix4UtilCA_X64"
