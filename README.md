@@ -213,15 +213,12 @@ Management automatically, for anyone who can already reach this instance
 at all.
 
 If you'd rather skip that initial self-signed warning for the whole
-instance (not specific to Remote Management), the Remote Management page's
-own "Still on the default self-signed certificate?" section has a
-copy-paste **one-line command per OS** that downloads and installs Caddy's
-own locally-generated Certificate Authority root as a trusted root -
-Windows (PowerShell, as Administrator), macOS, and Linux. Run once per
-machine (push it fleet-wide via a GPO startup script, RMM, or MDM if you
-manage more than a couple), and that machine trusts every certificate this
-instance issues, forever. Not needed at all once a real uploaded
-certificate is in use.
+instance (not specific to Remote Management), `https://<your-instance>/ca.crt`
+downloads Caddy's own locally-generated Certificate Authority root; install
+it as a trusted root once per machine (push it fleet-wide via a GPO startup
+script, RMM, or MDM if you manage more than a couple) and that machine
+trusts every certificate this instance issues, forever. Not needed at all
+once a real uploaded certificate is in use.
 
 This is handled by a small `proxy` service (Caddy) in front of the rest of
 the stack: it terminates TLS on 443 and redirects 80 to it, forwarding
@@ -288,8 +285,7 @@ too):
 | 21115 | TCP | NAT type test |
 | 21116 | TCP+UDP | ID / rendezvous server (both protocols) |
 | 21117 | TCP | Relay server |
-| 21118, 21119 | TCP | Web client (over WebSocket) |
-| 8444 | TCP | Web client, over HTTPS (browser loads the session here) |
+| 21118, 21119 | TCP | Web client (over secure WebSocket, TLS-terminated by the same proxy as the rest of the app) |
 
 You set the public address in the app, not in files: **Settings → Remote
 Management** takes a public IP or domain and, on Apply, rewrites the config and

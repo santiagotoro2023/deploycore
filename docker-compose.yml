@@ -90,6 +90,16 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # webclient2's own JS always dials wss:// for its ID/relay WebSocket
+      # connections when the page itself loaded over https (confirmed via
+      # lejianwen/rustdesk-api-web's connection.ts: `SCHEMA =
+      # location.protocol=="https:"?"wss://":"ws://"`), straight to
+      # RUSTDESK_RELAY_HOST on 21116/21117 + 2/+3 - so these two ports need
+      # the same TLS termination as :443, not the rustdesk container's own
+      # plain-WS listener directly (see rustdesk service below, and the
+      # matching handle blocks in proxy/entrypoint.sh).
+      - "21118:21118"
+      - "21119:21119"
     volumes:
       - tls_certs:/data/tls
       - caddy_data:/data
@@ -126,7 +136,21 @@ services:
       - MUST_LOGIN=N
       - RUSTDESK_API_RUSTDESK_ID_SERVER=${RUSTDESK_RELAY_HOST}:21116
       - RUSTDESK_API_RUSTDESK_RELAY_SERVER=${RUSTDESK_RELAY_HOST}:21117
-      - RUSTDESK_API_RUSTDESK_API_SERVER=http://127.0.0.1:21114
+      # Deliberately blank, not e.g. http://127.0.0.1:21114 (the value this
+      # used to be, and the actual root cause of Connect/Shadow silently
+      # doing nothing after the mixed-content/same-origin fix). rustdesk-api
+      # bakes this straight into webclient2's client-side JS (its own
+      # /webclient-config/index.js, confirmed via http/controller/web/index.go)
+      # as the base URL every browser-side API call is built from - so
+      # "127.0.0.1" meant every operator's own browser tried to reach
+      # port 21114 on THEIR OWN machine, not this server, and silently failed
+      # (that fetch call has no .catch, so nothing ever surfaced as an error -
+      # it just never redeemed the share token, leaving webclient2 sitting on
+      # its ordinary empty "no active sessions" screen). Blank makes that JS
+      # build a root-relative "/api/shared-peer" instead, which resolves
+      # against whatever origin the browser is already on - exactly the
+      # existing same-origin Caddy proxy, for any operator, from any machine.
+      - RUSTDESK_API_RUSTDESK_API_SERVER=
       - RUSTDESK_API_KEY_FILE=/data/id_ed25519.pub
       - RUSTDESK_API_JWT_KEY=${RUSTDESK_JWT_KEY}
       # Some of rustdesk-api's own error strings (e.g. its CAPTCHA-required
@@ -140,8 +164,8 @@ services:
       - "21116:21116"
       - "21116:21116/udp"
       - "21117:21117"
-      - "21118:21118"
-      - "21119:21119"
+      # 21118/21119 (the WebSocket variants of 21116/21117) are published by
+      # the proxy service instead, TLS-terminated - see its own port comments.
     volumes:
       - rustdesk_server_data:/data
       - rustdesk_api_data:/app/data

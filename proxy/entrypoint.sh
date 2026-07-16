@@ -120,6 +120,22 @@ render_caddyfile() {
 
 	reverse_proxy frontend:5173
 }
+
+# webclient2's own JS dials these two directly as wss://<host>:21118 and
+# :21119 (the ID/relay rendezvous connections, offset +2/+3 from
+# RUSTDESK_RELAY_HOST's 21116/21117 - confirmed via connection.ts's
+# getrUriFromRs()), never through a path under :443, so they need their own
+# TLS-terminating listeners here rather than a handle block above. Same cert
+# as :443 - one trust decision covers both, since it's the same host.
+:21118 {
+	$cert_block
+	reverse_proxy rustdesk:21118
+}
+
+:21119 {
+	$cert_block
+	reverse_proxy rustdesk:21119
+}
 EOF
 }
 

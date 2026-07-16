@@ -250,57 +250,6 @@ docker compose exec -w /app rustdesk ./apimain reset-admin-pwd "$(grep '^RUSTDES
         </>
       )}
 
-      {/* The embedded web-client session shares DeployCore's own origin now
-          (proxied at the exact /webclient2/ path the client expects - see
-          proxy/entrypoint.sh and services/remote_desktop.py's
-          public_url_for() for the three real bugs that led here, including
-          a dedicated-port version of this that needed its own separate
-          certificate trust and got reverted). Whatever already lets this
-          browser load the rest of the DeployCore UI - a real uploaded
-          certificate, or having already clicked through the self-signed
-          warning once for this instance - covers Connect/Shadow too now,
-          automatically, for anyone who can already use DeployCore at all.
-          No separate step for Remote Management specifically. /ca.crt
-          (Caddy's own local Certificate Authority root) is still offered
-          here purely as a convenience for instances still on the
-          self-signed default that want to skip the warning for the WHOLE
-          app too, not because Remote Management needs anything extra. */}
-      {ready && (
-        <details className="border-t border-neutral-200 px-4 py-2 text-xs text-neutral-500 dark:border-neutral-800">
-          <summary className="cursor-pointer">
-            Still on the default self-signed certificate? Connect/Shadow already work with no extra step, the same
-            way the rest of DeployCore does - but if you'd rather skip the browser warning entirely (for this whole
-            instance, not just Remote Management), trust its certificate authority once per machine.
-          </summary>
-          <div className="mt-2 space-y-3 pl-4">
-            <div>
-              <p className="mb-1 font-medium text-neutral-600 dark:text-neutral-400">Windows (PowerShell, as Administrator)</p>
-              <CopyableCommand
-                command={`[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; Invoke-WebRequest ${window.location.origin}/ca.crt -OutFile "$env:TEMP\\deploycore-ca.crt"; Import-Certificate -FilePath "$env:TEMP\\deploycore-ca.crt" -CertStoreLocation Cert:\\LocalMachine\\Root`}
-              />
-            </div>
-            <div>
-              <p className="mb-1 font-medium text-neutral-600 dark:text-neutral-400">macOS</p>
-              <CopyableCommand
-                command={`curl -sk ${window.location.origin}/ca.crt -o /tmp/deploycore-ca.crt && sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/deploycore-ca.crt`}
-              />
-            </div>
-            <div>
-              <p className="mb-1 font-medium text-neutral-600 dark:text-neutral-400">Linux (Debian/Ubuntu - other distros have their own equivalent)</p>
-              <CopyableCommand
-                command={`curl -sk ${window.location.origin}/ca.crt -o /tmp/deploycore-ca.crt && sudo cp /tmp/deploycore-ca.crt /usr/local/share/ca-certificates/deploycore-ca.crt && sudo update-ca-certificates`}
-              />
-            </div>
-            <p className="text-neutral-400">
-              The <code>-k</code>/<code>ServerCertificateValidationCallback</code> bypass is only for this ONE
-              bootstrapping download of the certificate authority itself (which obviously isn't trusted yet) -
-              nothing else is weakened, and the whole point of installing it afterward is that no future
-              connection ever needs that bypass again.
-            </p>
-          </div>
-        </details>
-      )}
-
       {/* Port-forwarding guidance is always relevant: agents can be anywhere on
           the internet, and opening these ports to this host is the one setup
           step that genuinely can't be automated from inside a container. Kept
