@@ -49,7 +49,16 @@ export default function AppAssets() {
     try {
       const asset = await api.post<AppAsset>("/app-assets/global/refresh-agent");
       await load();
-      setToast(`Agent installer is current${asset.size_bytes ? ` (${(asset.size_bytes / 1e6).toFixed(1)} MB)` : ""}.`);
+      // Show a checksum prefix, not just size - confirmed live that two
+      // genuinely different builds can compress to the exact same byte
+      // count, which made size alone useless as proof a refresh actually
+      // fetched new content (it can honestly report "current" at a size
+      // that hasn't changed in three builds). A checksum can't coincide
+      // the same way, so it's the only thing actually worth comparing
+      // against a fresh CI run to confirm this is really the build you
+      // expect, not the previous one.
+      const hash = asset.checksum_sha256 ? asset.checksum_sha256.slice(0, 12) : "unknown";
+      setToast(`Agent installer refreshed - checksum ${hash}...`);
     } catch (err) {
       setRemoteAgentError(err instanceof ApiError ? err.message : "Failed to check for a newer agent installer.");
     } finally {
