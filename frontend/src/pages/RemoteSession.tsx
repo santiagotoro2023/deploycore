@@ -62,25 +62,50 @@ export default function RemoteSession() {
 
   // Redeeming the share_token is handled entirely by the embedded client's
   // own client-side JS (lejianwen/rustdesk-api-web's ljw.js, confirmed via
-  // its source) - it registers the peer and its saved password into that
-  // page's localStorage, but does NOT navigate anywhere itself, landing on
-  // the address book tab with the peer listed and one extra manual click
-  // needed. The SAME app's own admin panel opens an already-known peer via
-  // a `#/<id>` hash route instead (confirmed in its toWebClientLink()) -
-  // now that this session is same-origin, we can drive that exact
-  // navigation ourselves right after, taking the operator straight to the
-  // connect screen for this specific host instead of leaving them on the
-  // address book list. The delay is arbitrary (there's no "peer registered"
-  // event to wait on instead) but matches the one already in use below for
-  // the same reason.
+  // its source) - it registers the peer into that page's localStorage
+  // (peers[id]), but does NOT navigate anywhere itself, landing on the
+  // address book tab with one extra manual click needed. The SAME app's
+  // own admin panel opens an already-known peer via a `#/<id>` hash route
+  // instead (confirmed in its toWebClientLink()) - now that this session
+  // is same-origin, we drive that exact navigation ourselves.
+  //
+  // Redeeming the token also writes a 'tmppwd' field onto that same peer
+  // object, clearly INTENDED to make the connection auto-authenticate -
+  // confirmed against the same source, though, nothing in the client's own
+  // connection logic ever reads that specific key back (its only other use
+  // is an unrelated live-connection option), so it silently does nothing
+  // and the client falls back to prompting for a password regardless of
+  // what was sent. The one thing that DOES skip the prompt, confirmed by
+  // reading the ACTUAL working "remembered peer" path a few lines earlier
+  // in the same file (getServerConf's peer-populating loop), is a peer
+  // object with `password` (not `tmppwd`) set to
+  // `stringToUint8Array(atob(x)).toString()` of the real password, plus
+  // `remember: true`. Since this session is genuinely same-origin, we can
+  // reach into the iframe's own localStorage directly and patch that onto
+  // the SAME peer object ljw.js already created, using the identical
+  // transform (our passwords are ASCII-safe base64-alphabet strings, so a
+  // straight charCodeAt-per-character walk produces the same byte values
+  // atob() would) - closing the actual gap instead of working around it.
   useEffect(() => {
-    if (!embedUrl || !host?.rustdesk_id) return;
+    if (!embedUrl || !host?.rustdesk_id || !rustdeskPassword) return;
     const timer = setTimeout(() => {
       const win = iframeRef.current?.contentWindow;
-      if (win) win.location.hash = `/${host.rustdesk_id}`;
+      if (!win) return;
+      try {
+        const peers = JSON.parse(win.localStorage.getItem("peers") || "{}");
+        const peer = peers[host.rustdesk_id];
+        if (peer) {
+          peer.password = Array.from(rustdeskPassword, (c) => c.charCodeAt(0)).join(",");
+          peer.remember = true;
+          win.localStorage.setItem("peers", JSON.stringify(peers));
+        }
+      } catch {
+        // Best-effort - the visible password panel is the fallback either way.
+      }
+      win.location.hash = `/${host.rustdesk_id}`;
     }, 1500);
     return () => clearTimeout(timer);
-  }, [embedUrl, host?.rustdesk_id]);
+  }, [embedUrl, host?.rustdesk_id, rustdeskPassword]);
 
   // The embedded web client owns its own keyboard once focused, so a
   // Ctrl+Alt+Del button here can't be a synthetic key event (it wouldn't
