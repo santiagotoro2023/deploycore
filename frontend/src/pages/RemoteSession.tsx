@@ -106,6 +106,31 @@ export default function RemoteSession() {
     return () => clearTimeout(timer);
   }, [embedUrl, host?.rustdesk_id, rustdeskPassword]);
 
+  // Defaults the session to "fit window" scaling instead of the VM's own
+  // native resolution (which otherwise needs scrolling/panning to see the
+  // whole screen). Confirmed against RustDesk's own Flutter source
+  // (flutter/lib/web/bridge.dart's sessionSetViewStyle): the Dart side sets
+  // this by calling a plain global JS function,
+  // `window.setByName('option:session', jsonEncode({name: 'view_style',
+  // value}))` - not a postMessage API, so same-origin access lets us call
+  // the EXACT same function directly, the same way the app's own UI would.
+  // 'adaptive' is RustDesk's own name for scale-to-fit (flutter/lib/consts.dart's
+  // kRemoteViewStyleAdaptive) - the alternative, 'original', is the
+  // unscaled 1:1 pixel mode causing the scrolling this is meant to avoid.
+  // Later than the navigation above (needs a live session, not just the
+  // address book) and retried once more shortly after in case the first
+  // call lands before that session actually exists yet - setByName itself
+  // doesn't throw either way, there's just nothing listening until then.
+  useEffect(() => {
+    if (!embedUrl || !host?.rustdesk_id) return;
+    const setAdaptive = () => {
+      const win = iframeRef.current?.contentWindow as (Window & { setByName?: (n: string, v: string) => void }) | undefined;
+      win?.setByName?.("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
+    };
+    const timers = [setTimeout(setAdaptive, 3000), setTimeout(setAdaptive, 5000)];
+    return () => timers.forEach(clearTimeout);
+  }, [embedUrl, host?.rustdesk_id]);
+
   // "Connect" mode only: fetch this host's saved RDP credentials once the
   // session is up. No auto-type attempt (a prior postMessage-based one was
   // removed) - confirmed alongside the RustDesk password fix above that
