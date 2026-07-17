@@ -131,25 +131,51 @@ export default function RemoteSession() {
   // so same-origin access lets us call them directly, the same way the
   // embedded app's own UI would. display: 0 assumes a single monitor,
   // true for every VM this connects to.
+  //
+  // Confirmed live this needs real error handling, not just "doesn't
+  // throw": setByName('option:session', ...) throws synchronously
+  // ("Cannot read properties of undefined (reading 'setOption')") for
+  // however long the embedded client's own session object isn't
+  // initialized yet - and an uncaught throw from that first call was
+  // aborting the rest of this function, meaning change_resolution (the
+  // one that actually matters for the reported black-bar/no-resize issue)
+  // never even ran as long as the first one kept failing. Each call is now
+  // independent - one failing can't block the other.
   const fitDisplayToWindow = useCallback(() => {
     const win = iframeRef.current?.contentWindow as (Window & { setByName?: (n: string, v: string) => void }) | undefined;
     const width = iframeRef.current?.clientWidth;
     const height = iframeRef.current?.clientHeight;
     if (!win?.setByName) return;
-    win.setByName("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
+    try {
+      win.setByName("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
+    } catch {
+      // Session not ready yet - the retry loop below covers this.
+    }
     if (width && height) {
-      win.setByName("change_resolution", JSON.stringify({ display: 0, width, height }));
+      try {
+        win.setByName("change_resolution", JSON.stringify({ display: 0, width, height }));
+      } catch {
+        // Same as above.
+      }
     }
   }, []);
 
-  // Later than the navigation above (needs a live session, not just the
-  // address book) and retried once more shortly after in case the first
-  // call lands before that session actually exists yet - setByName itself
-  // doesn't throw either way, there's just nothing listening until then.
+  // Retries on an interval rather than a couple of fixed delays - confirmed
+  // live the embedded client's session object can still not exist 5+
+  // seconds after embedUrl is set (a real connection, especially over a
+  // relay, can genuinely take longer than that to finish establishing) -
+  // every 2s for a full minute comfortably covers that without needing to
+  // guess a single "long enough" number. Harmless to keep calling once it
+  // succeeds - setByName no-ops rather than erroring on an already-correct
+  // value.
   useEffect(() => {
     if (!embedUrl || !host?.rustdesk_id) return;
-    const timers = [setTimeout(fitDisplayToWindow, 3000), setTimeout(fitDisplayToWindow, 5000)];
-    return () => timers.forEach(clearTimeout);
+    const interval = setInterval(fitDisplayToWindow, 2000);
+    const stop = setTimeout(() => clearInterval(interval), 60000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(stop);
+    };
   }, [embedUrl, host?.rustdesk_id, fitDisplayToWindow]);
 
   // Entering/leaving fullscreen is itself a big resize (a new window size
