@@ -116,6 +116,18 @@ render_caddyfile() {
 	# which then also 404'd (resolving under /webclient2/ and matching the
 	# handle block above, hitting rustdesk-api's own static 404 for it).
 	handle /webclient-config/* {
+		# No cache-busting query param (unlike its neighbors), and rustdesk-
+		# api's own handler (a plain c.String(200, tmp) in Go) sets no
+		# Cache-Control of its own - so browsers fall back to their own
+		# heuristics for a same-URL script tag, and evidently cache it
+		# anyway. Confirmed live: after fixing what this script hands out
+		# (blanking RUSTDESK_API_RUSTDESK_API_SERVER, then actually getting
+		# the rustdesk container to pick that up), a browser that had loaded
+		# this page before kept getting served the OLD baked-in
+		# 127.0.0.1:21114 value regardless, breaking /api/shared-peer all
+		# over again downstream. This is dynamic, per-deployment config, not
+		# a static asset - it should never be cached at all.
+		header Cache-Control "no-store"
 		reverse_proxy rustdesk:21114
 	}
 
