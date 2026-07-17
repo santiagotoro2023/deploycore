@@ -17,9 +17,8 @@ export default function RemoteSession() {
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [rdpCreds, setRdpCreds] = useState<ManagedHostRdpCredentials | null>(null);
-  const [showCreds, setShowCreds] = useState(false);
   const [rustdeskPassword, setRustdeskPassword] = useState<string | null>(null);
-  const [showRustdeskPassword, setShowRustdeskPassword] = useState(false);
+  const [showCredsPanel, setShowCredsPanel] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -40,7 +39,6 @@ export default function RemoteSession() {
       );
       setEmbedUrl(session.embed_url);
       setRustdeskPassword(session.rustdesk_password);
-      setShowRustdeskPassword(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not start the remote session.");
     } finally {
@@ -113,20 +111,35 @@ export default function RemoteSession() {
     return () => clearTimeout(timer);
   }, [embedUrl, host?.rustdesk_id, rustdeskPassword]);
 
-  // Defaults the session to "fit window" scaling instead of the VM's own
-  // native resolution (which otherwise needs scrolling/panning to see the
-  // whole screen). Confirmed against RustDesk's own Flutter source
-  // (flutter/lib/web/bridge.dart's sessionSetViewStyle): the Dart side sets
-  // this by calling a plain global JS function,
-  // `window.setByName('option:session', jsonEncode({name: 'view_style',
-  // value}))` - not a postMessage API, so same-origin access lets us call
-  // the EXACT same function directly, the same way the app's own UI would.
-  // 'adaptive' is RustDesk's own name for scale-to-fit (flutter/lib/consts.dart's
-  // kRemoteViewStyleAdaptive) - the alternative, 'original', is the
-  // unscaled 1:1 pixel mode causing the scrolling this is meant to avoid.
-  const setAdaptiveViewStyle = useCallback(() => {
+  // Two DIFFERENT things, both needed, confirmed against RustDesk's own
+  // Flutter source (flutter/lib/web/bridge.dart) rather than assumed:
+  //
+  // 1. sessionSetViewStyle sets 'adaptive' (flutter/lib/consts.dart's
+  //    kRemoteViewStyleAdaptive) instead of 'original' - VISUAL scaling of
+  //    whatever the remote resolution already is, down/up to fit the
+  //    container. On its own this still leaves the VM's actual desktop
+  //    resolution unchanged (whatever it was set to on the ESXi console) -
+  //    scaled to fit, not resized, still the wrong aspect ratio/DPI for
+  //    the browser window.
+  // 2. sessionChangeResolution actually changes the VM's own display
+  //    resolution to match - a real, separate feature (bridge.dart's
+  //    changeResolution), confirmed genuinely present in the web build,
+  //    not just desktop clients.
+  //
+  // Both go through the exact same mechanism: a plain global JS function,
+  // `window.setByName(name, jsonEncode(value))` - not a postMessage API -
+  // so same-origin access lets us call them directly, the same way the
+  // embedded app's own UI would. display: 0 assumes a single monitor,
+  // true for every VM this connects to.
+  const fitDisplayToWindow = useCallback(() => {
     const win = iframeRef.current?.contentWindow as (Window & { setByName?: (n: string, v: string) => void }) | undefined;
-    win?.setByName?.("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
+    const width = iframeRef.current?.clientWidth;
+    const height = iframeRef.current?.clientHeight;
+    if (!win?.setByName) return;
+    win.setByName("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
+    if (width && height) {
+      win.setByName("change_resolution", JSON.stringify({ display: 0, width, height }));
+    }
   }, []);
 
   // Later than the navigation above (needs a live session, not just the
@@ -135,19 +148,22 @@ export default function RemoteSession() {
   // doesn't throw either way, there's just nothing listening until then.
   useEffect(() => {
     if (!embedUrl || !host?.rustdesk_id) return;
-    const timers = [setTimeout(setAdaptiveViewStyle, 3000), setTimeout(setAdaptiveViewStyle, 5000)];
+    const timers = [setTimeout(fitDisplayToWindow, 3000), setTimeout(fitDisplayToWindow, 5000)];
     return () => timers.forEach(clearTimeout);
-  }, [embedUrl, host?.rustdesk_id, setAdaptiveViewStyle]);
+  }, [embedUrl, host?.rustdesk_id, fitDisplayToWindow]);
 
-  // Entering/leaving fullscreen is itself a big resize, which the embedded
-  // client apparently treats as enough of a state change to fall back to
-  // 'original' (unscaled) again, the same reset that re-prompts for the
-  // password - reapplying here covers both at once, on the same trigger.
+  // Entering/leaving fullscreen is itself a big resize (a new window size
+  // to match, and apparently enough of a state change that the embedded
+  // client falls back to unscaled 'original' again too, the same reset
+  // that re-prompts for the password) - reapplying here covers both at
+  // once. Slightly longer than the connect-time delay above: needs the
+  // CSS fullscreen transition to have actually finished so the iframe's
+  // own clientWidth/clientHeight reflect the new size, not the old one.
   useEffect(() => {
     if (!embedUrl) return;
-    const timer = setTimeout(setAdaptiveViewStyle, 500);
+    const timer = setTimeout(fitDisplayToWindow, 700);
     return () => clearTimeout(timer);
-  }, [isFullscreen, embedUrl, setAdaptiveViewStyle]);
+  }, [isFullscreen, embedUrl, fitDisplayToWindow]);
 
   // "Connect" mode only: fetch this host's saved RDP credentials once the
   // session is up. No auto-type attempt (a prior postMessage-based one was
@@ -164,7 +180,6 @@ export default function RemoteSession() {
       .then((creds) => {
         if (cancelled) return;
         setRdpCreds(creds);
-        setShowCreds(true);
       })
       .catch(() => {
         if (!cancelled) setRdpCreds(null);
@@ -263,11 +278,8 @@ export default function RemoteSession() {
             {hasCreds && (
               <button
                 className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
-                title="Show connection credentials"
-                onClick={() => {
-                  setShowRustdeskPassword(true);
-                  setShowCreds(true);
-                }}
+                title="Show/hide connection credentials"
+                onClick={() => setShowCredsPanel((v) => !v)}
               >
                 <KeySquare size={12} strokeWidth={1.75} />
                 Credentials
@@ -294,7 +306,7 @@ export default function RemoteSession() {
           </div>
         )}
 
-        {!isFullscreen && (showRustdeskPassword || showCreds) && hasCreds && (
+        {!isFullscreen && showCredsPanel && hasCreds && (
           <div className="mb-2 flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs dark:border-blue-900 dark:bg-blue-950">
             {rustdeskPassword && (
               <button
@@ -329,10 +341,7 @@ export default function RemoteSession() {
             <button
               className="ml-auto shrink-0 text-blue-400 hover:text-blue-600 dark:hover:text-blue-300"
               title="Dismiss"
-              onClick={() => {
-                setShowRustdeskPassword(false);
-                setShowCreds(false);
-              }}
+              onClick={() => setShowCredsPanel(false)}
             >
               <X size={13} strokeWidth={1.75} />
             </button>
