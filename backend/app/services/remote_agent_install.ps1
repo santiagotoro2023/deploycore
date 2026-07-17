@@ -205,27 +205,30 @@ Remove-Item "$env:PUBLIC\Desktop\RustDesk.lnk" -Force -ErrorAction SilentlyConti
 #    what makes unattended access (the login screen, before anyone signs in)
 #    work at all.
 #
-#    Deliberately NOT $env:APPDATA - the service installed in step 4 always
-#    runs as Local System (confirmed live in services.msc: "Log On As: Local
-#    System"), which reads its OWN config from the SYSTEM profile, not
-#    whichever user happens to be running this script. $env:APPDATA only
-#    resolves to that same path when the script itself is ALSO already
-#    running as SYSTEM (the .msi's ONSTART scheduled task, which is exactly
-#    why that path never surfaced this bug) - the one-liner path is
-#    documented as "Run standalone (as Administrator)", i.e. run BY a human
-#    admin account, where $env:APPDATA resolves to THEIR OWN profile
-#    instead. Confirmed live: the config written there was byte-for-byte
-#    correct (right server, right key), yet the service could never be
-#    found by ID from the browser or a native client - because the actual
-#    running service, reading its own separate, never-written config, had
-#    no idea our server even existed and silently kept trying RustDesk's own
-#    public default one instead. --get-id/--password below talk to the
-#    ALREADY-RUNNING service over IPC, not this file - RustDesk's ID
-#    generation is 100% local (no rendezvous round-trip, confirmed
-#    elsewhere in this script), so enrollment reporting a real, valid ID
-#    back to DeployCore never actually proved the service's own network
-#    config was ever correct, just that the service process was alive.
-$confDir = "$env:SystemRoot\System32\config\systemprofile\AppData\Roaming\RustDesk\config"
+#    Deliberately NOT $env:APPDATA, and NOT the System account's own real
+#    profile path either (system32\config\systemprofile) - two real bugs in
+#    a row getting here. First: the service installed in step 4 always runs
+#    as Local System (confirmed live in services.msc: "Log On As: Local
+#    System"), so $env:APPDATA only resolves to the right place when the
+#    SCRIPT ITSELF is already running as SYSTEM too (the .msi's ONSTART
+#    scheduled task) - the one-liner path is documented as "Run standalone
+#    (as Administrator)", run BY a human admin account, whose OWN profile
+#    $env:APPDATA actually points to instead. Confirmed live: the config
+#    landed byte-for-byte correct there, yet the service could never be
+#    found by ID - it was reading its own separate, never-written config
+#    and silently kept trying RustDesk's own public default server.
+#    Second, and specific to RustDesk itself, confirmed directly against
+#    its own source (hbb_common's config.rs, patch()): it explicitly
+#    rewrites the System account's real profile path
+#    (system32\config\systemprofile) to ServiceProfiles\LocalService for
+#    every config/log lookup it does, on every Windows version - so even
+#    the CORRECT literal Local System profile path is still wrong for
+#    RustDesk specifically. Confirmed live the same way as the first bug:
+#    a config written to system32\config\systemprofile was never read
+#    either (not even a "log" subfolder ever appeared there, despite the
+#    service showing "Running" the whole time - RustDesk was never
+#    actually looking in that directory at all).
+$confDir = "$env:SystemDrive\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
 New-Item -ItemType Directory -Force -Path $confDir | Out-Null
 @"
 rendezvous_server = '$($cfg.id_server)'
