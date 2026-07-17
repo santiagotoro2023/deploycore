@@ -295,6 +295,24 @@ detects your public IP and prints the internet-access steps at the end of the
 install; the Wiki (**Remote Management → Network & firewall setup**) has full
 step-by-step guides for home/office routers, cloud VMs, and DNS.
 
+**Remote Management through a port-forward.** If you reach this instance
+through a router's port-forward or NAT rule whose *external* address is
+different from the one set above (say, `some-router:9012` forwarding to this
+host's `:443`), Shadow/Connect can load and authenticate fine but the actual
+screen connection times out. This is a real limitation of the underlying
+RustDesk server, not a bug: it advertises a single relay-server hostname to
+every client, live, over its own protocol - never something DeployCore can
+rewrite per-request the way it does for other parts of this flow. A client
+reaching this instance through a different address combines that fixed
+hostname with *its own* port, a combination nothing is listening on.
+
+The fix: set `RUSTDESK_ALT_ACCESS_PORT` in `.env` to that external port (9012
+in the example above) and run a full `docker compose up -d --build` - this
+gives the relay a second, matching listener on this host's own real address,
+making that exact combination valid. Leave it unset if every operator reaches
+this instance the same way `RUSTDESK_RELAY_HOST` is already configured for -
+most installs never need this.
+
 **Enrolling a machine.** Either attach the "DeployCore Remote Management Agent"
 App Asset to a template (every machine deployed from it enrolls automatically),
 or, for an existing machine, click **Add host** and use the one-line PowerShell

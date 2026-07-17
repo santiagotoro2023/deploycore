@@ -53,6 +53,56 @@ render_caddyfile() {
     # what address/hostname is used to reach it, not just localhost.
     cert_block=$(printf 'tls internal {\n\t\ton_demand\n\t}')
   fi
+
+  # Optional, opt-in, off by default - fixes a real, confirmed limitation
+  # for anyone reaching this instance through a port-forward/NAT path
+  # different from RUSTDESK_RELAY_HOST's own address (see README's
+  # "Remote Management through a port-forward" section for the full
+  # explanation): hbbs advertises a single, fixed relay-server hostname to
+  # every client, over its own live protocol - not something this proxy
+  # can rewrite per-request the way it does for the id_server value in
+  # /api/shared-peer's response. A client reaching DeployCore through a
+  # DIFFERENT address combines that fixed hostname with ITS OWN port,
+  # a combination nothing was listening on - confirmed live as the actual
+  # cause of the relay leg specifically timing out for a port-forwarded
+  # access path, everything else already working. Since the hostname IS
+  # this same host's own real address, a second listener here on whatever
+  # external port that specific port-forward rule happens to use makes
+  # that exact combination valid. No effect unless RUSTDESK_ALT_ACCESS_PORT
+  # is explicitly set (see .env.example) - never touches the default setup.
+  local alt_port_block=""
+  if [ -n "${RUSTDESK_ALT_ACCESS_PORT:-}" ]; then
+    alt_port_block=$(cat <<ALTEOF
+
+:${RUSTDESK_ALT_ACCESS_PORT} {
+	$cert_block
+
+	handle /webclient-config/* {
+		header Content-Type "application/javascript"
+		header Cache-Control "no-store"
+		respond "localStorage.setItem('api-server', ''); const ws2_prefix = 'wc-'; localStorage.setItem(ws2_prefix+'api-server', ''); window.webclient_magic_queryonline = 0; window.ws_host = '';" 200
+	}
+
+	handle /webclient2/* {
+		reverse_proxy rustdesk:21114
+	}
+
+	handle /api/shared-peer {
+		reverse_proxy api:8000
+	}
+
+	handle /ws/id {
+		reverse_proxy rustdesk:21118
+	}
+
+	handle /ws/relay {
+		reverse_proxy rustdesk:21119
+	}
+}
+ALTEOF
+)
+  fi
+
   cat > "$CADDYFILE" <<EOF
 :80 {
 	redir https://{host}{uri} permanent
@@ -199,6 +249,7 @@ render_caddyfile() {
 
 	reverse_proxy frontend:5173
 }
+$alt_port_block
 EOF
 }
 

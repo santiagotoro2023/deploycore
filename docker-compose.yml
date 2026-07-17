@@ -90,6 +90,16 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # Only meaningful if RUSTDESK_ALT_ACCESS_PORT is set in .env (see
+      # .env.example) - fixes Remote Management's relay leg for anyone
+      # reaching this instance through a port-forward/NAT path different
+      # from RUSTDESK_RELAY_HOST's own address (see README's "Remote
+      # Management through a port-forward" section). 65535 is a safe,
+      # essentially-never-conflicting default when unset - Caddy's own
+      # entrypoint script only actually listens there if the same env var
+      # is set, so an unused published port here is a harmless no-op, not
+      # a functional change, for every install that doesn't need this.
+      - "${RUSTDESK_ALT_ACCESS_PORT:-65535}:${RUSTDESK_ALT_ACCESS_PORT:-65535}"
     volumes:
       - tls_certs:/data/tls
       - caddy_data:/data
