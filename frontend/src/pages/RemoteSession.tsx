@@ -111,20 +111,58 @@ export default function RemoteSession() {
     return () => clearTimeout(timer);
   }, [embedUrl, host?.rustdesk_id, rustdeskPassword]);
 
+  // Common, real display-adapter resolutions, widest-first within each
+  // aspect family - confirmed against RustDesk's own agent source
+  // (server/connection.rs's change_resolution): for a non-virtual display
+  // (every VM here - RustDesk's own "IDD" virtual-display driver is a
+  // separate, not-installed-by-us component), this calls straight into
+  // Windows' real ChangeDisplaySettingsEx API with whatever width/height it
+  // was given. That API only accepts a mode the display adapter actually
+  // publishes as supported - never an arbitrary exact pixel size - and
+  // REJECTS anything else. A VM's virtual display adapter (VMware SVGA,
+  // same as any other VM's) only ever publishes a fixed list of standard
+  // modes, not the literal odd pixel dimensions a browser iframe happens
+  // to render at (1847x931, say) - so every request so far was being
+  // silently rejected by Windows itself, logged only on the AGENT's own
+  // machine, completely invisible from here. Snapping to the nearest real
+  // mode instead of sending the exact size fixes that at the source.
+  const COMMON_RESOLUTIONS: [number, number][] = [
+    [3840, 2160], [2560, 1440], [2560, 1080], [1920, 1200], [1920, 1080],
+    [1768, 992], [1680, 1050], [1600, 1200], [1600, 900], [1440, 900],
+    [1366, 768], [1280, 1024], [1280, 800], [1280, 720], [1152, 864],
+    [1024, 768], [800, 600],
+  ];
+  function nearestResolution(width: number, height: number): [number, number] {
+    const targetAspect = width / height;
+    // Smallest option, not the largest - the fallback for a viewport
+    // smaller than every listed mode (every entry gets skipped by the
+    // w>width/h>height guard below) should undershoot, not overshoot.
+    let best = COMMON_RESOLUTIONS[COMMON_RESOLUTIONS.length - 1];
+    let bestScore = Infinity;
+    for (const [w, h] of COMMON_RESOLUTIONS) {
+      if (w > width || h > height) continue; // never request bigger than the actual viewport - would need scrolling
+      const aspectDiff = Math.abs(w / h - targetAspect);
+      const areaDiff = (width * height - w * h) / (width * height);
+      const score = aspectDiff * 5 + areaDiff;
+      if (score < bestScore) {
+        bestScore = score;
+        best = [w, h];
+      }
+    }
+    return best;
+  }
+
   // Two DIFFERENT things, both needed, confirmed against RustDesk's own
   // Flutter source (flutter/lib/web/bridge.dart) rather than assumed:
   //
   // 1. sessionSetViewStyle sets 'adaptive' (flutter/lib/consts.dart's
   //    kRemoteViewStyleAdaptive) instead of 'original' - VISUAL scaling of
   //    whatever the remote resolution already is, down/up to fit the
-  //    container. On its own this still leaves the VM's actual desktop
-  //    resolution unchanged (whatever it was set to on the ESXi console) -
-  //    scaled to fit, not resized, still the wrong aspect ratio/DPI for
-  //    the browser window.
+  //    container.
   // 2. sessionChangeResolution actually changes the VM's own display
-  //    resolution to match - a real, separate feature (bridge.dart's
-  //    changeResolution), confirmed genuinely present in the web build,
-  //    not just desktop clients.
+  //    resolution to the nearest real supported mode (see
+  //    nearestResolution above) - a real, separate feature (bridge.dart's
+  //    changeResolution), confirmed genuinely present in the web build.
   //
   // Both go through the exact same mechanism: a plain global JS function,
   // `window.setByName(name, jsonEncode(value))` - not a postMessage API -
@@ -132,15 +170,23 @@ export default function RemoteSession() {
   // embedded app's own UI would. display: 0 assumes a single monitor,
   // true for every VM this connects to.
   //
-  // Confirmed live this needs real error handling, not just "doesn't
-  // throw": setByName('option:session', ...) throws synchronously
-  // ("Cannot read properties of undefined (reading 'setOption')") for
-  // however long the embedded client's own session object isn't
-  // initialized yet - and an uncaught throw from that first call was
-  // aborting the rest of this function, meaning change_resolution (the
-  // one that actually matters for the reported black-bar/no-resize issue)
-  // never even ran as long as the first one kept failing. Each call is now
-  // independent - one failing can't block the other.
+  // Confirmed live this needs real error handling: setByName('option:
+  // session', ...) throws synchronously ("Cannot read properties of
+  // undefined (reading 'setOption')") for however long the embedded
+  // client's own session object isn't initialized yet, and an uncaught
+  // throw from one call was aborting the rest of the function - each call
+  // is independent now, one failing can't block another.
+  //
+  // change_resolution is NOT idempotent the way the others are - it tears
+  // down and renegotiates the live video stream every time it's called,
+  // confirmed live as the actual cause of a previous version of this fix
+  // repeatedly calling it on a blind timer: constant "WebSocket already
+  // CLOSING/CLOSED" churn, resolution never stable, and materially worse
+  // responsiveness, all from the SAME call meant to fix responsiveness.
+  // lastResolutionRef makes it fire-once-per-actual-target: only called
+  // again when the nearest supported mode genuinely changes (a real
+  // resize), never repeatedly for the same value.
+  const lastResolutionRef = useRef<string | null>(null);
   const fitDisplayToWindow = useCallback(() => {
     const win = iframeRef.current?.contentWindow as
       | (Window & { setByName?: (n: string, v: string | number) => void })
@@ -157,7 +203,12 @@ export default function RemoteSession() {
     };
     trySet("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
     if (width && height) {
-      trySet("change_resolution", JSON.stringify({ display: 0, width, height }));
+      const [w, h] = nearestResolution(width, height);
+      const key = `${w}x${h}`;
+      if (lastResolutionRef.current !== key) {
+        lastResolutionRef.current = key;
+        trySet("change_resolution", JSON.stringify({ display: 0, width: w, height: h }));
+      }
     }
     // Every managed host is reached over a LAN (agents only ever enroll
     // against this instance's own relay, never the public internet), so
@@ -169,27 +220,30 @@ export default function RemoteSession() {
     // (bridge.dart's sessionSetImageQuality/sessionSetCustomFps): both are
     // plain top-level setByName calls, not wrapped in the 'option:session'
     // JSON envelope the view-style/resolution calls use - image_quality
-    // takes the raw string, custom-fps a real number, not a string.
+    // takes the raw string, custom-fps a real number, not a string. Both
+    // idempotent/cheap - safe to keep calling on every retry.
     trySet("image_quality", "best");
     trySet("custom-fps", 30);
   }, []);
 
-  // Retries on an interval rather than a couple of fixed delays - confirmed
-  // live the embedded client's session object can still not exist 5+
-  // seconds after embedUrl is set (a real connection, especially over a
-  // relay, can genuinely take longer than that to finish establishing) -
-  // every 2s for a full minute comfortably covers that without needing to
-  // guess a single "long enough" number. Harmless to keep calling once it
-  // succeeds - setByName no-ops rather than erroring on an already-correct
-  // value.
+  // Confirmed live the embedded client's session object can still not
+  // exist 5+ seconds after embedUrl is set (a real connection, especially
+  // over a relay, can take longer than that to finish establishing) - 12
+  // attempts, 2s apart (24s total) gives that a fair chance without
+  // retrying forever. lastResolutionRef above (not this loop's own
+  // duration) is what actually prevents the resize-renegotiation churn -
+  // this loop existing at all is only for the "session not ready on the
+  // very first call" case.
   useEffect(() => {
     if (!embedUrl || !host?.rustdesk_id) return;
-    const interval = setInterval(fitDisplayToWindow, 2000);
-    const stop = setTimeout(() => clearInterval(interval), 60000);
-    return () => {
-      clearInterval(interval);
-      clearTimeout(stop);
-    };
+    lastResolutionRef.current = null;
+    let attempts = 0;
+    const interval = setInterval(() => {
+      fitDisplayToWindow();
+      attempts += 1;
+      if (attempts >= 12) clearInterval(interval);
+    }, 2000);
+    return () => clearInterval(interval);
   }, [embedUrl, host?.rustdesk_id, fitDisplayToWindow]);
 
   // Entering/leaving fullscreen is itself a big resize (a new window size
