@@ -204,8 +204,28 @@ Remove-Item "$env:PUBLIC\Desktop\RustDesk.lnk" -Force -ErrorAction SilentlyConti
 #    verification-method=use-permanent-password + a permanent password below is
 #    what makes unattended access (the login screen, before anyone signs in)
 #    work at all.
-Write-Step "Configuring..."
-$confDir = "$env:APPDATA\RustDesk\config"
+#
+#    Deliberately NOT $env:APPDATA - the service installed in step 4 always
+#    runs as Local System (confirmed live in services.msc: "Log On As: Local
+#    System"), which reads its OWN config from the SYSTEM profile, not
+#    whichever user happens to be running this script. $env:APPDATA only
+#    resolves to that same path when the script itself is ALSO already
+#    running as SYSTEM (the .msi's ONSTART scheduled task, which is exactly
+#    why that path never surfaced this bug) - the one-liner path is
+#    documented as "Run standalone (as Administrator)", i.e. run BY a human
+#    admin account, where $env:APPDATA resolves to THEIR OWN profile
+#    instead. Confirmed live: the config written there was byte-for-byte
+#    correct (right server, right key), yet the service could never be
+#    found by ID from the browser or a native client - because the actual
+#    running service, reading its own separate, never-written config, had
+#    no idea our server even existed and silently kept trying RustDesk's own
+#    public default one instead. --get-id/--password below talk to the
+#    ALREADY-RUNNING service over IPC, not this file - RustDesk's ID
+#    generation is 100% local (no rendezvous round-trip, confirmed
+#    elsewhere in this script), so enrollment reporting a real, valid ID
+#    back to DeployCore never actually proved the service's own network
+#    config was ever correct, just that the service process was alive.
+$confDir = "$env:SystemRoot\System32\config\systemprofile\AppData\Roaming\RustDesk\config"
 New-Item -ItemType Directory -Force -Path $confDir | Out-Null
 @"
 rendezvous_server = '$($cfg.id_server)'
@@ -256,9 +276,9 @@ Write-Step "Installing service..."
 # throwaway-service step ALWAYS returned immediately having done nothing -
 # not a regression, just dead weight copied from a reference implementation
 # built for a different scenario (converting an already-configured
-# interactive install into a service). Our own direct write to
-# $env:APPDATA\RustDesk\config\RustDesk2.toml above is what actually seeds
-# the config; removing this step also removes an extra service
+# interactive install into a service). Our own direct write to the system
+# profile's RustDesk2.toml above is what actually seeds the config;
+# removing this step also removes an extra service
 # create/start/stop/delete cycle immediately before the one that matters.
 #
 # Uses New-Service, not `sc.exe create`, for the same reason as before:
