@@ -165,6 +165,27 @@ export default function RemoteSession() {
     return () => clearTimeout(timer);
   }, [isFullscreen, embedUrl, fitDisplayToWindow]);
 
+  // Not just fullscreen - ANY resize of the viewer box (the browser window
+  // itself resizing, the sidebar collapsing, DevTools opening, whatever)
+  // should keep the remote resolution matched to it, the same way this
+  // page's own layout responds to its container rather than staying a
+  // fixed size. Debounced since a live resize drag fires this dozens of
+  // times a second and change_resolution is a real, non-free operation on
+  // the agent side, not free-of-cost CSS.
+  useEffect(() => {
+    if (!embedUrl || !iframeRef.current) return;
+    let debounce: ReturnType<typeof setTimeout>;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(debounce);
+      debounce = setTimeout(fitDisplayToWindow, 500);
+    });
+    observer.observe(iframeRef.current);
+    return () => {
+      clearTimeout(debounce);
+      observer.disconnect();
+    };
+  }, [embedUrl, fitDisplayToWindow]);
+
   // "Connect" mode only: fetch this host's saved RDP credentials once the
   // session is up. No auto-type attempt (a prior postMessage-based one was
   // removed) - confirmed alongside the RustDesk password fix above that
@@ -243,19 +264,6 @@ export default function RemoteSession() {
 
   return (
     <div className="flex h-full flex-col">
-      {!isFullscreen && (
-        <div className="mb-2 flex items-center gap-3">
-          <Link
-            to="/remote-management"
-            className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
-          >
-            <ArrowLeft size={12} strokeWidth={1.75} />
-            Back
-          </Link>
-          <h1 className="text-sm font-semibold">{host ? host.name : "Connecting..."}</h1>
-        </div>
-      )}
-
       {/* Fullscreens the toolbar + credential bar + viewer together, not
           just the viewer - Fullscreen only renders the fullscreened element
           and its descendants, so fullscreening just the iframe's box hid
@@ -264,45 +272,59 @@ export default function RemoteSession() {
           resets (a big resize) and re-prompts for the password that bar
           exists to answer. The toolbar and credential bar are hidden WHILE
           fullscreen instead (isFullscreen), for a clean view - both stay
-          reachable via Escape if that reset happens again. */}
+          reachable via Escape if that reset happens again. One combined
+          row (not a separate title row above it) - direct request to
+          maximize actual screen space over chrome. */}
       <div ref={fullscreenRef} className="flex flex-1 flex-col bg-white dark:bg-neutral-950">
-        {host?.enrolled && !isFullscreen && (
-          <div className="mb-2 flex items-center justify-end gap-1.5">
-            <span
-              className="hidden items-center gap-1 text-xs text-neutral-400 sm:flex"
-              title="Copy on your computer and paste into the remote session (and vice-versa) - clipboard is shared automatically while connected."
+        {!isFullscreen && (
+          <div className="mb-1.5 flex items-center gap-2">
+            <Link
+              to="/remote-management"
+              className="flex shrink-0 items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
             >
-              <ClipboardCheck size={12} strokeWidth={1.75} />
-              Clipboard shared
-            </span>
-            {hasCreds && (
-              <button
-                className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
-                title="Show/hide connection credentials"
-                onClick={() => setShowCredsPanel((v) => !v)}
-              >
-                <KeySquare size={12} strokeWidth={1.75} />
-                Credentials
-              </button>
+              <ArrowLeft size={11} strokeWidth={1.75} />
+              Back
+            </Link>
+            <h1 className="truncate text-xs font-semibold">{host ? host.name : "Connecting..."}</h1>
+            {host?.enrolled && (
+              <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                <span
+                  className="hidden items-center gap-1 text-xs text-neutral-400 sm:flex"
+                  title="Copy on your computer and paste into the remote session (and vice-versa) - clipboard is shared automatically while connected."
+                >
+                  <ClipboardCheck size={12} strokeWidth={1.75} />
+                  Clipboard shared
+                </span>
+                {hasCreds && (
+                  <button
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                    title="Show/hide connection credentials"
+                    onClick={() => setShowCredsPanel((v) => !v)}
+                  >
+                    <KeySquare size={12} strokeWidth={1.75} />
+                    Credentials
+                  </button>
+                )}
+                <button
+                  className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
+                  title="Fullscreen"
+                  disabled={!embedUrl}
+                  onClick={toggleFullscreen}
+                >
+                  <Maximize size={12} strokeWidth={1.75} />
+                  Fullscreen
+                </button>
+                <button
+                  className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
+                  title="Reconnect"
+                  disabled={connecting}
+                  onClick={connect}
+                >
+                  <RefreshCw size={12} strokeWidth={1.75} className={connecting ? "animate-spin" : ""} />
+                  Reconnect
+                </button>
+              </div>
             )}
-            <button
-              className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
-              title="Fullscreen"
-              disabled={!embedUrl}
-              onClick={toggleFullscreen}
-            >
-              <Maximize size={12} strokeWidth={1.75} />
-              Fullscreen
-            </button>
-            <button
-              className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
-              title="Reconnect"
-              disabled={connecting}
-              onClick={connect}
-            >
-              <RefreshCw size={12} strokeWidth={1.75} className={connecting ? "animate-spin" : ""} />
-              Reconnect
-            </button>
           </div>
         )}
 
