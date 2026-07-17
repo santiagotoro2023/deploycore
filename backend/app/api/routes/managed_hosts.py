@@ -126,7 +126,7 @@ async def start_managed_host_session(
         user_id=current_user.id, target_id=host.id, detail={"name": host.name},
     )
     await db.commit()
-    return ManagedHostSession(embed_url=embed_url)
+    return ManagedHostSession(embed_url=embed_url, rustdesk_password=host.rustdesk_key)
 
 
 @router.get(

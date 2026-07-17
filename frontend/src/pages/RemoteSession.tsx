@@ -18,6 +18,8 @@ export default function RemoteSession() {
   const [connecting, setConnecting] = useState(false);
   const [rdpCreds, setRdpCreds] = useState<ManagedHostRdpCredentials | null>(null);
   const [showCreds, setShowCreds] = useState(false);
+  const [rustdeskPassword, setRustdeskPassword] = useState<string | null>(null);
+  const [showRustdeskPassword, setShowRustdeskPassword] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
 
@@ -27,10 +29,12 @@ export default function RemoteSession() {
     setConnecting(true);
     setEmbedUrl(null);
     try {
-      const session = await api.post<{ embed_url: string }>(
+      const session = await api.post<{ embed_url: string; rustdesk_password: string }>(
         `/organizations/${selectedOrgId}/managed-hosts/${id}/session`
       );
       setEmbedUrl(session.embed_url);
+      setRustdeskPassword(session.rustdesk_password);
+      setShowRustdeskPassword(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not start the remote session.");
     } finally {
@@ -183,6 +187,16 @@ export default function RemoteSession() {
               <KeySquare size={14} strokeWidth={1.75} />
               Ctrl+Alt+Del
             </button>
+            {rustdeskPassword && (
+              <button
+                className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                title="Show the RustDesk connection password (the session should auto-authenticate, but the embedded client's share-link login doesn't always take)"
+                onClick={() => setShowRustdeskPassword(true)}
+              >
+                <KeySquare size={14} strokeWidth={1.75} />
+                RustDesk password
+              </button>
+            )}
             {isConnectMode && rdpCreds && (
               <button
                 className="flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
@@ -217,6 +231,31 @@ export default function RemoteSession() {
           </div>
         )}
       </div>
+
+      {showRustdeskPassword && rustdeskPassword && (
+        <div className="mb-3 flex items-center gap-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm dark:border-blue-900 dark:bg-blue-950">
+          <span className="text-blue-700 dark:text-blue-400">
+            If the session shows "Password required": the embedded client's share-link login doesn't reliably
+            auto-authenticate (a confirmed gap in RustDesk's own web client, not something DeployCore controls) -
+            paste this in once:
+          </span>
+          <button
+            className="flex shrink-0 items-center gap-1 rounded-md border border-blue-300 bg-white px-2 py-1 text-xs text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-neutral-900 dark:text-blue-400 dark:hover:bg-neutral-800"
+            onClick={() => copyToClipboard(rustdeskPassword)}
+            title="Copy RustDesk password"
+          >
+            <Copy size={12} strokeWidth={1.75} />
+            ••••••••
+          </button>
+          <button
+            className="ml-auto shrink-0 text-blue-400 hover:text-blue-600 dark:hover:text-blue-300"
+            title="Dismiss"
+            onClick={() => setShowRustdeskPassword(false)}
+          >
+            <X size={14} strokeWidth={1.75} />
+          </button>
+        </div>
+      )}
 
       {isConnectMode && showCreds && rdpCreds && (rdpCreds.username || rdpCreds.password) && (
         <div className="mb-3 flex items-center gap-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm dark:border-blue-900 dark:bg-blue-950">

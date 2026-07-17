@@ -81,9 +81,21 @@ class RemoteStatus(BaseModel):
 class ManagedHostSession(BaseModel):
     """A ready-to-embed, time-limited web-client URL for one connect session
     (see services/remote_desktop.py) - the frontend drops embed_url straight
-    into an iframe."""
+    into an iframe.
+
+    rustdesk_password is a real gap in webclient2's own share-token flow,
+    not a design choice: the client is SUPPOSED to auto-authenticate using
+    the password baked into the share token (the whole point of it), but
+    confirmed via its own source (ljw.js), the value it stores for that is
+    written under a key ('tmppwd') nothing in its actual connection logic
+    ever reads back - a real, currently unfixable-on-our-side upstream gap,
+    not a caching or encoding issue (both already ruled out live). Handing
+    the plaintext back here is the same trust boundary as
+    /rdp-credentials - already operator+ and audit-logged to reach this
+    endpoint at all."""
 
     embed_url: str
+    rustdesk_password: str
 
 
 class ManagedHostRdpCredentials(BaseModel):
