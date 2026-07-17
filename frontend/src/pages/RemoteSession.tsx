@@ -170,22 +170,36 @@ export default function RemoteSession() {
   // embedded app's own UI would. display: 0 assumes a single monitor,
   // true for every VM this connects to.
   //
-  // Confirmed live this needs real error handling: setByName('option:
-  // session', ...) throws synchronously ("Cannot read properties of
-  // undefined (reading 'setOption')") for however long the embedded
-  // client's own session object isn't initialized yet, and an uncaught
-  // throw from one call was aborting the rest of the function - each call
-  // is independent now, one failing can't block another.
+  // Confirmed against RustDesk's OWN actual production bundle
+  // (rustdesk.com/web/js/dist/index.js - lejianwen's webclient2 is a
+  // straight, unmodified copy of it, confirmed via its own source and its
+  // own maintainer's own words in lejianwen/rustdesk-api#60: "I don't have
+  // the source code either... comes from rustdesk.com/web/") that these two
+  // calls are gated by the SAME underlying session object (`curConn`) in
+  // two DIFFERENT ways:
+  //   case "option:session": curConn.setOption(...)             <- THROWS if curConn is null
+  //   case "change_resolution": curConn==null || curConn.change...  <- SILENTLY NO-OPS if curConn is null
+  // This is the actual, verified bug in the previous version of this fix:
+  // it marked a resolution as "already sent" (lastResolutionRef) the
+  // moment it was ATTEMPTED, including the very first attempt - when
+  // curConn is essentially always still null. change_resolution failed
+  // completely silently there (no throw, nothing to catch), so the dedup
+  // logic then refused to ever retry that exact value again, even once the
+  // session became ready seconds later. Only mark it "sent" when
+  // option:session's throw/no-throw - a reliable proxy, since both are set
+  // by the same object in the same JS tick - confirms curConn is actually
+  // there, so change_resolution's call in the SAME invocation is a real
+  // one, not another silent no-op.
   //
-  // change_resolution is NOT idempotent the way the others are - it tears
-  // down and renegotiates the live video stream every time it's called,
-  // confirmed live as the actual cause of a previous version of this fix
-  // repeatedly calling it on a blind timer: constant "WebSocket already
-  // CLOSING/CLOSED" churn, resolution never stable, and materially worse
-  // responsiveness, all from the SAME call meant to fix responsiveness.
-  // lastResolutionRef makes it fire-once-per-actual-target: only called
-  // again when the nearest supported mode genuinely changes (a real
-  // resize), never repeatedly for the same value.
+  // change_resolution is also NOT idempotent the way the others are - it
+  // tears down and renegotiates the live video stream every time it's
+  // called, confirmed live as the actual cause of an earlier version of
+  // this fix repeatedly calling it on a blind timer: constant "WebSocket
+  // already CLOSING/CLOSED" churn, resolution never stable, and materially
+  // worse responsiveness, all from the SAME call meant to fix
+  // responsiveness. lastResolutionRef (now only updated on a CONFIRMED-live
+  // session) makes it fire once per actual target, not repeatedly for the
+  // same value.
   const lastResolutionRef = useRef<string | null>(null);
   const fitDisplayToWindow = useCallback(() => {
     const win = iframeRef.current?.contentWindow as
@@ -201,8 +215,16 @@ export default function RemoteSession() {
         // Session not ready yet - the retry loop below covers this.
       }
     };
-    trySet("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
-    if (width && height) {
+    let sessionReady = false;
+    try {
+      win.setByName("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
+      sessionReady = true;
+    } catch {
+      // curConn not ready yet - change_resolution below would silently
+      // no-op too under this exact condition, so skip it entirely rather
+      // than wrongly marking it as sent.
+    }
+    if (sessionReady && width && height) {
       const [w, h] = nearestResolution(width, height);
       const key = `${w}x${h}`;
       if (lastResolutionRef.current !== key) {
