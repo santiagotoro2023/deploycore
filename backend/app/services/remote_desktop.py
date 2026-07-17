@@ -23,6 +23,7 @@ low-frequency "operator clicked Connect" call. Revisit only if this ever gets
 hammered.
 """
 
+import base64
 import logging
 import time
 
@@ -280,9 +281,27 @@ async def create_session_url(rustdesk_id: str, rustdesk_password: str, host_name
     except Exception as exc:  # noqa: BLE001 - network hiccup on the best-effort step, share step still tried
         logger.warning("address_book/create for %s failed: %s", rustdesk_id, exc)
 
+    # Base64-encoded here, not the raw password - confirmed live this is
+    # what makes the connection actually skip the password prompt, tracing
+    # through ljw.js's own source: SharedPeer's response hands this value
+    # straight back as peer.tmppwd, which the client unconditionally runs
+    # through atob() then a byte-array stringify before treating it as the
+    # peer's stored password (`stringToUint8Array(atob(x)).toString()`) -
+    # the EXACT same transform it applies to a real remembered peer's own
+    # info.hash field elsewhere in the same file. Sending the plain
+    # password here meant that decode step produced garbage unrelated to
+    # the real one, so the connection genuinely couldn't auto-authenticate
+    # and correctly fell back to prompting - not a UI quirk, a real
+    # mismatch between what this endpoint sends and what every other
+    # stored-password code path in the same client expects to receive.
     share_resp = await _admin_post(
         "address_book/shareByWebClient",
-        {"id": rustdesk_id, "password_type": "fixed", "password": rustdesk_password, "expire": _SHARE_EXPIRE_SECONDS},
+        {
+            "id": rustdesk_id,
+            "password_type": "fixed",
+            "password": base64.b64encode(rustdesk_password.encode()).decode(),
+            "expire": _SHARE_EXPIRE_SECONDS,
+        },
     )
     share_token = _unwrap(share_resp, "Could not start a remote session").get("share_token")
     if not share_token:
