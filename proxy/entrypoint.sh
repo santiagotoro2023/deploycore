@@ -115,20 +115,34 @@ render_caddyfile() {
 	# shared-peer's fetch becoming the relative path "null/api/shared-peer",
 	# which then also 404'd (resolving under /webclient2/ and matching the
 	# handle block above, hitting rustdesk-api's own static 404 for it).
+	# Caddy serves this directly instead of proxying to rustdesk-api's own
+	# ConfigJs handler. Confirmed live, the hard way: blanking
+	# RUSTDESK_API_RUSTDESK_API_SERVER and confirming (via `docker compose
+	# exec rustdesk env`) that the container's env really was empty still
+	# weren't enough - a genuinely fresh, non-cached fetch of this exact
+	# script (proven by comparing response byte counts before/after adding
+	# a Cache-Control header) kept coming back with the OLD
+	# "http://127.0.0.1:21114" value baked in regardless. That points at a
+	# real quirk in rustdesk-api's own config library (Viper): an
+	# EXPLICITLY EMPTY env var override doesn't win over conf/config.yaml's
+	# own non-empty packaged default for this field, unlike every other
+	# Rustdesk.* setting here which all worked fine with a real, non-empty
+	# override. Rather than keep fighting an env var precedence bug in
+	# vendored code neither side of this stack owns, Caddy just serves the
+	# exact, known-correct content directly - the same thing an empty
+	# api-server override was always meant to produce, guaranteed correct
+	# regardless of whatever rustdesk-api's own env parsing does.
 	handle /webclient-config/* {
-		# No cache-busting query param (unlike its neighbors), and rustdesk-
-		# api's own handler (a plain c.String(200, tmp) in Go) sets no
-		# Cache-Control of its own - so browsers fall back to their own
-		# heuristics for a same-URL script tag, and evidently cache it
-		# anyway. Confirmed live: after fixing what this script hands out
-		# (blanking RUSTDESK_API_RUSTDESK_API_SERVER, then actually getting
-		# the rustdesk container to pick that up), a browser that had loaded
-		# this page before kept getting served the OLD baked-in
-		# 127.0.0.1:21114 value regardless, breaking /api/shared-peer all
-		# over again downstream. This is dynamic, per-deployment config, not
-		# a static asset - it should never be cached at all.
+		header Content-Type "application/javascript"
 		header Cache-Control "no-store"
-		reverse_proxy rustdesk:21114
+		# One line, not Caddyfile's backtick multi-line string syntax - this
+		# whole file is generated inside an UNQUOTED bash heredoc (it needs
+		# \$cert_block to actually interpolate), and backticks are never
+		# literal there, they trigger real command substitution. A stray
+		# backtick pair anywhere else in this file's own comments already
+		# does this harmlessly (silently swallowed, only mangles comment
+		# text) - not worth risking for a directive that actually matters.
+		respond "localStorage.setItem('api-server', ''); const ws2_prefix = 'wc-'; localStorage.setItem(ws2_prefix+'api-server', ''); window.webclient_magic_queryonline = 0; window.ws_host = '';" 200
 	}
 
 	# The one specific API call webclient2 needs for anonymous, share-token-
