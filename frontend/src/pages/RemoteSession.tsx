@@ -142,22 +142,36 @@ export default function RemoteSession() {
   // never even ran as long as the first one kept failing. Each call is now
   // independent - one failing can't block the other.
   const fitDisplayToWindow = useCallback(() => {
-    const win = iframeRef.current?.contentWindow as (Window & { setByName?: (n: string, v: string) => void }) | undefined;
+    const win = iframeRef.current?.contentWindow as
+      | (Window & { setByName?: (n: string, v: string | number) => void })
+      | undefined;
     const width = iframeRef.current?.clientWidth;
     const height = iframeRef.current?.clientHeight;
     if (!win?.setByName) return;
-    try {
-      win.setByName("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
-    } catch {
-      // Session not ready yet - the retry loop below covers this.
-    }
-    if (width && height) {
+    const trySet = (name: string, value: string | number) => {
       try {
-        win.setByName("change_resolution", JSON.stringify({ display: 0, width, height }));
+        win.setByName!(name, value);
       } catch {
-        // Same as above.
+        // Session not ready yet - the retry loop below covers this.
       }
+    };
+    trySet("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
+    if (width && height) {
+      trySet("change_resolution", JSON.stringify({ display: 0, width, height }));
     }
+    // Every managed host is reached over a LAN (agents only ever enroll
+    // against this instance's own relay, never the public internet), so
+    // bandwidth isn't the constraint default-tier RustDesk tunes for -
+    // 'best' (kRemoteImageQualityBest, flutter/lib/consts.dart) trades
+    // more bandwidth for less compression, and a higher FPS makes mouse
+    // movement and screen updates feel closer to actually sitting at the
+    // machine. Confirmed via the same source as everything else here
+    // (bridge.dart's sessionSetImageQuality/sessionSetCustomFps): both are
+    // plain top-level setByName calls, not wrapped in the 'option:session'
+    // JSON envelope the view-style/resolution calls use - image_quality
+    // takes the raw string, custom-fps a real number, not a string.
+    trySet("image_quality", "best");
+    trySet("custom-fps", 30);
   }, []);
 
   // Retries on an interval rather than a couple of fixed delays - confirmed
