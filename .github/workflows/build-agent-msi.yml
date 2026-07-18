@@ -53,13 +53,21 @@ jobs:
       # Static Windows ffmpeg build (BtbN's builds are the commonly-used
       # source for this - GPL build includes libx264, which is what the
       # agent actually needs; see PROTOCOL.md's capture/encode pipeline).
-      # Pinned tag, not "latest", for the same reason the old RustDesk
-      # version was pinned: a future upstream release shouldn't change
-      # install behavior under us without a deliberate bump here.
+      # "latest" (BtbN's own rolling release, confirmed live to actually
+      # exist and carry this exact asset - a specific dated tag guessed from
+      # memory here originally turned out not to exist at all, 404ing this
+      # exact step on the first real CI run) rather than a pinned dated tag:
+      # BtbN doesn't publish versioned release notes for individual
+      # snapshots the way a project pinning against real API stability
+      # would want, so a guessed tag is a worse bet than their own
+      # documented rolling alias. If build reproducibility across time ever
+      # matters more than it does today, BtbN also tags per ffmpeg release
+      # branch (e.g. "n7.1-latest") - a real, versioned pin - swap to one of
+      # those instead of guessing a dated autobuild tag again.
       - name: Download ffmpeg
         shell: pwsh
         run: |
-          $tag = "autobuild-2024-12-20-12-54"
+          $tag = "latest"
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/$tag/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip -UseBasicParsing
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extracted -Force
           $exe = Get-ChildItem -Path ffmpeg-extracted -Recurse -Filter ffmpeg.exe | Select-Object -First 1
