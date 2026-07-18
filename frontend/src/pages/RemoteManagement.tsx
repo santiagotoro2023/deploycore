@@ -129,7 +129,7 @@ export default function RemoteManagement() {
                   disabled={!h.enrolled}
                   title={
                     h.enrolled
-                      ? "Open the same screen view, then try auto-typing this host's saved RDP username/password"
+                      ? "Open a native RDP session, signed in with this host's saved RDP username/password"
                       : "Waiting for the agent to enroll"
                   }
                   onClick={() => navigate(`/remote-management/${h.id}?mode=connect`)}
@@ -239,13 +239,12 @@ function RemoteSetupBanner({ status }: { status: RemoteStatus }) {
           </div>
           <p className="mb-3 text-xs text-amber-800 dark:text-amber-400">
             {!status.configured
-              ? "The Remote Management server isn't configured yet. If you installed with scripts/setup.sh this is normally automatic - re-run it, or set RUSTDESK_ADMIN_PASSWORD in .env and run the reset command below."
-              : status.detail || "The Remote Management server isn't reachable yet."}
+              ? "The TURN password isn't set yet. If you installed with scripts/setup.sh this is normally automatic - re-run it, or set TURN_PASSWORD in .env and restart the stack with the command below."
+              : status.detail || "The Remote Management daemon (guacd) isn't reachable yet."}
           </p>
           <pre className="mb-3 overflow-x-auto rounded-md border border-amber-200 bg-white px-3 py-2 text-xs dark:border-amber-900/60 dark:bg-neutral-900">
 {`# From the DeployCore install directory on the host:
-docker compose up -d rustdesk
-docker compose exec -w /app rustdesk ./apimain reset-admin-pwd "$(grep '^RUSTDESK_ADMIN_PASSWORD=' .env | cut -d= -f2-)"`}
+docker compose up -d --build`}
           </pre>
         </>
       )}

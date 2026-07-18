@@ -1,196 +1,108 @@
 # DeployCore Remote Management Agent
 
-The agent is a **stock, unmodified RustDesk client**, installed as a headless
-Windows service and pointed at this DeployCore instance's own self-hosted
-RustDesk server. There is no recompiled/forked RustDesk — the only
-DeployCore-authored code is the install script and (optionally) a small tray
-companion.
+The agent is DeployCore's own software, end to end - no RustDesk, no
+third-party remote-desktop product wrapped and rebranded. See
+[`PROTOCOL.md`](PROTOCOL.md) for the exact wire protocol and
+[`../docs/remote-agent-native-plan.md`](../docs/remote-agent-native-plan.md)
+for the full design rationale.
+
+> **Status**: `agent/` is written against the documented Win32/SIPSorcery/
+> FFmpeg APIs but has not been compiled or run on a real Windows machine yet -
+> there's no Windows environment available to build or test it in the
+> sandbox this was written in. Treat it as "implemented per spec, pending
+> first real Windows/ESXi test," not "verified working." See `agent/README.md`
+> for exactly what's untested and why.
+
+## Layout
+
+- **`agent/`** - the actual Windows service (`DeployCoreAgent.exe`): capture/
+  encode/WebRTC for Shadow mode, the RDP tunnel for Connect mode, the
+  persistent control-channel client. This is the real product.
+- **`tray/`** - a small, cosmetic tray-icon companion (unrelated to the
+  RustDesk-era version's need to hide a foreign product's own tray icon -
+  this one's just for a visible "DeployCore is managing this machine" icon).
+  Needed **no changes** for the native rewrite; it never touched RustDesk
+  internals.
+- **`wix/`** - the WiX v4 source for `DeployCoreRemoteAgent.msi`, a thin
+  wrapper that drops the install script + `DeployCoreAgent.exe` + `ffmpeg.exe`
+  into Program Files and runs the script once.
+- **`PROTOCOL.md`** - the control-channel and WebRTC data-channel wire
+  protocol, authoritative for both the agent and the backend.
 
 ## The one source of truth: the install script
 
-All install logic lives in **`backend/app/services/remote_agent_install.ps1`**.
-It: fetches this instance's server config (relay address + public key) using the
-enroll token, installs the stock RustDesk client silently, writes a headless
-config (`hide-tray`, permanent-password unattended access), installs the
-service, generates a local permanent password, and enrolls the machine back
-with DeployCore.
+All install logic lives in **`backend/app/services/remote_agent_install.ps1`**
+(kept there, not here, so `GET /api/remote/install-script` can serve it
+directly with this instance's URL baked in). It:
 
-**It deliberately does NOT use RustDesk's own `--install-service` CLI flag.**
-Confirmed via RustDesk's actual source (`platform/windows.rs`,
-`install_service()`): that flag wraps the real work (`sc create`/`start`, plus
-copying a tray shortcut into the all-users Startup folder - not something we
-want either, see "Branding" below) in a call through Rust's `runas` crate with
-`force_prompt(true)`, which unconditionally tries to show a UAC-style
-elevation prompt - even when the caller is already SYSTEM. In a Session-0/
-no-desktop context (a Scheduled Task, or any unattended deployment - a
-provisioned VM never has anyone logged into the console) that prompt can
-never be shown or dismissed, so the call hangs forever. Confirmed live: the
-transcript log stopped dead at "Installing service..." with no error, ever.
-The script instead runs the same underlying `sc.exe` commands directly - no
-elevation dance, no hang.
+1. Fetches this instance's TURN config (for Shadow's ICE server list) using
+   the enroll token.
+2. Installs `DeployCoreAgent.exe` + `ffmpeg.exe` (bundled in the `.msi`, or
+   downloaded from the `agent-latest` GitHub release for the one-liner path).
+3. Enables Remote Desktop (`fDenyTSConnections=0` + the firewall rule) -
+   Windows' own RDP server does the entire job for Connect mode, nothing
+   else to install for it.
+4. Enrolls with DeployCore (server mints `agent_key`, the one and only
+   credential in this whole system - see `PROTOCOL.md`'s "Why no password"
+   section) and writes it, ACL-restricted, to
+   `C:\ProgramData\DeployCore\agent-config.json`.
+5. Installs `DeployCoreAgent.exe` as the `DeployCoreRemoteAgent` Windows
+   service.
 
-**The `.msi` path doesn't pass SERVERURL/ENROLLTOKEN as Scheduled Task
-arguments.** They're written into `agent-params.ini` (next to the script) via
-WiX's own native `IniFile` action at install time, and the script reads them
-from there if not given explicitly. This is deliberate: CI's smoke test can
-only ever verify a Scheduled Task's command is *registered* correctly
-(`SKIPRUN=1` never lets it actually execute) - it can't verify Task Scheduler
-*re-parses* a multi-argument, nested-quoted `/tr` string correctly at real
-execution time. A live deployment showed exactly that gap - the agent
-produced no log at all, consistent with an empty/lost enroll token. Writing
-to a plain file instead means the Scheduled Task's own `/tr` is just a bare
-path with nothing for Task Scheduler to mis-split, removing that whole class
-of risk.
+Delivered two ways, both using that same script - see the top-level
+[README's Remote Management section](../README.md#remote-management) for the
+actual commands.
 
-**The Scheduled Task's `/tr` target lives under `C:\ProgramData\DeployCore\`
-(`run-agent-task.cmd`), not directly at the script under `C:\Program
-Files\DeployCore Remote Management Agent\`.** Confirmed live via `schtasks
-/query /tn DeployCoreAgentInstall /xml` on a real failing install: quotes
-authored around that Program-Files path (which contains three spaces) did
-not survive the round trip from the `.wxs` through `WixQuietExec64` into the
-actually-registered task - Task Scheduler's own stored `<Command>` had been
-silently split at the first space (`C:\Program` as the command,
-`Files\DeployCore Remote Management Agent\RunAgentInstall.cmd` as a bogus
-argument), so every real execution attempt failed instantly with
-`0x80070002` (file not found) and produced zero log output, indistinguishable
-from the task never running at all. `schtasks /query /fo list` alone doesn't
-reveal this - it renders the path cleanly either way; only the raw `/xml`
-dump shows the actual stored `<Command>`/`<Arguments>` split. Since
-`C:\ProgramData\` has no spaces in it at all, a target path there needs no
-quoting to begin with, so there's nothing left for that round trip to lose.
-`run-agent-task.cmd`'s only job is to invoke the real
-`RunAgentInstall.cmd` with its own (separately, already-safe) quoting - a
-plain `.cmd` file's content, parsed once by `cmd.exe` at actual run time,
-not a command line built up through several layers of MSI property
-substitution and custom-action escaping first. CI's smoke test now actually
-*executes* the registered task (not just checks its stored command text) and
-asserts `agent-install.log` gets created, specifically so this exact class of
-bug can't ship silently again.
-
-It's delivered two ways, both using that same script:
-
-1. **One-liner (easiest, no download).** The Remote Management tab shows a
-   copy-paste command; the server serves the script with its own URL baked in
-   (`GET /api/remote/install-script`):
-   ```powershell
-   powershell -ExecutionPolicy Bypass -Command "$env:DC_TOKEN='<enroll-token>'; irm <server>/api/remote/install-script | iex"
-   ```
-
-2. **The `.msi`** (`remote-agent/wix/`). A thin WiX wrapper that drops the same
-   script and runs it once, passing `SERVERURL` + `ENROLLTOKEN` MSI properties:
-   ```
-   msiexec /i DeployCoreRemoteAgent.msi /qn SERVERURL="<server>" ENROLLTOKEN=<token>
-   ```
-   This is also the form the DeployCore deployment pipeline uses automatically
-   (see `worker/tasks/provision.py`) when the agent is attached to a template as
-   the global "Remote Agent" App Asset.
+**Dramatically shorter than the RustDesk-based version it replaces.** An
+entire category of problems that script had to work around - a foreign
+installer's own shortcuts/tray/Add-Remove-Programs entry, a UAC-hang
+workaround for someone else's `--install-service` flag, reading an ID/password
+back out of a running process over IPC - simply doesn't exist when the thing
+being installed is DeployCore's own, from a service name to a config format
+DeployCore chose itself.
 
 ## Building the `.msi` (automatic)
 
-The MSI can only be built on Windows (WiX), not on the Linux hosts DeployCore
-otherwise uses, so `.github/workflows/build-agent-msi.yml` builds it on a
-`windows-latest` runner. It runs **automatically on every push that changes the
-agent** (the install script or `wix/`), smoke-tests the built MSI (installs it
-with `SKIPRUN=1`, checks the payload landed, uninstalls), and publishes it to a
-rolling **`agent-latest`** pre-release with a stable URL:
+Built on `windows-latest` by `.github/workflows/build-agent-msi.yml`, on every
+push that touches the agent, the install script, or `wix/`: publishes
+`DeployCoreAgent.exe` as a self-contained single-file `win-x64` build,
+downloads a static `ffmpeg.exe` (BtbN's builds, pinned tag - see the workflow
+for the exact one), smoke-tests the `.msi`, and publishes both the `.msi` and
+a `DeployCoreAgent.zip` (the one-liner path's download fallback) to a rolling
+**`agent-latest`** pre-release.
 
-```
-https://github.com/santiagotoro2023/deploycore/releases/download/agent-latest/DeployCoreRemoteAgent.msi
-```
+DeployCore's `api` container auto-fetches the `.msi` on startup and registers
+it as the global "Remote Agent" App Asset - see
+`backend/app/services/remote_agent_seed.py`. To disable auto-fetch
+(air-gapped installs), set `REMOTE_AGENT_MSI_URL=` empty and upload the `.msi`
+as a global App Asset yourself, then **Set as agent**.
 
-Pushing an `agent-v*` tag also cuts a normal versioned release.
+## Resolution and Ctrl+Alt+Del are both real today
 
-**You don't need to upload it into DeployCore.** On startup the api container
-auto-fetches that MSI and registers it as the global "Remote Agent" App Asset
-(`config.remote_agent_msi_url`, `app/services/remote_agent_seed.py`), which is
-what the tab's "Download .msi" button and the deployment pipeline both use. To
-disable auto-fetch (air-gapped installs), set `REMOTE_AGENT_MSI_URL=` empty and
-upload the `.msi` as a global App Asset yourself, then **Set as agent**.
+Neither is a stub:
 
-> The MSI's post-install custom-action sequencing is the least-tested part
-> (WiX v4 + a commit custom action). CI's smoke test catches authoring/
-> sequencing breakage, but the very first real end-to-end install (which does
-> reach a live DeployCore server) is still worth eyeballing on a throwaway VM.
-> The PowerShell one-liner path depends on none of this and is the guaranteed
-> install method.
+- **Resolution**: Shadow changes the VM's actual display resolution via the
+  standard `ChangeDisplaySettingsEx` API (`Win32Interop.TrySetNearestResolution`),
+  snapping to the closest mode the adapter actually supports - the same
+  mechanism (and the same real constraint) the RustDesk-based version used,
+  just computed against this machine's real, enumerated mode list
+  (`EnumDisplaySettings`) instead of a hardcoded guess list. `ffmpeg`'s own
+  `-vf scale` filter still resamples to the exact requested size on top of
+  that, so the final video is always pixel-exact regardless of how close the
+  underlying mode switch landed.
+- **Ctrl+Alt+Del**: a real toolbar button in `RemoteSession.tsx`, in both
+  Shadow (the agent's `SendSAS`) and Connect (the standard Guacamole/FreeRDP
+  Ctrl+Alt+Del keysym sequence).
 
-## Surviving the deployment pipeline's own reboot
+## What's still a stub, on purpose
 
-When attached to a template, `provision.py` waits only for this wrapper
-`.msi`'s own quick self-install to report done - not for the agent's real
-work (downloading/installing RustDesk, enrolling), which runs afterward in a
-detached Scheduled Task (see "Why not run directly from a custom action"
-above). But the deployment pipeline does one unconditional final reboot
-("rebooting to finalize configuration") once it considers all app installs
-done - which, from its point of view, this one already is. That reboot can
-land while the background task is still mid-flight, killing it (confirmed
-live: the transcript stopped mid-RustDesk-install with `TerminatingError():
-"Die Pipeline wurde beendet."` - "the pipeline was terminated").
-
-The task is registered with an **ONSTART** trigger (not just a one-time
-immediate one), so if a reboot does interrupt it, it simply runs again on the
-next boot. `remote_agent_install.ps1` is written to make that safe: every
-step is idempotent (RustDesk's install is skipped if already present, the
-service (re)creation just recreates cleanly, enrollment is explicitly safe to
-call more than once), and the script only deletes its own Scheduled Task on a
-fully successful run - a failed or interrupted attempt leaves it registered
-so the next boot gets another try.
-
-## Branding — RustDesk should be invisible, not a second "DeployCore" program
-
-We install the **stock** RustDesk client (no source recompile — that's the
-deliberate call to avoid owning a Rust/Flutter build pipeline), then hide
-everything installer-level tweaks can reach, rather than relabeling it — a
-renamed "DeployCore..." entry sitting next to the real "DeployCore Remote
-Management Agent" entry would still look like two separate programs, which
-defeats the point.
-
-**Shows as DeployCore (the only things visible at all):**
-- The whole browser/operator experience.
-- The notification-area **tray icon** — the DeployCore mark and name. This is
-  the `remote-agent/tray/` companion app; it ships with the `.msi` only.
-- The `.msi` wrapper package's own Add/Remove Programs entry (name, publisher,
-  icon) and the Windows service's display name in services.msc.
-- **No "being controlled" window** during a session — suppressed with
-  `allow-hide-cm=Y` (permitted because we use a permanent password).
-
-**Actively hidden/suppressed, not shown at all:**
-- **RustDesk's own Add/Remove Programs entry** — `SystemComponent=1` on its
-  uninstall registry key, the standard mechanism bundled/dependency installers
-  use to keep a product out of the visible list entirely. Not renamed - hidden.
-- **Desktop/Start Menu/Startup shortcuts and the virtual printer** — suppressed
-  via the REAL properties RustDesk's own component Conditions check
-  (`DESKTOPSHORTCUTS=0`, `STARTMENUSHORTCUTS=0`, `STARTUPSHORTCUTS=0`,
-  confirmed directly against its WiX source, not the `CREATE*`/`INSTALL*`
-  names an earlier version of this file used based on stale third-party docs
-  that were never checked against source). `STARTUPSHORTCUTS` specifically is
-  what stops a "RustDesk Tray" auto-launch shortcut landing in the Startup
-  folder - confirmed live as a second, unbranded tray icon on every logon,
-  entirely unrelated to `--install-service`. Also a belt-and-suspenders sweep
-  that deletes any `RustDesk.lnk` left behind anyway, across every user
-  profile.
-- **An auto-launched interactive GUI window and its tray icon** — confirmed
-  live: some RustDesk builds auto-launch the GUI right after install,
-  regardless of the shortcut properties, running as whichever user happens to
-  be logged in and reading a totally separate, unconfigured per-user config
-  (not the one the install script writes for the actual managed service). The
-  script kills any `rustdesk.exe` process immediately after install, before
-  it can register itself anywhere further.
-- RustDesk's own tray icon on the actual managed service - `hide-tray=Y`.
-
-**The icon is the same mark everywhere** — the tray and the `.msi`'s own icon
-are both drawn (by the tray app, GDI+, in CI) from the same DeployCore mark as
-the browser favicon (`frontend/public/favicon.svg`) and the in-app logo.
-
-**Still says "RustDesk"** (would need a source recompile to change):
-- The `rustdesk.exe` process name in Task Manager.
-- The `C:\Program Files\RustDesk` install folder.
-- The Windows service's *key* name (`RustDesk`) — only the display name is
-  relabeled.
-
-These are low-visibility (you have to open Task Manager or browse Program Files),
-and none are seen by the DeployCore operator in normal use.
-
-**Note:** the tray icon ships with the `.msi` only; the copy-paste one-liner
-install path still hides/suppresses everything RustDesk-side, just without a
-tray app of its own.
+- **Virtual display driver** (exact *arbitrary* resolution, not just the
+  nearest supported mode): not yet bundled. `Install-VirtualDisplayDriver` in
+  the install script and `IVirtualDisplay` in the agent are clearly-marked
+  seams; a specific open-source IDD project still needs to be chosen,
+  bundled, and signed (see the plan doc's "IDD driver" section for the
+  candidates under consideration). The nearest-supported-mode switching
+  above works today without it.
+- **Hardware video encoding**: the agent uses software `libx264` via
+  `ffmpeg`, not GPU-accelerated encode - these are ESXi VMs with only a
+  VMware SVGA virtual GPU, so there's no hardware encoder to use anyway.

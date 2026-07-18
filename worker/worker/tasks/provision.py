@@ -19,7 +19,7 @@ from app.models.hypervisor import HypervisorHost
 from app.models.iso_asset import IsoAsset, IsoKind
 from app.models.managed_host import ManagedHost
 from app.models.template import DeploymentTemplate, DomainJoinTiming
-from app.services import notifications, remote_desktop, settings_resolver, webhooks
+from app.services import notifications, remote_session, settings_resolver, webhooks
 from app.services.deployment_service import DeploymentStateMachine, InvalidTransition, log
 from app.services.floppy_builder import build_and_upload_answer_floppy
 from app.services.template_effective import resolve_template
@@ -121,8 +121,8 @@ LANGUAGE_SCREEN_KEYPRESS_INTERVAL_SECONDS = 5
 WINRM_REACHABILITY_POLL_INTERVAL_SECONDS = 10
 WINRM_REACHABILITY_MAX_ATTEMPTS = 60  # ~10 minutes
 
-# The Remote Management agent's real work (download/install RustDesk,
-# configure, create its service, enroll) runs detached from the msiexec call
+# The Remote Management agent's real work (install DeployCoreAgent.exe,
+# enable RDP, create its service, enroll) runs detached from the msiexec call
 # that installs the thin wrapper .msi - see remote-agent/wix's own comments
 # for why (a nested msiexec inside a custom action deadlocks the Windows
 # Installer mutex). That means install_app's own "installed" signal fires as
@@ -1247,10 +1247,10 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                             # the installer would just be redundant.
                             await log(
                                 db, deployment, "post_install",
-                                f"Remote Management agent already enrolled (ID {managed_host.rustdesk_id})",
+                                "Remote Management agent already enrolled",
                             )
                             continue
-                        server_url = await remote_desktop.resolve_app_public_url(db)
+                        server_url = await remote_session.resolve_app_public_url(db)
                         install_args = (
                             f'{install_args} SERVERURL="{server_url}" ENROLLTOKEN={managed_host.enroll_token}'.strip()
                         )
@@ -1310,7 +1310,7 @@ async def run_post_install(ctx, deployment_id: str) -> None:
                                 break
                             await asyncio.sleep(REMOTE_AGENT_ENROLL_POLL_INTERVAL_SECONDS)
                         if enrolled:
-                            await log(db, deployment, "post_install", f"Remote Management agent enrolled (ID {managed_host.rustdesk_id})")
+                            await log(db, deployment, "post_install", "Remote Management agent enrolled")
                         else:
                             raise RuntimeError(
                                 "Remote Management agent did not finish enrolling within the wait window "

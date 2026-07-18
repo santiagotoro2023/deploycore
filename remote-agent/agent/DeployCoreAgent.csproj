@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- net8.0-windows (not plain net8.0): Win32 P/Invoke (SendInput, SendSAS,
+       the raw clipboard API) and DPAPI are Windows-only, and this agent has
+       no reason to ever run anywhere else - see PROTOCOL.md and this
+       project's own README ("What this is NOT" - Windows only, a hard Win32
+       dependency throughout is expected, not a compromise).
+
+       CI (.github/workflows/build-agent-msi.yml) publishes with:
+         dotnet publish remote-agent/agent/DeployCoreAgent.csproj -c Release -r win-x64 \
+           --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+       SelfContained/PublishSingleFile/IncludeNativeLibrariesForSelfExtract are
+       deliberately NOT set here - the CLI flags above are the one source of
+       truth for those, so there's nothing in this file that can silently
+       drift out of sync with the actual CI invocation. RuntimeIdentifiers
+       below only exists so a plain `dotnet restore` on this project by
+       itself (no CLI flags) still resolves correctly. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DeployCoreAgent</AssemblyName>
+    <RootNamespace>DeployCoreAgent</RootNamespace>
+    <Deterministic>true</Deterministic>
+    <Company>DeployCore</Company>
+    <Product>DeployCore Remote Management Agent</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Modern Windows-Service hosting - HostBuilder/IHostedService +
+         .UseWindowsService(), not hand-rolled ServiceBase (see Program.cs). -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+
+    <!-- DPAPI (System.Security.Cryptography.ProtectedData.Protect/Unprotect)
+         moved out of the BCL proper starting with .NET Core - this is
+         Microsoft's own compatibility package for it, not a third-party
+         dependency. See Win32Interop.cs's DPAPI region and AgentConfig.cs. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+
+    <!-- Pure-C# WebRTC (peer connection, ICE/DTLS-SRTP, RTP/H264
+         packetization, data channels) - see ShadowSession.cs. Version pinned
+         from general familiarity with the SIPSorcery 6.x release line, NOT
+         confirmed against the live NuGet index (this environment has no
+         Windows/.NET/internet access to actually run `dotnet restore`) -
+         verify this version still resolves, or bump to whatever the actual
+         latest 6.x stable is, on the first real restore. See this project's
+         README, "Not yet verified on real hardware" section. -->
+    <PackageReference Include="SIPSorcery" Version="6.2.2" />
+  </ItemGroup>
+
+</Project>

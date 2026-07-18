@@ -22,7 +22,7 @@ from app.schemas.setting import SettingRead, SettingValue
 from app.schemas.teams import TeamsConfigRead, TeamsConfigUpdate
 from app.schemas.update import UpdateStatusRead
 from app.security.rbac import get_current_user, require_role
-from app.services import audit, m365, remote_desktop, teams, tls_certs
+from app.services import audit, m365, remote_session, teams, tls_certs
 from app.services.notifications import EVENT_CONTEXT_FIELDS
 
 router = APIRouter(tags=["settings"])
@@ -611,21 +611,24 @@ def _sanitize_host(raw: str) -> str:
     dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
 )
 async def get_remote_management_config(db: AsyncSession = Depends(get_db)) -> dict:
-    """Current Remote Management public host (what agents and the browser
-    connect to), the ports to forward, and the status of the last Apply. The
-    host defaults to this instance's LAN IP so same-network Remote Management
-    works with nothing set."""
+    """Current Remote Management public host (what the coturn TURN fallback
+    and the browser connect to) and the ports to forward for non-LAN access.
+    The host defaults to this instance's LAN IP so same-network Remote
+    Management works with nothing set. What agents/sessions are TOLD to
+    connect to updates immediately (a live DB read); coturn's own
+    --external-ip catches up within a couple of seconds via the updater (see
+    the PUT route's own docstring) - fast enough that this page doesn't
+    surface a separate "applying" state for it."""
     return {
-        "host": await remote_desktop.resolve_public_host(db),
-        "app_public_url": await remote_desktop.resolve_app_public_url(db),
-        "ports": remote_desktop.RELAY_PORTS,
-        "apply_status": await _get_setting_value(db, "remote_management_apply_status"),
+        "host": await remote_session.resolve_public_host(db),
+        "app_public_url": await remote_session.resolve_app_public_url(db),
+        "ports": remote_session.RELAY_PORTS,
     }
 
 
 @router.put(
     "/api/settings/remote-management",
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_role(Role.ADMIN, org_scoped=False))],
 )
 async def set_remote_management_config(
@@ -633,32 +636,33 @@ async def set_remote_management_config(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    """Sets the public host. The api uses it immediately for new agent
-    enrollments and session links; the flag is picked up by the updater
-    container (see updater/update.sh apply_remote_management), which rewrites
-    .env and restarts the relay/ID servers so they advertise the new address -
-    no manual file editing. Existing agents keep the address they were enrolled
-    with until re-run (see the Wiki)."""
+    """Sets the public host. Takes effect IMMEDIATELY for every new agent
+    enrollment and session (a live DB read) - but coturn's own --external-ip
+    (see coturn/entrypoint.sh) only knows TURN_HOST from .env at ITS OWN
+    container start, since a container can't read this app's Postgres
+    settings table directly. So this also flags the updater to rewrite
+    TURN_HOST in .env and recreate just that one lightweight, stateless
+    container - unlike the old RustDesk relay stack this replaced, coturn
+    has no slow first-run init to wait on, so this resolves within a couple
+    of seconds with no visible "Applying..." step needed for it."""
     host = _sanitize_host(body.host)
     if not host:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "a host or domain is required")
     await _set_global_setting_value(db, "remote_management_host", host)
-    await _set_global_setting_value(db, "remote_management_apply_status", {"stage": "applying", "error": None})
     await _set_global_setting_value(db, "remote_management_apply_requested", True)
 
-    # Separate from the RustDesk relay host above: this is the address agents
-    # use to reach DeployCore's OWN api (enroll/config), previously only
-    # settable via the APP_PUBLIC_URL env var at first-run setup.sh time with
-    # no way to fix it later short of SSHing in - confirmed live as a real gap.
-    # Takes effect immediately (a live DB read, like the host above) - no
-    # updater/.env/restart step needed, unlike the RustDesk relay containers.
+    # Separate from the TURN host above: this is the address agents use to
+    # reach DeployCore's OWN api (enroll/config), previously only settable
+    # via the APP_PUBLIC_URL env var at first-run setup.sh time with no way
+    # to fix it later short of SSHing in - confirmed live as a real gap,
+    # back when this app still ran on RustDesk.
     app_public_url = (body.app_public_url or "").strip().rstrip("/")
     if app_public_url:
         if not re.match(r"^https?://", app_public_url):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "the instance URL must start with http:// or https://")
-        await _set_global_setting_value(db, remote_desktop.APP_PUBLIC_URL_SETTING_KEY, app_public_url)
+        await _set_global_setting_value(db, remote_session.APP_PUBLIC_URL_SETTING_KEY, app_public_url)
     else:
-        await _set_global_setting_value(db, remote_desktop.APP_PUBLIC_URL_SETTING_KEY, None)
+        await _set_global_setting_value(db, remote_session.APP_PUBLIC_URL_SETTING_KEY, None)
 
     audit.record(
         db, action="settings.remote_management_updated", target_type="settings",

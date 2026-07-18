@@ -279,12 +279,11 @@ async def set_remote_agent_app_asset(
     call sites to pick between.
 
     Uploading a real, working agent installer isn't something this route
-    does - that installer (stock RustDesk configured headless + a small
-    DeployCore-branded tray companion + the enrollment glue script, see
-    remote_management_architecture project notes) has to be built and
-    uploaded through the normal global-app-asset upload flow first, same
-    as any other app asset; this route only flips the designation once
-    that upload is sitting there complete."""
+    does - that installer (DeployCoreAgent.exe + ffmpeg.exe + the enrollment
+    script, see remote-agent/README.md) has to be built and uploaded through
+    the normal global-app-asset upload flow first, same as any other app
+    asset; this route only flips the designation once that upload is
+    sitting there complete."""
     app_asset = await _get_global_app_asset(db, app_id)
     if body.enabled and app_asset.upload_status != UploadStatus.COMPLETE:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "upload must be complete before this can be the remote agent")

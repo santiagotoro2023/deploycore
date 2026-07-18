@@ -54,55 +54,6 @@ render_caddyfile() {
     cert_block=$(printf 'tls internal {\n\t\ton_demand\n\t}')
   fi
 
-  # Optional, opt-in, off by default - fixes a real, confirmed limitation
-  # for anyone reaching this instance through a port-forward/NAT path
-  # different from RUSTDESK_RELAY_HOST's own address (see README's
-  # "Remote Management through a port-forward" section for the full
-  # explanation): hbbs advertises a single, fixed relay-server hostname to
-  # every client, over its own live protocol - not something this proxy
-  # can rewrite per-request the way it does for the id_server value in
-  # /api/shared-peer's response. A client reaching DeployCore through a
-  # DIFFERENT address combines that fixed hostname with ITS OWN port,
-  # a combination nothing was listening on - confirmed live as the actual
-  # cause of the relay leg specifically timing out for a port-forwarded
-  # access path, everything else already working. Since the hostname IS
-  # this same host's own real address, a second listener here on whatever
-  # external port that specific port-forward rule happens to use makes
-  # that exact combination valid. No effect unless RUSTDESK_ALT_ACCESS_PORT
-  # is explicitly set (see .env.example) - never touches the default setup.
-  local alt_port_block=""
-  if [ -n "${RUSTDESK_ALT_ACCESS_PORT:-}" ]; then
-    alt_port_block=$(cat <<ALTEOF
-
-:${RUSTDESK_ALT_ACCESS_PORT} {
-	$cert_block
-
-	handle /webclient-config/* {
-		header Content-Type "application/javascript"
-		header Cache-Control "no-store"
-		respond "localStorage.setItem('api-server', ''); const ws2_prefix = 'wc-'; localStorage.setItem(ws2_prefix+'api-server', ''); window.webclient_magic_queryonline = 0; window.ws_host = '';" 200
-	}
-
-	handle /webclient2/* {
-		reverse_proxy rustdesk:21114
-	}
-
-	handle /api/shared-peer {
-		reverse_proxy api:8000
-	}
-
-	handle /ws/id {
-		reverse_proxy rustdesk:21118
-	}
-
-	handle /ws/relay {
-		reverse_proxy rustdesk:21119
-	}
-}
-ALTEOF
-)
-  fi
-
   cat > "$CADDYFILE" <<EOF
 :80 {
 	redir https://{host}{uri} permanent
@@ -125,131 +76,19 @@ ALTEOF
 		header Content-Disposition "attachment; filename=deploycore-ca.crt"
 	}
 
-	# The embedded RustDesk web client (rustdesk-api's own "webclient2",
-	# lejianwen/rustdesk-api's Flutter-web build - confirmed via its actual
-	# source, http/router/router.go's `g.StaticFS("/webclient2", ...)`) is
-	# proxied at the EXACT SAME PATH it's built to expect, on THIS SAME
-	# origin - not a separate port, not a different sub-path. Two real bugs
-	# found getting here, in order: (1) loading it directly as its own
-	# http://<host>:21114 URL is a plain HTTP iframe inside this HTTPS-served
-	# app, exactly the "mixed active content" browsers block by default -
-	# confirmed live as a black screen with no visible error. (2) A dedicated
-	# :8444 HTTPS port fixed that but introduced its own problem: any
-	# separate origin needs its own certificate trust decision, which a
-	# browser flatly refuses to let you make from INSIDE an embedded iframe
-	# at all (the same restriction that stops a malicious page tricking
-	# someone into trusting a bad cert) - so Connect/Shadow silently failed
-	# for anyone who hadn't separately visited/trusted that port first, with
-	# no way to do so from inside the session itself. (3) An EARLIER same-
-	# origin attempt, proxied under a DIFFERENT sub-path (/rustdesk-webclient/)
-	# with the prefix stripped before forwarding, also failed - not because
-	# same-origin is impossible, but because that path didn't match what the
-	# Flutter build's own base-href was compiled for (/webclient2/), so its
-	# root-relative asset/API references resolved incorrectly. Proxying the
-	# IDENTICAL path it already expects avoids that entirely - confirmed via
-	# its own source this needs no rewriting.
-	handle /webclient2/* {
-		reverse_proxy rustdesk:21114
-	}
-
-	# Missed on the first pass: index.html's very first <script> tag loads
-	# this BEFORE webclient2 itself (rustdesk-api's http/controller/web
-	# ConfigJs handler, only registered when WebClient==1, same source as
-	# above) - it's what sets the client's own understanding of its api-
-	# server to "" via localStorage, which is what makes the /api/shared-peer
-	# call below resolve as a same-origin root-relative fetch in the first
-	# place. Without this handle block it fell through to the frontend
-	# reverse_proxy instead, 404'd, silently never ran - confirmed live: the
-	# browser's own Network tab showed both this AND shared-peer 404ing
-	# together, api-server staying literally the string "null", and
-	# shared-peer's fetch becoming the relative path "null/api/shared-peer",
-	# which then also 404'd (resolving under /webclient2/ and matching the
-	# handle block above, hitting rustdesk-api's own static 404 for it).
-	# Caddy serves this directly instead of proxying to rustdesk-api's own
-	# ConfigJs handler. Confirmed live, the hard way: blanking
-	# RUSTDESK_API_RUSTDESK_API_SERVER and confirming (via `docker compose
-	# exec rustdesk env`) that the container's env really was empty still
-	# weren't enough - a genuinely fresh, non-cached fetch of this exact
-	# script (proven by comparing response byte counts before/after adding
-	# a Cache-Control header) kept coming back with the OLD
-	# "http://127.0.0.1:21114" value baked in regardless. That points at a
-	# real quirk in rustdesk-api's own config library (Viper): an
-	# EXPLICITLY EMPTY env var override doesn't win over conf/config.yaml's
-	# own non-empty packaged default for this field, unlike every other
-	# Rustdesk.* setting here which all worked fine with a real, non-empty
-	# override. Rather than keep fighting an env var precedence bug in
-	# vendored code neither side of this stack owns, Caddy just serves the
-	# exact, known-correct content directly - the same thing an empty
-	# api-server override was always meant to produce, guaranteed correct
-	# regardless of whatever rustdesk-api's own env parsing does.
-	handle /webclient-config/* {
-		header Content-Type "application/javascript"
-		header Cache-Control "no-store"
-		# One line, not Caddyfile's backtick multi-line string syntax - this
-		# whole file is generated inside an UNQUOTED bash heredoc (it needs
-		# \$cert_block to actually interpolate), and backticks are never
-		# literal there, they trigger real command substitution. A stray
-		# backtick pair anywhere else in this file's own comments already
-		# does this harmlessly (silently swallowed, only mangles comment
-		# text) - not worth risking for a directive that actually matters.
-		respond "localStorage.setItem('api-server', ''); const ws2_prefix = 'wc-'; localStorage.setItem(ws2_prefix+'api-server', ''); window.webclient_magic_queryonline = 0; window.ws_host = '';" 200
-	}
-
-	# The one specific API call webclient2 needs for anonymous, share-token-
-	# based sessions (redeeming the token DeployCore mints server-side, see
-	# services/remote_desktop.py's create_session_url()) - confirmed via
-	# lejianwen/rustdesk-api's actual source (http/router/api.go's
-	# WebClientRoutes(): `frg.POST("/shared-peer", w.SharedPeer)`, registered
-	# OUTSIDE any auth-gated group, unlike its sibling /server-config routes
-	# which need a login this anonymous flow never has). Confirmed this
-	# doesn't collide with anything DeployCore's own API uses (grepped this
-	# app's own route definitions directly) - DeployCore's own auth lives at
-	# /api/auth/*, not a bare /api/login, so there's no ambiguity for Caddy
-	# to resolve between the two apps' /api/* namespaces at all past this one
-	# specific path.
-	#
-	# Goes to DeployCore's own api service now, NOT straight to rustdesk -
-	# confirmed live that rustdesk-api's raw response here hands back
-	# id_server with RUSTDESK_RELAY_HOST's hostname baked in unconditionally,
-	# which webclient2's own JS combines with the CURRENT PAGE's port to
-	# build its wss:// rendezvous URL. That's fine for an operator reaching
-	# DeployCore through RUSTDESK_RELAY_HOST itself, but silently
-	# unconnectable for anyone going through a different address (a port
-	# forward, alternate DNS name, VPN/NAT path) - the resulting host:port
-	# combination was never valid for either address. See
-	# remote_desktop.proxy_shared_peer for the actual rewrite (swaps
-	# id_server's hostname for whatever host this specific request came in
-	# on) and managed_hosts.py's shared_peer_proxy for the thin route
-	# wrapping it.
-	handle /api/shared-peer {
-		reverse_proxy api:8000
-	}
-
-	# The actual RustDesk protocol connection (ID/rendezvous + relay), once
-	# the address-book/share-token part above is done. Confirmed live, not
-	# guessed: an earlier attempt assumed webclient2 dials wss://<host>:21118
-	# and :21119 directly (a reasonable read of the STOCK web client's source,
-	# resources/web/js/src/connection.ts) and gave those ports their own
-	# TLS-terminating listeners - but Firefox's own console showed the
-	# deployed v2 client actually requests wss://<host>/ws/id, a PATH on this
-	# SAME origin/port, not a separate port at all (that line exists in the
-	# stock source too, just commented out there - the v2 build evidently
-	# ships it enabled). /ws/id and /ws/relay are hbbs/hbbr's own path names
-	# for their websocket listeners (rendezvous_server.rs / relay_server.rs
-	# both log "Listening on websocket :21118/:21119" - Caddy just needs to
-	# get an upgraded connection to that same port, the path is only how the
-	# client picks which one).
-	handle /ws/id {
-		reverse_proxy rustdesk:21118
-	}
-
-	handle /ws/relay {
-		reverse_proxy rustdesk:21119
-	}
-
+	# Everything else, including the WebSocket routes the native Remote
+	# Management agent uses (/api/remote/agent-control, /api/remote/session/*
+	# - see remote-agent/PROTOCOL.md) goes through the frontend's own dev
+	# server, which proxies /api/* to the api service (frontend/vite.config.ts).
+	# Caddy's reverse_proxy passes WebSocket upgrades through transparently
+	# with no extra config - confirmed Caddy behavior, not something to
+	# special-case per path the way the old per-protocol RustDesk blocks
+	# needed. One same-origin path for everything, always - the lesson this
+	# app already paid for three times over getting RustDesk's iframe working
+	# (see git history on RemoteSession.tsx) applied from the start this time
+	# instead of rediscovered.
 	reverse_proxy frontend:5173
 }
-$alt_port_block
 EOF
 }
 

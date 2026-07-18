@@ -7,7 +7,11 @@ export default defineConfig({
     host: true,
     port: 5173,
     proxy: {
-      "/api": "http://api:8000",
+      // ws: true - the native Remote Management agent's control channel and
+      // the operator's session channel are both WebSocket routes under
+      // /api/remote/* (see remote-agent/PROTOCOL.md); the plain string form
+      // doesn't reliably proxy WS upgrades.
+      "/api": { target: "http://api:8000", ws: true, changeOrigin: true },
     },
   },
 });

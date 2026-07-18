@@ -39,7 +39,6 @@ class ManagedHostRead(BaseModel):
     # enrollment too rather than special-cased away - same RBAC gate
     # either way, nothing sensitive enough to warrant hiding it.
     enroll_token: str
-    rustdesk_id: str | None
     last_seen_at: datetime | None
     created_at: datetime
     rdp_username: str | None
@@ -57,18 +56,21 @@ class RemotePort(BaseModel):
 
 
 class RemoteStatus(BaseModel):
-    """Drives the Remote Management setup banner. `configured` = the server-side
-    secret is set; `reachable` = the rustdesk-api server answered a real login.
-    relay_host/ports tell the user exactly what to forward/allow (the one setup
-    step that can't be automated from inside a container). `app_public_url` is
-    the SAME value provision.py injects as an agent's SERVERURL - surfaced here
-    so the frontend's copy-paste install commands use this instance's one real
-    address (config.app_public_url, normally auto-set by setup.sh from this
-    host's LAN IP) instead of window.location.origin, which is whatever address
-    the operator's own browser happens to be pointed at right now (a port
-    forward, VPN, or otherwise) and is not guaranteed reachable from a target
-    machine on the LAN - confirmed live as a real source of enrollment
-    failures when the two diverged."""
+    """Drives the Remote Management setup banner. `configured` = a TURN
+    password is set; `reachable` = coturn and guacd both answered a real
+    probe. relay_host/ports tell the user exactly what to forward/allow for
+    non-LAN access (the one setup step that can't be automated from inside a
+    container - ICE always tries a direct LAN path first, so this only
+    matters for a host that isn't on the same network as this server).
+    `app_public_url` is the SAME value provision.py injects as an agent's
+    SERVERURL - surfaced here so the frontend's copy-paste install commands
+    use this instance's one real address (config.app_public_url, normally
+    auto-set by setup.sh from this host's LAN IP) instead of
+    window.location.origin, which is whatever address the operator's own
+    browser happens to be pointed at right now (a port forward, VPN, or
+    otherwise) and is not guaranteed reachable from a target machine on the
+    LAN - confirmed live as a real source of enrollment failures when the
+    two diverged, back in the RustDesk-based version of this stack."""
 
     configured: bool
     reachable: bool
@@ -76,26 +78,6 @@ class RemoteStatus(BaseModel):
     relay_host: str
     ports: list[RemotePort]
     app_public_url: str
-
-
-class ManagedHostSession(BaseModel):
-    """A ready-to-embed, time-limited web-client URL for one connect session
-    (see services/remote_desktop.py) - the frontend drops embed_url straight
-    into an iframe.
-
-    rustdesk_password is a real gap in webclient2's own share-token flow,
-    not a design choice: the client is SUPPOSED to auto-authenticate using
-    the password baked into the share token (the whole point of it), but
-    confirmed via its own source (ljw.js), the value it stores for that is
-    written under a key ('tmppwd') nothing in its actual connection logic
-    ever reads back - a real, currently unfixable-on-our-side upstream gap,
-    not a caching or encoding issue (both already ruled out live). Handing
-    the plaintext back here is the same trust boundary as
-    /rdp-credentials - already operator+ and audit-logged to reach this
-    endpoint at all."""
-
-    embed_url: str
-    rustdesk_password: str
 
 
 class ManagedHostRdpCredentials(BaseModel):
@@ -110,21 +92,23 @@ class ManagedHostRdpCredentials(BaseModel):
 
 
 class RemoteAgentConfig(BaseModel):
-    """Everything the agent installer needs to point a stock RustDesk client at
-    this instance's self-hosted server - fetched by the installer using its
-    enroll token, so nothing (relay address, server key) has to be copied by
-    hand. See remote-agent/Install-DeployCoreAgent.ps1."""
+    """Everything the agent installer needs to build its own ICE server list
+    for the Shadow WebRTC path - fetched using its enroll token, so nothing
+    has to be copied by hand. See remote-agent/PROTOCOL.md and
+    Install-DeployCoreAgent.ps1. No relay/server-key concept any more - the
+    agent's control channel connects straight to this same instance's own
+    origin (ServerUrl it already has), same as every other API call."""
 
-    relay_host: str
-    id_server: str
-    relay_server: str
-    key: str
+    turn_host: str
+    turn_port: int
+    turn_username: str
+    turn_password: str
 
 
-class ManagedHostEnrollRequest(BaseModel):
-    """Body of the agent's one-time enrollment call - both values are
-    generated locally by the agent on first run (see ManagedHost's own
-    docstring for why), never chosen by DeployCore."""
+class ManagedHostEnrollResponse(BaseModel):
+    """The one and only time agent_key is ever transmitted - DeployCore
+    mints it here (see ManagedHost's own docstring for why server-minted,
+    not agent-reported) and the agent persists it locally (DPAPI-protected),
+    presenting it on every control-channel connection afterward."""
 
-    rustdesk_id: str
-    rustdesk_key: str
+    agent_key: str

@@ -1697,47 +1697,51 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             <P>
               Remote Management lets you see and control an enrolled server or workstation's screen
               straight from the browser, from anywhere, with no file to download to connect and no VPN.
-              It shows the real machine console, including the Windows login screen, so you can sign in
-              or switch users exactly as if you were sitting at it, plus a Ctrl+Alt+Del button, shared
-              clipboard, and full-screen mode.
+              Two modes: <strong>Shadow</strong> mirrors the machine's active console live (unattended, no
+              separate login — you see the real Windows login screen and can sign in as if sitting at it),
+              and <strong>Connect</strong> opens a real, separate native RDP session, signed in with the
+              host's saved RDP credentials. Both share a clipboard with your computer and support
+              full-screen.
             </P>
             <P>
-              It works by running a lightweight agent (a stock RustDesk client, installed as a headless
-              Windows service and pointed at DeployCore's own bundled server) on each managed machine.
-              Everything is self-hosted alongside DeployCore, nothing goes through any third-party cloud.
+              It works by running a lightweight agent — <strong>DeployCore's own software</strong>, not a
+              rebranded third-party product — as a headless Windows service on each managed machine.
+              Everything is self-hosted alongside DeployCore: Shadow streams over WebRTC straight from the
+              agent to your browser, and Connect is bridged through a self-hosted Apache Guacamole
+              (<Code>guacd</Code> + FreeRDP) to the machine's own Windows RDP server. Nothing goes through
+              any third-party cloud.
             </P>
           </>
         ),
         deepDive: (
           <>
             <P>
-              <strong>Server side — automatic.</strong> The Remote Management server (RustDesk relay,
-              rendezvous, and web client) ships as part of the DeployCore stack in{" "}
-              <Code>docker compose</Code>. <Code>scripts/setup.sh</Code> generates its secrets, points it
-              at this host's detected address, and configures its admin account, so a normal install
+              <strong>Server side — automatic.</strong> <Code>coturn</Code> (STUN/TURN, for a host that
+              isn't on this server's own LAN) and <Code>guacd</Code> (Apache Guacamole's daemon) ship as
+              part of the DeployCore stack in <Code>docker compose</Code>. <Code>scripts/setup.sh</Code>{" "}
+              generates the TURN secret and points it at this host's detected address, so a normal install
               brings Remote Management up with no extra steps. If anything still needs attention, the
               Remote Management tab shows a banner that walks you through it.
             </P>
             <P>
-              <strong>The one thing that can't be automated: network reachability.</strong> Agents on the
-              same LAN as DeployCore work out of the box. For agents on other networks or the internet,
-              forward these ports (and allow them through any firewall) to the DeployCore host — the
-              Remote Management tab lists them for your specific address too:
+              <strong>The one thing that can't be automated: network reachability</strong> — and only for
+              a host that isn't on this server's own LAN. Shadow's WebRTC path always tries a direct
+              connection first, and Connect's RDP traffic is tunneled through the agent's own outbound
+              connection rather than dialed into directly, so the common case (every managed host on the
+              same network as DeployCore) needs nothing forwarded at all. For a host elsewhere, forward
+              these to the DeployCore host — the Remote Management tab lists them for your specific address
+              too:
             </P>
             <List
               items={[
-                <><Code>21115/TCP</Code> — NAT type test</>,
-                <><Code>21116/TCP+UDP</Code> — ID / rendezvous server (both protocols)</>,
-                <><Code>21117/TCP</Code> — relay server</>,
-                <><Code>21118/TCP</Code> and <Code>21119/TCP</Code> — web client (over WebSocket)</>,
-                <><Code>21114/TCP</Code> — web client and API (the browser loads the session from here)</>,
+                <><Code>3478/TCP+UDP</Code> — STUN/TURN (coturn)</>,
+                <><Code>49160–49200/UDP</Code> — TURN relay range</>,
               ]}
             />
             <P>
               You choose that address in <strong>Settings → Remote Management</strong> (not in files) — it
-              defaults to your LAN IP, and you set a public IP or domain there for internet access. How does an
-              agent know where to connect? At install time it asks DeployCore and bakes in whatever the address
-              is set to then, so set your public address before enrolling agents you want reachable from outside.
+              defaults to your LAN IP, and you set a public IP or domain there for internet access. It
+              takes effect immediately for new sessions, with nothing to restart.
             </P>
             <P>
               <strong>Enrolling a host.</strong> Two ways, both end in the machine showing up as enrolled
@@ -1759,18 +1763,19 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               ]}
             />
             <P>
-              <strong>Connecting.</strong> Click <strong>Connect</strong> on an enrolled host to open the
-              live screen in the browser. The toolbar has Ctrl+Alt+Del, Reconnect, and Fullscreen; the
-              clipboard is shared both ways while connected, so you can copy on your laptop and paste into
-              the server. Access is organization-scoped: you only see and connect to hosts in an
-              organization you have a role in.
+              <strong>Connecting.</strong> Click <strong>Shadow</strong> or <strong>Connect</strong> on an
+              enrolled host to open a session in the browser. The clipboard is shared both ways while
+              connected, so you can copy on your laptop and paste into the server. Access is
+              organization-scoped: you only see and connect to hosts in an organization you have a role in.
             </P>
             <P>
-              <strong>The agent's identity.</strong> The agent runs as a hidden background service with no
-              RustDesk UI on the machine. The <Code>.msi</Code> is built automatically by GitHub Actions on
-              every push that touches the agent and published to a rolling release; DeployCore auto-fetches
-              it on startup and registers it as the global "Remote Agent" App Asset, so the download button
-              and auto-install-on-deploy work with no manual upload. You can also grab it directly from{" "}
+              <strong>The agent's identity.</strong> The agent runs as a background service with its own
+              name and identity from the start — there's no foreign product's UI to hide, unlike an
+              earlier version of this feature. The <Code>.msi</Code> is built automatically by GitHub
+              Actions on every push that touches the agent and published to a rolling release; DeployCore
+              auto-fetches it on startup and registers it as the global "Remote Agent" App Asset, so the
+              download button and auto-install-on-deploy work with no manual upload. You can also grab it
+              directly from{" "}
               <a
                 href="https://github.com/santiagotoro2023/deploycore/releases/download/agent-latest/DeployCoreRemoteAgent.msi"
                 className="text-blue-600 hover:underline dark:text-blue-400"
@@ -1827,11 +1832,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               the DeployCore-branded tray companion and icon.
             </P>
             <P>
-              <strong>What the agent does on the machine:</strong> installs a stock RustDesk client as a
-              hidden Windows service (so it survives reboots and is reachable at the login screen), generates
-              a permanent access password locally, and reports its ID + password back to DeployCore. The
-              password is generated on the machine and only ever travels over the one HTTPS enrollment call —
-              DeployCore never chooses it.
+              <strong>What the agent does on the machine:</strong> installs DeployCore's own
+              <Code>DeployCoreAgent.exe</Code> as a Windows service (so it survives reboots and is reachable
+              at the login screen for Shadow), enables Remote Desktop for Connect mode, and enrolls with
+              DeployCore. Unlike an earlier version of this feature, there's no password generated on the
+              machine at all — DeployCore itself mints the one credential in this system (<Code>agent_key</Code>,
+              the agent's control-channel identity) at enrollment time and hands it to the agent once; an
+              operator never sees or types anything to establish a session.
             </P>
           </>
         ),
@@ -1842,64 +1849,59 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
         overview: (
           <>
             <P>
-              Agents on the same network as DeployCore work with no setup. To reach a machine on a different
-              network or over the internet, a few ports need to reach the DeployCore host — this is the one
-              part that can't be automated from inside a container. The Remote Management tab lists the exact
-              ports for your address; this is the reference.
+              A host on the same network as DeployCore needs nothing forwarded at all - Shadow's WebRTC
+              path always tries a direct connection first, and Connect's RDP traffic is tunneled through
+              the agent's own outbound connection rather than dialed into directly. Only a host that
+              genuinely isn't on this server's own LAN needs the ports below reachable, as a fallback path.
             </P>
           </>
         ),
         deepDive: (
           <>
             <P>
-              <strong>What's already automatic.</strong> <Code>scripts/setup.sh</Code> generates all secrets,
-              configures the server, and sets the relay address to this host's detected LAN IP — so agents on
-              the same network work immediately. It also detects your public IP and prints the internet-access
-              steps at the end of the install. The two things it cannot do for you are forwarding ports on your
-              router/firewall and choosing a public address; those are below.
+              <strong>What's already automatic.</strong> <Code>scripts/setup.sh</Code> generates the TURN
+              secret and sets its address to this host's detected LAN IP — so same-network hosts work
+              immediately, with nothing else to configure. The two things it cannot do for you are
+              forwarding ports on your router/firewall and choosing a public address, and only for a host
+              that isn't on this network; those are below.
             </P>
             <P>
               <strong>You set the public address in the app, not in files.</strong> Go to{" "}
-              <strong>Settings → Remote Management</strong>, enter your public IP or domain, and click{" "}
-              <strong>Apply</strong>. DeployCore updates its config and restarts the relay servers for you — no{" "}
-              <Code>.env</Code> editing. (The default is your LAN IP.)
+              <strong>Settings → Remote Management</strong>, enter your public IP or domain, and save.
+              Takes effect immediately for new sessions — nothing to restart, no <Code>.env</Code> editing.
+              (The default is your LAN IP.)
             </P>
             <P>
-              <strong>The ports.</strong> All of these must reach the DeployCore host from wherever the agents
-              are:
+              <strong>The ports</strong> (coturn's STUN/TURN — the only network service this feature runs
+              that a browser or agent ever dials directly; <Code>guacd</Code> is internal-only, nothing to
+              forward for it):
             </P>
             <List
               items={[
-                <><Code>21115/TCP</Code> — NAT type test</>,
-                <><Code>21116/TCP and 21116/UDP</Code> — ID / rendezvous server (both are required)</>,
-                <><Code>21117/TCP</Code> — relay server</>,
-                <><Code>21118/TCP</Code> — web client, ID over WebSocket</>,
-                <><Code>21119/TCP</Code> — web client, relay over WebSocket</>,
-                <><Code>21114/TCP</Code> — web client + API; the browser loads the live session from here</>,
+                <><Code>3478/TCP+UDP</Code> — STUN/TURN</>,
+                <><Code>49160–49200/UDP</Code> — TURN relay range</>,
               ]}
             />
             <P>
-              <strong>Scenario A — DeployCore behind a home/office router (NAT).</strong>
+              <strong>Scenario A — DeployCore behind a home/office router (NAT), a host elsewhere.</strong>
             </P>
             <Steps
               items={[
-                <>In your router admin, add port-forwarding rules sending <Code>21114–21119 TCP</Code> and{" "}
-                  <Code>21116 UDP</Code> to this host's LAN IP.</>,
-                <>Find your public IP (the installer prints it; or visit a "what's my IP" site) — or use a
-                  domain pointed at it.</>,
-                <>In <strong>Settings → Remote Management</strong>, enter that public IP/domain and click{" "}
-                  <strong>Apply</strong>.</>,
+                <>In your router admin, add port-forwarding rules sending <Code>3478 TCP+UDP</Code> and{" "}
+                  <Code>49160–49200 UDP</Code> to this host's LAN IP.</>,
+                <>Find your public IP (visit a "what's my IP" site) — or use a domain pointed at it.</>,
+                <>In <strong>Settings → Remote Management</strong>, enter that public IP/domain.</>,
               ]}
             />
             <P>
-              <strong>Scenario B — DeployCore on a cloud VM (AWS/Azure/GCP/VPS).</strong>
+              <strong>Scenario B — DeployCore on a cloud VM (AWS/Azure/GCP/VPS), a host elsewhere.</strong>
             </P>
             <Steps
               items={[
-                <>In the provider's firewall / security group, allow inbound <Code>21114–21119 TCP</Code> and{" "}
-                  <Code>21116 UDP</Code> (plus <Code>443</Code> for the web UI).</>,
+                <>In the provider's firewall / security group, allow inbound <Code>3478 TCP+UDP</Code> and{" "}
+                  <Code>49160–49200 UDP</Code> (plus <Code>443</Code> for the web UI).</>,
                 <>In <strong>Settings → Remote Management</strong>, set the host to the VM's public IP or a
-                  domain pointed at it, and click <strong>Apply</strong>.</>,
+                  domain pointed at it.</>,
               ]}
             />
             <P>
@@ -1909,14 +1911,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               changing.
             </P>
             <P>
-              <strong>Note on "works from the internet but not from the LAN".</strong> Some routers don't route
-              a public address back to a machine inside the same network (no "NAT hairpin"). If local browsers
-              or agents can't reach the public address, add a local DNS override, or keep the LAN IP for local
-              use — the agents themselves connect fine from outside either way.
-            </P>
-            <P>
-              You don't have to memorize any of this — the banner on the Remote Management tab shows the live
-              port list for your host and turns green once the server is reachable.
+              You don't have to memorize any of this — the banner on the Remote Management tab shows the
+              live port list for your host and turns green once <Code>guacd</Code> is reachable.
             </P>
           </>
         ),
@@ -1927,31 +1923,38 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
         overview: (
           <>
             <P>
-              Click <strong>Connect</strong> on any enrolled host to open its live screen in the browser —
-              the real console, including the Windows login screen before anyone signs in.
+              Click <strong>Shadow</strong> to mirror an enrolled host's active console live, or{" "}
+              <strong>Connect</strong> to open a real, separate native RDP session signed in with its saved
+              RDP credentials.
             </P>
           </>
         ),
         deepDive: (
           <>
-            <P>The session toolbar gives you:</P>
+            <P>
+              <strong>Shadow</strong> mirrors whatever's already on screen, unattended — no separate login,
+              you see the real console including the Windows login screen before anyone signs in, exactly
+              as if sitting at the machine.
+            </P>
+            <P>
+              <strong>Connect</strong> opens a genuinely separate Windows login (its own desktop session),
+              auto-authenticated with the host's saved RDP username/password (set on the host's Edit
+              dialog) — the same native RDP resizing, clipboard, and quality you'd get sitting at a real RDP
+              client, just in a browser tab.
+            </P>
+            <P>The toolbar gives you:</P>
             <List
               items={[
                 <><strong>Ctrl+Alt+Del</strong> — send the secure attention sequence (e.g. to reach the
-                  Windows login/lock screen or Task Manager).</>,
-                <><strong>Fullscreen</strong> — expand the remote screen to fill your browser/display, like a
-                  VNC or ESXi console.</>,
+                  Windows login/lock screen or Task Manager) - a browser can never send this as a real
+                  keyboard shortcut, so it's always an explicit button in both modes.</>,
+                <><strong>Fullscreen</strong> — expand the remote screen to fill your browser/display.</>,
                 <><strong>Reconnect</strong> — re-establish the session (starts a fresh secure link).</>,
                 <><strong>Shared clipboard</strong> — copy on your computer and paste into the remote machine,
                   and vice-versa, automatically while connected.</>,
+                <><strong>Credentials</strong> (Connect only) — see/copy the RDP username and password in use.</>,
               ]}
             />
-            <P>
-              <strong>Logging in / switching users.</strong> Because the agent runs as a service, you see the
-              real console even at the Windows login screen — sign in, switch users, or approve a UAC prompt
-              exactly as if you were sitting at the machine, without needing credentials to establish the
-              connection first.
-            </P>
             <P>
               <strong>Who can connect.</strong> Access is organization-scoped: you only see and connect to
               hosts in an organization you hold a role in (operator or above to connect). Nothing about a
@@ -1974,31 +1977,13 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
         deepDive: (
           <>
             <P>
-              <strong>Banner: "Finish setting up Remote Management" / server not reachable.</strong> The
-              RustDesk server isn't up or DeployCore can't log into it. If you installed with{" "}
-              <Code>scripts/setup.sh</Code> this is normally automatic — re-run it. Otherwise bring the
-              service up and set its admin password (the banner shows this command):
+              <strong>Banner: "Finish setting up Remote Management" / daemon not reachable.</strong>{" "}
+              <Code>guacd</Code> isn't up, or the TURN password isn't set. If you installed with{" "}
+              <Code>scripts/setup.sh</Code> this is normally automatic — re-run it, or bring the stack up
+              yourself:
             </P>
             <P>
-              <Code>{`docker compose up -d rustdesk`}</Code>
-            </P>
-            <P>
-              <Code>{`docker compose exec -w /app rustdesk ./apimain reset-admin-pwd "$(grep '^RUSTDESK_ADMIN_PASSWORD=' .env | cut -d= -f2-)"`}</Code>
-            </P>
-            <P>
-              <strong>Banner mentions a CAPTCHA, "验证码错误", or a login error right after a fresh
-              install.</strong> The RustDesk server blocks repeated failed admin logins from the same
-              address (3 failed attempts in 5 minutes requires a CAPTCHA DeployCore has no way to solve) -
-              easy to trip by reloading the Remote Management tab a few times in the first minute after
-              install, before the admin password sync has landed. It clears itself (the counter lives in
-              the server's memory, nothing persists), fastest via:
-            </P>
-            <P>
-              <Code>{`docker compose restart rustdesk`}</Code>
-            </P>
-            <P>
-              Reload the tab afterward. DeployCore now caches this check for 30 seconds specifically so
-              ordinary page reloads can't trip this again.
+              <Code>{`docker compose up -d --build`}</Code>
             </P>
             <P>
               <strong>A host stays "Pending", never "Enrolled".</strong> The agent installed but couldn't
@@ -2015,15 +2000,21 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
             </P>
             <P>
               <strong>Can connect on the LAN but not from outside.</strong> A ports/firewall issue — see
-              "Network &amp; firewall setup". Confirm all of <Code>21114–21119</Code> (TCP, plus UDP on
-              21116) reach the host and that <Code>RUSTDESK_RELAY_HOST</Code> is your externally-reachable
-              address, not a LAN IP.
+              "Network &amp; firewall setup". Confirm <Code>3478</Code> (TCP+UDP) and the{" "}
+              <Code>49160–49200</Code> UDP relay range reach the host, and that the Remote Management host
+              setting is your externally-reachable address, not a LAN IP.
             </P>
             <P>
-              <strong>Session view stays black or won't load.</strong> Use <strong>Reconnect</strong>. If it
-              persists, the host may be offline or the agent service stopped — check the host is powered on
-              and reachable; the agent service ("DeployCore Remote Management Agent" in services.msc) should
-              be running.
+              <strong>Shadow's screen stays black or won't load.</strong> Use <strong>Reconnect</strong>. If
+              it persists, the host may be offline or the agent service stopped — check the host is powered
+              on and reachable; the "DeployCore Remote Management Agent" service in services.msc should be
+              running.
+            </P>
+            <P>
+              <strong>Connect fails or won't authenticate.</strong> Confirm Remote Desktop is enabled on the
+              host (the installer does this automatically, but a group policy can re-disable it) and that
+              the saved RDP username/password on the host's Edit dialog are current — a changed Windows
+              password needs updating there too.
             </P>
           </>
         ),

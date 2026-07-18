@@ -1,9 +1,26 @@
-import { ArrowLeft, ClipboardCheck, Copy, KeySquare, Loader2, Maximize, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Copy, Keyboard, KeySquare, Loader2, Maximize, RefreshCw, X } from "lucide-react";
+// Namespace import, not a default import: the ambient declaration below
+// uses `export =` (matching the real package's CommonJS shape), and this
+// tsconfig has no esModuleInterop set - `import * as X` is the form that
+// works correctly against `export =` regardless of that flag.
+import * as Guacamole from "guacamole-common-js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, getToken } from "../api/client";
 import { ManagedHost, ManagedHostRdpCredentials } from "../api/types";
 import { useOrg } from "../state/org";
+
+// Guacamole.Client's own numeric connection states (its source has no
+// exported enum for these, just documents the numbers) - 3 is
+// STATE_CONNECTED, the only one this page acts on.
+const GUAC_STATE_CONNECTED = 3;
+
+interface IceServersResponse {
+  turn_host: string;
+  turn_port: number;
+  turn_username: string;
+  turn_password: string;
+}
 
 export default function RemoteSession() {
   const { id } = useParams<{ id: string }>();
@@ -13,14 +30,26 @@ export default function RemoteSession() {
   const isConnectMode = searchParams.get("mode") === "connect";
   const { selectedOrgId } = useOrg();
   const [host, setHost] = useState<ManagedHost | null>(null);
-  const [embedUrl, setEmbedUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
   const [rdpCreds, setRdpCreds] = useState<ManagedHostRdpCredentials | null>(null);
-  const [rustdeskPassword, setRustdeskPassword] = useState<string | null>(null);
   const [showCredsPanel, setShowCredsPanel] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  // Shadow mode
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const dataChannelRef = useRef<RTCDataChannel | null>(null);
+  // Connect mode
+  const guacClientRef = useRef<Guacamole.Client | null>(null);
+  const guacMouseRef = useRef<Guacamole.Mouse | null>(null);
+  const guacKeyboardRef = useRef<Guacamole.Keyboard | null>(null);
+  // Shared - the bordered viewer box both modes render into
+  const viewerRef = useRef<HTMLDivElement>(null);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -28,23 +57,269 @@ export default function RemoteSession() {
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
+  const teardown = useCallback(() => {
+    wsRef.current?.close();
+    wsRef.current = null;
+    pcRef.current?.close();
+    pcRef.current = null;
+    dataChannelRef.current = null;
+    guacClientRef.current?.disconnect();
+    guacClientRef.current = null;
+    guacMouseRef.current = null;
+    guacKeyboardRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (viewerRef.current) viewerRef.current.replaceChildren();
+    setSessionReady(false);
+  }, []);
+
+  // Physical, layout-independent key identity (event.code, e.g. "KeyA",
+  // "Enter") - not event.key. The agent maps this to a Windows virtual-key
+  // code itself (see remote-agent/PROTOCOL.md) - nothing here is
+  // locale-specific.
+  const sendDataChannel = useCallback((message: Record<string, unknown>) => {
+    const channel = dataChannelRef.current;
+    if (channel && channel.readyState === "open") channel.send(JSON.stringify(message));
+  }, []);
+
+  // A browser can never actually intercept the real Ctrl+Alt+Del combo (the
+  // OS reserves it), so both modes need an explicit send instead of relying
+  // on a keyboard shortcut. Shadow: the agent's own "cad" data-channel
+  // message (SendSAS - see PROTOCOL.md). Connect: Guacamole/FreeRDP's
+  // documented convention for a synthetic Ctrl+Alt+Del - press Control_L,
+  // Alt_L, Delete as X11 keysyms, then release in reverse order.
+  const sendCtrlAltDel = useCallback(() => {
+    if (isConnectMode) {
+      const client = guacClientRef.current;
+      if (!client) return;
+      const CTRL_L = 0xffe3;
+      const ALT_L = 0xffe9;
+      const DELETE = 0xffff;
+      client.sendKeyEvent(1, CTRL_L);
+      client.sendKeyEvent(1, ALT_L);
+      client.sendKeyEvent(1, DELETE);
+      client.sendKeyEvent(0, DELETE);
+      client.sendKeyEvent(0, ALT_L);
+      client.sendKeyEvent(0, CTRL_L);
+    } else {
+      sendDataChannel({ t: "cad" });
+    }
+  }, [isConnectMode, sendDataChannel]);
+
+  const wireShadowInput = useCallback(() => {
+    const container = viewerRef.current;
+    const video = videoRef.current;
+    if (!container || !video) return () => {};
+
+    const toRemoteCoords = (clientX: number, clientY: number) => {
+      const rect = video.getBoundingClientRect();
+      const vw = video.videoWidth || rect.width;
+      const vh = video.videoHeight || rect.height;
+      return {
+        x: Math.round(((clientX - rect.left) / rect.width) * vw),
+        y: Math.round(((clientY - rect.top) / rect.height) * vh),
+      };
+    };
+
+    const onMouseMove = (e: MouseEvent) => sendDataChannel({ t: "mousemove", ...toRemoteCoords(e.clientX, e.clientY) });
+    const onMouseDown = (e: MouseEvent) => sendDataChannel({ t: "mousedown", button: e.button });
+    const onMouseUp = (e: MouseEvent) => sendDataChannel({ t: "mouseup", button: e.button });
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      sendDataChannel({ t: "wheel", dy: e.deltaY });
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      sendDataChannel({ t: "keydown", code: e.code });
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      e.preventDefault();
+      sendDataChannel({ t: "keyup", code: e.code });
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text");
+      if (text) sendDataChannel({ t: "clipboard", text });
+    };
+
+    container.addEventListener("mousemove", onMouseMove);
+    container.addEventListener("mousedown", onMouseDown);
+    container.addEventListener("mouseup", onMouseUp);
+    container.addEventListener("wheel", onWheel, { passive: false });
+    container.addEventListener("paste", onPaste);
+    container.tabIndex = 0;
+    container.addEventListener("keydown", onKeyDown);
+    container.addEventListener("keyup", onKeyUp);
+
+    return () => {
+      container.removeEventListener("mousemove", onMouseMove);
+      container.removeEventListener("mousedown", onMouseDown);
+      container.removeEventListener("mouseup", onMouseUp);
+      container.removeEventListener("wheel", onWheel);
+      container.removeEventListener("paste", onPaste);
+      container.removeEventListener("keydown", onKeyDown);
+      container.removeEventListener("keyup", onKeyUp);
+    };
+  }, [sendDataChannel]);
+
+  const connectShadow = useCallback(
+    async (hostId: string) => {
+      const iceServers = await api.get<IceServersResponse>(`/organizations/${selectedOrgId}/managed-hosts/ice-servers`);
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: `stun:${iceServers.turn_host}:${iceServers.turn_port}` },
+          {
+            urls: `turn:${iceServers.turn_host}:${iceServers.turn_port}`,
+            username: iceServers.turn_username,
+            credential: iceServers.turn_password,
+          },
+        ],
+      });
+      pcRef.current = pc;
+
+      const wsProto = location.protocol === "https:" ? "wss" : "ws";
+      const token = getToken() ?? "";
+      const ws = new WebSocket(
+        `${wsProto}://${location.host}/api/organizations/${selectedOrgId}/managed-hosts/${hostId}/session` +
+          `?mode=shadow&token=${encodeURIComponent(token)}`
+      );
+      wsRef.current = ws;
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(
+            JSON.stringify({
+              kind: "ice",
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+            })
+          );
+        }
+      };
+      pc.ontrack = (event) => {
+        if (videoRef.current) videoRef.current.srcObject = event.streams[0];
+      };
+      pc.ondatachannel = (event) => {
+        dataChannelRef.current = event.channel;
+        event.channel.onopen = () => setSessionReady(true);
+        event.channel.onmessage = (msg) => {
+          try {
+            const data = JSON.parse(msg.data);
+            if (data.t === "clipboard" && typeof data.text === "string") {
+              navigator.clipboard.writeText(data.text).catch(() => {});
+            }
+          } catch {
+            // Not a message this page understands - ignore rather than throw.
+          }
+        };
+      };
+
+      ws.onmessage = async (event) => {
+        let message: { type?: string; kind?: string; sdp?: string; candidate?: string; sdpMid?: string; sdpMLineIndex?: number };
+        try {
+          message = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (message.type !== "signal") return;
+        if (message.kind === "offer" && message.sdp) {
+          await pc.setRemoteDescription({ type: "offer", sdp: message.sdp });
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({ kind: "answer", sdp: answer.sdp }));
+        } else if (message.kind === "ice" && message.candidate) {
+          try {
+            await pc.addIceCandidate({
+              candidate: message.candidate,
+              sdpMid: message.sdpMid,
+              sdpMLineIndex: message.sdpMLineIndex,
+            });
+          } catch {
+            // A candidate arriving before setRemoteDescription is a known,
+            // harmless race - ICE gathers plenty more either way.
+          }
+        }
+      };
+      ws.onerror = () => setError("Could not reach the remote session.");
+      ws.onclose = () => setSessionReady(false);
+    },
+    [selectedOrgId]
+  );
+
+  const connectRdp = useCallback(
+    (hostId: string) => {
+      const wsProto = location.protocol === "https:" ? "wss" : "ws";
+      const token = getToken() ?? "";
+      const width = viewerRef.current?.clientWidth || 1280;
+      const height = viewerRef.current?.clientHeight || 800;
+      const tunnel = new Guacamole.WebSocketTunnel(
+        `${wsProto}://${location.host}/api/organizations/${selectedOrgId}/managed-hosts/${hostId}/session` +
+          `?mode=connect&token=${encodeURIComponent(token)}&w=${width}&h=${height}`
+      );
+      const client = new Guacamole.Client(tunnel);
+      guacClientRef.current = client;
+
+      client.onerror = (status) => setError(status.message || "The remote desktop session failed.");
+      client.onstatechange = (state) => {
+        if (state === GUAC_STATE_CONNECTED) setSessionReady(true);
+      };
+      client.onclipboard = (stream, mimetype) => {
+        if (!mimetype.startsWith("text/")) return;
+        const reader = new Guacamole.StringReader(stream);
+        let text = "";
+        reader.ontext = (chunk) => {
+          text += chunk;
+        };
+        reader.onend = () => {
+          navigator.clipboard.writeText(text).catch(() => {});
+        };
+      };
+
+      const display = client.getDisplay();
+      if (viewerRef.current) {
+        viewerRef.current.replaceChildren(display.getElement());
+      }
+      client.connect();
+
+      const displayElement = display.getElement();
+      const mouse = new Guacamole.Mouse(displayElement);
+      mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state) => client.sendMouseState(state);
+      guacMouseRef.current = mouse;
+
+      const keyboard = new Guacamole.Keyboard(document);
+      keyboard.onkeydown = (keysym) => client.sendKeyEvent(1, keysym);
+      keyboard.onkeyup = (keysym) => client.sendKeyEvent(0, keysym);
+      guacKeyboardRef.current = keyboard;
+
+      const onPaste = (e: ClipboardEvent) => {
+        const text = e.clipboardData?.getData("text");
+        if (!text) return;
+        const stream = client.createClipboardStream("text/plain");
+        const writer = new Guacamole.StringWriter(stream);
+        writer.sendText(text);
+        writer.sendEnd();
+      };
+      displayElement.addEventListener("paste", onPaste);
+    },
+    [selectedOrgId]
+  );
+
   const connect = useCallback(async () => {
     if (!selectedOrgId || !id) return;
     setError(null);
     setConnecting(true);
-    setEmbedUrl(null);
+    teardown();
     try {
-      const session = await api.post<{ embed_url: string; rustdesk_password: string }>(
-        `/organizations/${selectedOrgId}/managed-hosts/${id}/session`
-      );
-      setEmbedUrl(session.embed_url);
-      setRustdeskPassword(session.rustdesk_password);
+      if (isConnectMode) {
+        connectRdp(id);
+      } else {
+        await connectShadow(id);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not start the remote session.");
     } finally {
       setConnecting(false);
     }
-  }, [selectedOrgId, id]);
+  }, [selectedOrgId, id, isConnectMode, connectRdp, connectShadow, teardown]);
 
   useEffect(() => {
     if (!selectedOrgId || !id) return;
@@ -61,277 +336,57 @@ export default function RemoteSession() {
       });
     return () => {
       cancelled = true;
+      teardown();
     };
-  }, [selectedOrgId, id, connect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrgId, id]);
 
-  // Redeeming the share_token is handled entirely by the embedded client's
-  // own client-side JS (lejianwen/rustdesk-api-web's ljw.js, confirmed via
-  // its source) - it registers the peer into that page's localStorage
-  // (peers[id]), but does NOT navigate anywhere itself, landing on the
-  // address book tab with one extra manual click needed. The SAME app's
-  // own admin panel opens an already-known peer via a `#/<id>` hash route
-  // instead (confirmed in its toWebClientLink()) - now that this session
-  // is same-origin, we drive that exact navigation ourselves.
-  //
-  // Redeeming the token also writes a 'tmppwd' field onto that same peer
-  // object, clearly INTENDED to make the connection auto-authenticate -
-  // confirmed against the same source, though, nothing in the client's own
-  // connection logic ever reads that specific key back (its only other use
-  // is an unrelated live-connection option), so it silently does nothing
-  // and the client falls back to prompting for a password regardless of
-  // what was sent. The one thing that DOES skip the prompt, confirmed by
-  // reading the ACTUAL working "remembered peer" path a few lines earlier
-  // in the same file (getServerConf's peer-populating loop), is a peer
-  // object with `password` (not `tmppwd`) set to
-  // `stringToUint8Array(atob(x)).toString()` of the real password, plus
-  // `remember: true`. Since this session is genuinely same-origin, we can
-  // reach into the iframe's own localStorage directly and patch that onto
-  // the SAME peer object ljw.js already created, using the identical
-  // transform (our passwords are ASCII-safe base64-alphabet strings, so a
-  // straight charCodeAt-per-character walk produces the same byte values
-  // atob() would) - closing the actual gap instead of working around it.
+  // Attaches Shadow's own input handling once the data channel is actually
+  // open - Connect mode wires its own mouse/keyboard directly in
+  // connectRdp() above (Guacamole.Mouse/Keyboard need the display element,
+  // which doesn't exist until client.connect() has run).
   useEffect(() => {
-    if (!embedUrl || !host?.rustdesk_id || !rustdeskPassword) return;
-    const timer = setTimeout(() => {
-      const win = iframeRef.current?.contentWindow;
-      if (!win) return;
-      try {
-        const peers = JSON.parse(win.localStorage.getItem("peers") || "{}");
-        const peer = peers[host.rustdesk_id];
-        if (peer) {
-          peer.password = Array.from(rustdeskPassword, (c) => c.charCodeAt(0)).join(",");
-          peer.remember = true;
-          win.localStorage.setItem("peers", JSON.stringify(peers));
-        }
-      } catch {
-        // Best-effort - the visible password panel is the fallback either way.
-      }
-      win.location.hash = `/${host.rustdesk_id}`;
-    }, 1500);
-    return () => clearTimeout(timer);
-  }, [embedUrl, host?.rustdesk_id, rustdeskPassword]);
+    if (isConnectMode || !sessionReady) return;
+    return wireShadowInput();
+  }, [isConnectMode, sessionReady, wireShadowInput]);
 
-  // Common, real display-adapter resolutions, widest-first within each
-  // aspect family - confirmed against RustDesk's own agent source
-  // (server/connection.rs's change_resolution): for a non-virtual display
-  // (every VM here - RustDesk's own "IDD" virtual-display driver is a
-  // separate, not-installed-by-us component), this calls straight into
-  // Windows' real ChangeDisplaySettingsEx API with whatever width/height it
-  // was given. That API only accepts a mode the display adapter actually
-  // publishes as supported - never an arbitrary exact pixel size - and
-  // REJECTS anything else. A VM's virtual display adapter (VMware SVGA,
-  // same as any other VM's) only ever publishes a fixed list of standard
-  // modes, not the literal odd pixel dimensions a browser iframe happens
-  // to render at (1847x931, say) - so every request so far was being
-  // silently rejected by Windows itself, logged only on the AGENT's own
-  // machine, completely invisible from here. Snapping to the nearest real
-  // mode instead of sending the exact size fixes that at the source.
-  const COMMON_RESOLUTIONS: [number, number][] = [
-    [3840, 2160], [2560, 1440], [2560, 1080], [1920, 1200], [1920, 1080],
-    [1768, 992], [1680, 1050], [1600, 1200], [1600, 900], [1440, 900],
-    [1366, 768], [1280, 1024], [1280, 800], [1280, 720], [1152, 864],
-    [1024, 768], [800, 600],
-  ];
-  function nearestResolution(width: number, height: number): [number, number] {
-    const targetAspect = width / height;
-    // Smallest option, not the largest - the fallback for a viewport
-    // smaller than every listed mode (every entry gets skipped by the
-    // w>width/h>height guard below) should undershoot, not overshoot.
-    let best = COMMON_RESOLUTIONS[COMMON_RESOLUTIONS.length - 1];
-    let bestScore = Infinity;
-    for (const [w, h] of COMMON_RESOLUTIONS) {
-      if (w > width || h > height) continue; // never request bigger than the actual viewport - would need scrolling
-      const aspectDiff = Math.abs(w / h - targetAspect);
-      const areaDiff = (width * height - w * h) / (width * height);
-      const score = aspectDiff * 5 + areaDiff;
-      if (score < bestScore) {
-        bestScore = score;
-        best = [w, h];
-      }
-    }
-    return best;
-  }
-
-  // Two DIFFERENT things, both needed, confirmed against RustDesk's own
-  // Flutter source (flutter/lib/web/bridge.dart) rather than assumed:
-  //
-  // 1. sessionSetViewStyle sets 'adaptive' (flutter/lib/consts.dart's
-  //    kRemoteViewStyleAdaptive) instead of 'original' - VISUAL scaling of
-  //    whatever the remote resolution already is, down/up to fit the
-  //    container.
-  // 2. sessionChangeResolution actually changes the VM's own display
-  //    resolution to the nearest real supported mode (see
-  //    nearestResolution above) - a real, separate feature (bridge.dart's
-  //    changeResolution), confirmed genuinely present in the web build.
-  //
-  // Both go through the exact same mechanism: a plain global JS function,
-  // `window.setByName(name, jsonEncode(value))` - not a postMessage API -
-  // so same-origin access lets us call them directly, the same way the
-  // embedded app's own UI would. display: 0 assumes a single monitor,
-  // true for every VM this connects to.
-  //
-  // Confirmed against RustDesk's OWN actual production bundle
-  // (rustdesk.com/web/js/dist/index.js - lejianwen's webclient2 is a
-  // straight, unmodified copy of it, confirmed via its own source and its
-  // own maintainer's own words in lejianwen/rustdesk-api#60: "I don't have
-  // the source code either... comes from rustdesk.com/web/") that these two
-  // calls are gated by the SAME underlying session object (`curConn`) in
-  // two DIFFERENT ways:
-  //   case "option:session": curConn.setOption(...)             <- THROWS if curConn is null
-  //   case "change_resolution": curConn==null || curConn.change...  <- SILENTLY NO-OPS if curConn is null
-  // This is the actual, verified bug in the previous version of this fix:
-  // it marked a resolution as "already sent" (lastResolutionRef) the
-  // moment it was ATTEMPTED, including the very first attempt - when
-  // curConn is essentially always still null. change_resolution failed
-  // completely silently there (no throw, nothing to catch), so the dedup
-  // logic then refused to ever retry that exact value again, even once the
-  // session became ready seconds later. Only mark it "sent" when
-  // option:session's throw/no-throw - a reliable proxy, since both are set
-  // by the same object in the same JS tick - confirms curConn is actually
-  // there, so change_resolution's call in the SAME invocation is a real
-  // one, not another silent no-op.
-  //
-  // change_resolution is also NOT idempotent the way the others are - it
-  // tears down and renegotiates the live video stream every time it's
-  // called, confirmed live as the actual cause of an earlier version of
-  // this fix repeatedly calling it on a blind timer: constant "WebSocket
-  // already CLOSING/CLOSED" churn, resolution never stable, and materially
-  // worse responsiveness, all from the SAME call meant to fix
-  // responsiveness. lastResolutionRef (now only updated on a CONFIRMED-live
-  // session) makes it fire once per actual target, not repeatedly for the
-  // same value.
-  const lastResolutionRef = useRef<string | null>(null);
-  // Confirmed live this ALSO needs a hard time-based throttle, not just the
-  // same-value dedup above: right after connect, the page's own layout can
-  // still be settling (fonts, scrollbars, initial reflow), so the iframe's
-  // measured size can genuinely cross between two different
-  // nearestResolution buckets a couple of times within the first second or
-  // two - each one is a genuinely DIFFERENT target, so the dedup correctly
-  // lets each through, and each one still tears down and rebuilds the
-  // video stream (confirmed live: repeated "WebSocket already CLOSING/
-  // CLOSED" even with the dedup fix in place). Capping how often an actual
-  // change_resolution call can go out, independent of how many times
-  // different values get computed, stops that regardless of the cause.
-  const lastResolutionAtRef = useRef(0);
-  const fitDisplayToWindow = useCallback(() => {
-    const win = iframeRef.current?.contentWindow as
-      | (Window & { setByName?: (n: string, v: string | number) => void })
-      | undefined;
-    const width = iframeRef.current?.clientWidth;
-    const height = iframeRef.current?.clientHeight;
-    if (!win?.setByName) return;
-    const trySet = (name: string, value: string | number) => {
-      try {
-        win.setByName!(name, value);
-      } catch {
-        // Session not ready yet - the retry loop below covers this.
-      }
-    };
-    let sessionReady = false;
-    try {
-      win.setByName("option:session", JSON.stringify({ name: "view_style", value: "adaptive" }));
-      sessionReady = true;
-    } catch {
-      // curConn not ready yet - change_resolution below would silently
-      // no-op too under this exact condition, so skip it entirely rather
-      // than wrongly marking it as sent.
-    }
-    if (sessionReady && width && height) {
-      const [w, h] = nearestResolution(width, height);
-      const key = `${w}x${h}`;
-      const now = Date.now();
-      if (lastResolutionRef.current !== key && now - lastResolutionAtRef.current > 3000) {
-        lastResolutionRef.current = key;
-        lastResolutionAtRef.current = now;
-        trySet("change_resolution", JSON.stringify({ display: 0, width: w, height: h }));
-      }
-    }
-    // Every managed host is reached over a LAN (agents only ever enroll
-    // against this instance's own relay, never the public internet), so
-    // bandwidth isn't the constraint default-tier RustDesk tunes for -
-    // 'best' (kRemoteImageQualityBest, flutter/lib/consts.dart) trades
-    // more bandwidth for less compression, and a higher FPS makes mouse
-    // movement and screen updates feel closer to actually sitting at the
-    // machine. Confirmed via the same source as everything else here
-    // (bridge.dart's sessionSetImageQuality/sessionSetCustomFps): both are
-    // plain top-level setByName calls, not wrapped in the 'option:session'
-    // JSON envelope the view-style/resolution calls use - image_quality
-    // takes the raw string, custom-fps a real number, not a string. Both
-    // idempotent/cheap - safe to keep calling on every retry.
-    trySet("image_quality", "best");
-    trySet("custom-fps", 30);
-  }, []);
-
-  // Confirmed live the embedded client's session object can still not
-  // exist 5+ seconds after embedUrl is set (a real connection, especially
-  // over a relay, can take longer than that to finish establishing) - 12
-  // attempts, 2s apart (24s total) gives that a fair chance without
-  // retrying forever. lastResolutionRef above (not this loop's own
-  // duration) is what actually prevents the resize-renegotiation churn -
-  // this loop existing at all is only for the "session not ready on the
-  // very first call" case.
+  // Keeps the remote screen matched to the viewer box's actual size -
+  // Shadow sends its own resize over the data channel (the agent applies it
+  // exactly, no snapping - see PROTOCOL.md); Connect uses Guacamole's own
+  // sendSize, which rides RDP's native Display Control channel for a real,
+  // live resize. Debounced since a resize drag fires this dozens of times a
+  // second.
   useEffect(() => {
-    if (!embedUrl || !host?.rustdesk_id) return;
-    lastResolutionRef.current = null;
-    lastResolutionAtRef.current = 0;
-    let attempts = 0;
-    const interval = setInterval(() => {
-      fitDisplayToWindow();
-      attempts += 1;
-      if (attempts >= 12) clearInterval(interval);
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [embedUrl, host?.rustdesk_id, fitDisplayToWindow]);
-
-  // Entering/leaving fullscreen is itself a big resize (a new window size
-  // to match, and apparently enough of a state change that the embedded
-  // client falls back to unscaled 'original' again too, the same reset
-  // that re-prompts for the password) - reapplying here covers both at
-  // once. Slightly longer than the connect-time delay above: needs the
-  // CSS fullscreen transition to have actually finished so the iframe's
-  // own clientWidth/clientHeight reflect the new size, not the old one.
-  useEffect(() => {
-    if (!embedUrl) return;
-    const timer = setTimeout(fitDisplayToWindow, 700);
-    return () => clearTimeout(timer);
-  }, [isFullscreen, embedUrl, fitDisplayToWindow]);
-
-  // Not just fullscreen - ANY resize of the viewer box (the browser window
-  // itself resizing, the sidebar collapsing, DevTools opening, whatever)
-  // should keep the remote resolution matched to it, the same way this
-  // page's own layout responds to its container rather than staying a
-  // fixed size. Debounced since a live resize drag fires this dozens of
-  // times a second and change_resolution is a real, non-free operation on
-  // the agent side, not free-of-cost CSS.
-  useEffect(() => {
-    if (!embedUrl || !iframeRef.current) return;
+    if (!sessionReady || !viewerRef.current) return;
     let debounce: ReturnType<typeof setTimeout>;
+    const apply = () => {
+      const el = viewerRef.current;
+      if (!el) return;
+      if (isConnectMode) guacClientRef.current?.sendSize(el.clientWidth, el.clientHeight);
+      else sendDataChannel({ t: "resize", w: el.clientWidth, h: el.clientHeight });
+    };
     const observer = new ResizeObserver(() => {
       clearTimeout(debounce);
-      debounce = setTimeout(fitDisplayToWindow, 500);
+      debounce = setTimeout(apply, 400);
     });
-    observer.observe(iframeRef.current);
+    observer.observe(viewerRef.current);
     return () => {
       clearTimeout(debounce);
       observer.disconnect();
     };
-  }, [embedUrl, fitDisplayToWindow]);
+  }, [sessionReady, isConnectMode, sendDataChannel]);
 
   // "Connect" mode only: fetch this host's saved RDP credentials once the
-  // session is up. No auto-type attempt (a prior postMessage-based one was
-  // removed) - confirmed alongside the RustDesk password fix above that
-  // webclient2 has no documented postMessage API to act on it at all, the
-  // same reason Ctrl+Alt+Del isn't sent that way either (its own in-frame
-  // toolbar already has a working one - use that instead). The copy
-  // buttons below are the one mechanism that actually works.
+  // session is up, for the credentials panel's copy buttons - the session
+  // itself auto-authenticates now (guacd gets them directly from the
+  // backend), this is just so an operator can see/copy the account in use.
   useEffect(() => {
-    if (!isConnectMode || !selectedOrgId || !id || !embedUrl) return;
+    if (!isConnectMode || !selectedOrgId || !id || !sessionReady) return;
     let cancelled = false;
     api
       .get<ManagedHostRdpCredentials>(`/organizations/${selectedOrgId}/managed-hosts/${id}/rdp-credentials`)
       .then((creds) => {
-        if (cancelled) return;
-        setRdpCreds(creds);
+        if (!cancelled) setRdpCreds(creds);
       })
       .catch(() => {
         if (!cancelled) setRdpCreds(null);
@@ -339,9 +394,7 @@ export default function RemoteSession() {
     return () => {
       cancelled = true;
     };
-  }, [isConnectMode, selectedOrgId, id, embedUrl]);
-
-  const [copied, setCopied] = useState<string | null>(null);
+  }, [isConnectMode, selectedOrgId, id, sessionReady]);
 
   async function copyToClipboard(value: string, key: string) {
     try {
@@ -349,9 +402,8 @@ export default function RemoteSession() {
     } catch {
       // navigator.clipboard needs a secure context AND page focus - both
       // usually true here, but silently rejects rather than throwing
-      // something visible if either isn't (e.g. focus lost to the iframe a
-      // moment before the click registers). document.execCommand('copy')
-      // is deprecated but still broadly supported and doesn't share either
+      // something visible if either isn't. document.execCommand('copy') is
+      // deprecated but still broadly supported and doesn't share either
       // requirement, so it's a real fallback, not dead code.
       const el = document.createElement("textarea");
       el.value = value;
@@ -371,17 +423,6 @@ export default function RemoteSession() {
     setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
   }
 
-  // Fullscreens the toolbar+viewer area, not just the iframe's own box -
-  // otherwise Fullscreen (which only renders the fullscreened element and
-  // its descendants) hid the credential panels' copy buttons entirely the
-  // moment it engaged, right when the embedded client's own connection
-  // state resets (a big resize) and re-prompts for the password those
-  // panels exist to answer. DeployCore's own toolbar/panels are then
-  // hidden WHILE fullscreen instead (isFullscreen, declared up top since
-  // the view-style effect above also needs it) - once requested, so a real
-  // password re-prompt in fullscreen just means pressing Escape once to
-  // reach the copy button, rather than never having anywhere to render at all.
-  const fullscreenRef = useRef<HTMLDivElement>(null);
   function toggleFullscreen() {
     if (document.fullscreenElement) {
       document.exitFullscreen();
@@ -390,22 +431,15 @@ export default function RemoteSession() {
     }
   }
 
-  const hasCreds =
-    !!rustdeskPassword || (isConnectMode && !!rdpCreds && (!!rdpCreds.username || !!rdpCreds.password));
+  const hasCreds = isConnectMode && !!rdpCreds && (!!rdpCreds.username || !!rdpCreds.password);
 
   return (
     <div className="flex h-full flex-col">
       {/* Fullscreens the toolbar + credential bar + viewer together, not
           just the viewer - Fullscreen only renders the fullscreened element
-          and its descendants, so fullscreening just the iframe's box hid
-          the credential bar's copy buttons entirely the moment fullscreen
-          engaged, right when the embedded client's own connection state
-          resets (a big resize) and re-prompts for the password that bar
-          exists to answer. The toolbar and credential bar are hidden WHILE
-          fullscreen instead (isFullscreen), for a clean view - both stay
-          reachable via Escape if that reset happens again. One combined
-          row (not a separate title row above it) - direct request to
-          maximize actual screen space over chrome. */}
+          and its descendants. The toolbar and credential bar are hidden
+          WHILE fullscreen instead (isFullscreen), for a clean view - both
+          stay reachable via Escape. */}
       <div ref={fullscreenRef} className="flex flex-1 flex-col bg-white dark:bg-neutral-950">
         {!isFullscreen && (
           <div className="mb-1.5 flex items-center gap-2">
@@ -438,8 +472,17 @@ export default function RemoteSession() {
                 )}
                 <button
                   className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
+                  title="Send Ctrl+Alt+Del"
+                  disabled={!sessionReady}
+                  onClick={sendCtrlAltDel}
+                >
+                  <Keyboard size={12} strokeWidth={1.75} />
+                  Ctrl+Alt+Del
+                </button>
+                <button
+                  className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
                   title="Fullscreen"
-                  disabled={!embedUrl}
+                  disabled={!sessionReady}
                   onClick={toggleFullscreen}
                 >
                   <Maximize size={12} strokeWidth={1.75} />
@@ -461,16 +504,6 @@ export default function RemoteSession() {
 
         {!isFullscreen && showCredsPanel && hasCreds && (
           <div className="mb-2 flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs dark:border-blue-900 dark:bg-blue-950">
-            {rustdeskPassword && (
-              <button
-                className="flex shrink-0 items-center gap-1 rounded-md border border-blue-300 bg-white px-1.5 py-0.5 text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-neutral-900 dark:text-blue-400 dark:hover:bg-neutral-800"
-                onClick={() => copyToClipboard(rustdeskPassword, "rustdesk-password")}
-                title="Copy RustDesk password"
-              >
-                <Copy size={11} strokeWidth={1.75} />
-                {copied === "rustdesk-password" ? "Copied" : "••••••••"}
-              </button>
-            )}
             {isConnectMode && rdpCreds?.username && (
               <button
                 className="flex shrink-0 items-center gap-1 rounded-md border border-blue-300 bg-white px-1.5 py-0.5 text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-neutral-900 dark:text-blue-400 dark:hover:bg-neutral-800"
@@ -501,34 +534,40 @@ export default function RemoteSession() {
           </div>
         )}
 
-        <div className="flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-900 dark:border-neutral-800">
-          {error && <p className="p-4 text-center text-sm text-red-400">{error}</p>}
+        <div className="relative flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-900 dark:border-neutral-800">
+          {/* Unconditionally mounted from the component's very first render
+              (never gated on host/sessionReady) - connectShadow/connectRdp
+              need a real, already-attached DOM node the moment they start
+              wiring up async callbacks (ontrack, onstatechange, etc.), not
+              one that only appears a render later once `host` has loaded.
+              Every other state below layers on top as an absolute overlay
+              instead of replacing it. */}
+          <div ref={viewerRef} className="h-full w-full">
+            {!isConnectMode && <video ref={videoRef} autoPlay muted className="h-full w-full object-contain" />}
+          </div>
+
+          {error && (
+            <p className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-red-400">
+              {error}
+            </p>
+          )}
           {!error && !host && (
-            <div className="flex flex-col items-center gap-2 text-neutral-400">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-neutral-400">
               <Loader2 size={20} className="animate-spin" strokeWidth={1.75} />
               <p className="text-sm">Loading host...</p>
             </div>
           )}
           {!error && host && !host.enrolled && (
-            <p className="max-w-sm p-4 text-center text-sm text-neutral-400">
+            <p className="absolute inset-0 flex max-w-sm items-center justify-center p-4 text-center text-sm text-neutral-400">
               This host hasn't enrolled its Remote Management Agent yet. Go back and use "Install command" to set it
               up, then return here once it shows as enrolled.
             </p>
           )}
-          {!error && host?.enrolled && !embedUrl && (
-            <div className="flex flex-col items-center gap-2 text-neutral-400">
+          {!error && host?.enrolled && !sessionReady && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-neutral-900 text-neutral-400">
               <Loader2 size={20} className="animate-spin" strokeWidth={1.75} />
               <p className="text-sm">Establishing a secure session...</p>
             </div>
-          )}
-          {!error && embedUrl && (
-            <iframe
-              ref={iframeRef}
-              src={embedUrl}
-              title={host?.name ?? "Remote session"}
-              className="h-full w-full border-0"
-              allow="fullscreen; clipboard-read; clipboard-write"
-            />
           )}
         </div>
       </div>

@@ -236,35 +236,24 @@ run_update() {
 }
 
 apply_remote_management() {
-  # Applies a Remote Management host change from Settings: rewrites the two
-  # .env values the rustdesk container reads at startup, then recreates just
-  # that container so its relay/ID servers advertise the new public address.
-  # The api already reads the host live from the settings table, so new agent
-  # enrollments and session links use it immediately; this realigns the
-  # servers themselves. See backend api/routes/settings.py set_remote_management_config.
+  # coturn's own --external-ip (see coturn/entrypoint.sh) only knows
+  # TURN_HOST from .env at ITS OWN container start - a container can't read
+  # this app's Postgres settings table directly - so a host change from
+  # Settings needs .env rewritten and that ONE container recreated. Nothing
+  # like the old RustDesk relay stack this replaced: coturn is stateless
+  # with no slow first-run init, so this is a quick, low-stakes recreate,
+  # not a multi-container dance with its own "applying" UI needed for it.
   local host env_file
   host=$(get_setting_raw remote_management_host | jq -r 'if type=="string" then . else empty end' 2>/dev/null)
-  if [ -z "$host" ]; then
-    upsert_setting remote_management_apply_status '{"stage":"failed","error":"no host set"}'
-    return
-  fi
+  [ -n "$host" ] || return
   env_file="$REPO_DIR/.env"
-  set_env_var() {
-    local key="$1" val="$2"
-    if grep -q "^${key}=" "$env_file" 2>/dev/null; then
-      sed -i "s|^${key}=.*|${key}=${val}|" "$env_file"
-    else
-      printf '%s=%s\n' "$key" "$val" >> "$env_file"
-    fi
-  }
-  set_env_var RUSTDESK_RELAY_HOST "$host"
-  set_env_var RUSTDESK_API_PUBLIC_URL "http://${host}:21114"
-  if docker compose "${COMPOSE_ARGS[@]}" up -d rustdesk > /tmp/rm_apply.log 2>&1; then
-    upsert_setting remote_management_apply_status '{"stage":"done","error":null}'
-    echo "Applied Remote Management host: $host"
+  if grep -q '^TURN_HOST=' "$env_file" 2>/dev/null; then
+    sed -i "s|^TURN_HOST=.*|TURN_HOST=${host}|" "$env_file"
   else
-    upsert_setting remote_management_apply_status "$(jq -nc --arg e "$(tail -c 400 /tmp/rm_apply.log)" '{stage:"failed",error:$e}')"
+    printf 'TURN_HOST=%s\n' "$host" >> "$env_file"
   fi
+  docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate coturn > /tmp/rm_apply.log 2>&1 \
+    || echo "Warning: could not recreate coturn after a Remote Management host change: $(tail -c 400 /tmp/rm_apply.log)" >&2
 }
 
 refresh_commit_status

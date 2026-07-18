@@ -1,10 +1,10 @@
 // DeployCore Remote Management Agent - tray companion.
 //
-// Purely cosmetic: the actual remote access is the headless RustDesk service
-// running as SYSTEM. This gives the machine a visible DeployCore identity in
-// the notification area (the RustDesk tray is hidden via hide-tray=Y, and its
-// icon can't be re-branded without recompiling RustDesk). It also doubles as
-// the icon generator: `DeployCoreTray.exe --export-icon <path>` writes
+// Purely cosmetic: the actual remote access is DeployCoreAgent.exe, the
+// headless service running as SYSTEM (see remote-agent/agent/ and
+// PROTOCOL.md - no RustDesk anywhere in this any more). This just gives the
+// machine a visible DeployCore identity in the notification area. It also
+// doubles as the icon generator: `DeployCoreTray.exe --export-icon <path>` writes
 // deploycore.ico, which CI bundles into the MSI (used for the Add/Remove
 // Programs entry). One source of truth for the DeployCore mark, drawn with
 // GDI+ so no external image tooling is needed to build the icon.

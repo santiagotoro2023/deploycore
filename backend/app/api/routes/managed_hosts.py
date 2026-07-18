@@ -1,26 +1,36 @@
+import asyncio
+import json
+import logging
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_db
+from app.config import get_settings
+from app.db import SessionLocal, get_db
 from app.models.app_asset import AppAsset
 from app.models.managed_host import ManagedHost
-from app.models.user import Role, User
+from app.models.user import ROLE_ORDER, Role, User
+from app.redis import get_redis
 from app.schemas.managed_host import (
     ManagedHostCreate,
     ManagedHostRdpCredentials,
     ManagedHostRead,
-    ManagedHostSession,
     ManagedHostUpdate,
 )
-from app.security.rbac import get_current_user, require_role
-from app.services import audit, remote_desktop
+from app.security.auth import decode_access_token
+from app.security.rbac import get_current_user, require_role, resolve_effective_role
+from app.services import audit, remote_session
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["managed-hosts"])
+
+_DEFAULT_CONNECT_WIDTH = 1280
+_DEFAULT_CONNECT_HEIGHT = 800
 
 
 async def _get_org_managed_host(db: AsyncSession, org_id: uuid.UUID, host_id: uuid.UUID) -> ManagedHost:
@@ -70,7 +80,7 @@ async def create_managed_host(
 )
 async def download_agent_installer(org_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Serves the one seeded, global DeployCore Remote Management Agent
-    installer (see services/remote_agent.py) - the same file regardless
+    installer (see services/remote_agent_seed.py) - the same file regardless
     of which host it'll be run for, since the file itself carries no
     per-host secret at all (see ManagedHost's own docstring). The
     Remote Management page pairs this download with a copyable install
@@ -89,44 +99,38 @@ async def download_agent_installer(org_id: uuid.UUID, db: AsyncSession = Depends
 
 
 @router.get(
+    "/api/organizations/{org_id}/managed-hosts/ice-servers",
+    dependencies=[Depends(require_role(Role.OPERATOR))],
+)
+async def get_ice_servers(org_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> dict:
+    """The browser's own RTCPeerConnection (Shadow mode) needs the same TURN
+    credentials the agent uses (see remote_agent.py's agent-config) - ICE
+    negotiates from both ends, and a relayed (non-LAN) connection only works
+    if both sides can reach the same TURN server. Operator-gated rather than
+    part of the instance-wide /api/remote/status probe - these are
+    long-lived shared credentials, not scoped to one session, so this stays
+    behind the same role check as opening a session at all.
+
+    Registered before the /{host_id} routes below - same reason as
+    agent-installer above: FastAPI matches routes in declaration order, and
+    "ice-servers" would otherwise be swallowed by the {host_id}: uuid.UUID
+    path converter and fail with a parse error first."""
+    settings = get_settings()
+    return {
+        "turn_host": await remote_session.resolve_public_host(db),
+        "turn_port": 3478,
+        "turn_username": settings.turn_username,
+        "turn_password": settings.turn_password,
+    }
+
+
+@router.get(
     "/api/organizations/{org_id}/managed-hosts/{host_id}",
     response_model=ManagedHostRead,
     dependencies=[Depends(require_role(Role.READONLY))],
 )
 async def get_managed_host(org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> ManagedHost:
     return await _get_org_managed_host(db, org_id, host_id)
-
-
-@router.post(
-    "/api/organizations/{org_id}/managed-hosts/{host_id}/session",
-    response_model=ManagedHostSession,
-    dependencies=[Depends(require_role(Role.OPERATOR))],
-)
-async def start_managed_host_session(
-    org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> ManagedHostSession:
-    """Mints a fresh, short-lived embeddable web-client URL for this host
-    (see services/remote_desktop.py). Operator+, org-scoped like everything
-    else here - the org-membership check in _get_org_managed_host is exactly
-    what enforces "an admin of org X can only connect to org X's hosts."
-    Not cached: each click gets its own one-time share link rather than
-    reusing a stale one, and the host's current password is re-synced to the
-    RustDesk side as a side effect."""
-    host = await _get_org_managed_host(db, org_id, host_id)
-    if not host.enrolled or not host.rustdesk_id or host.rustdesk_key is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "this host's agent hasn't enrolled yet")
-    public_url = remote_desktop.public_url_for()
-    try:
-        embed_url = await remote_desktop.create_session_url(host.rustdesk_id, host.rustdesk_key, host.name, public_url)
-    except remote_desktop.RemoteDesktopError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
-    audit.record(
-        db, action="managed_host.session", target_type="managed_host", org_id=org_id,
-        user_id=current_user.id, target_id=host.id, detail={"name": host.name},
-    )
-    await db.commit()
-    return ManagedHostSession(embed_url=embed_url, rustdesk_password=host.rustdesk_key)
 
 
 @router.get(
@@ -139,11 +143,13 @@ async def get_managed_host_rdp_credentials(
     current_user: User = Depends(get_current_user),
 ) -> ManagedHostRdpCredentials:
     """The ONLY route that ever returns the plaintext RDP password - not the
-    list/get routes (see ManagedHostRead.rdp_password_set) - fetched by the
-    frontend right when "Connect" is clicked, to attempt auto-typing it into
-    the remote session's own login screen. Audit-logged same as starting a
-    session itself, since reading a plaintext credential is exactly the kind
-    of action worth a trail."""
+    list/get routes (see ManagedHostRead.rdp_password_set). Connect mode's
+    own session route (below) reads these directly rather than through this
+    route (it never leaves the backend for a real Connect session - guacd
+    gets it straight from here), so this route now exists only for the
+    credentials panel's "copy" affordance - still audit-logged, since
+    surfacing a plaintext credential to an operator is worth a trail either
+    way it happens."""
     host = await _get_org_managed_host(db, org_id, host_id)
     audit.record(
         db, action="managed_host.rdp_credentials_viewed", target_type="managed_host", org_id=org_id,
@@ -190,13 +196,13 @@ async def delete_managed_host(
     org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    """Only removes DeployCore's own record of the host - same as
-    deleting a Deployment doesn't reach out and tear down the VM, this
-    doesn't reach out and uninstall the agent or deregister it from the
-    self-hosted RustDesk server. The agent keeps running and stays
-    connectable by its raw ID/key outside of DeployCore's UI either way;
-    genuinely removing remote access requires uninstalling the agent on
-    the machine itself."""
+    """Only removes DeployCore's own record of the host - same as deleting a
+    Deployment doesn't reach out and tear down the VM, this doesn't reach
+    out and uninstall the agent. The agent keeps running and will keep
+    trying to reconnect its control channel, but that reconnect is rejected
+    from here on (its agent_key no longer matches any row) - no separate
+    revocation step needed. Genuinely removing remote access requires
+    uninstalling the agent on the machine itself."""
     host = await _get_org_managed_host(db, org_id, host_id)
     audit.record(
         db, action="managed_host.delete", target_type="managed_host", org_id=org_id,
@@ -206,15 +212,194 @@ async def delete_managed_host(
     await db.commit()
 
 
-@router.post("/api/shared-peer", include_in_schema=False)
-async def shared_peer_proxy(request: Request) -> JSONResponse:
-    """Same path rustdesk-api itself registers (see proxy/entrypoint.sh's
-    comment on the matching Caddy handle block for why this is DeployCore's
-    own endpoint now, not a straight reverse_proxy to the rustdesk
-    container) - webclient2's own JS calls this directly, anonymously, no
-    DeployCore auth, exactly like it would call rustdesk-api's real one.
-    See remote_desktop.proxy_shared_peer for why this needs to exist at all
-    rather than just forwarding untouched."""
-    body = await request.body()
-    status_code, data = await remote_desktop.proxy_shared_peer(body, request.headers.get("host", ""))
-    return JSONResponse(content=data, status_code=status_code)
+async def _authenticate_ws(
+    websocket: WebSocket, org_id: uuid.UUID, host_id: uuid.UUID
+) -> tuple[ManagedHost, str, str, int, int] | None:
+    """Shared auth for the session WebSocket below - a query-param token,
+    not the Authorization header require_role expects everywhere else: a
+    browser's native WebSocket constructor can't set custom headers at all,
+    so this is the standard way to carry a bearer token over a WS handshake.
+    Returns (host, mode, rdp_username, rdp_password, width, height) or None
+    (having already closed the socket with a specific code) on any failure."""
+    token = websocket.query_params.get("token")
+    mode = websocket.query_params.get("mode", "shadow")
+    if mode not in ("shadow", "connect"):
+        await websocket.close(code=4400)
+        return None
+    if not token:
+        await websocket.close(code=4401)
+        return None
+    try:
+        payload = decode_access_token(token)
+    except jwt.PyJWTError:
+        await websocket.close(code=4401)
+        return None
+
+    redis = get_redis()
+    if not await redis.exists(f"session:{payload['sid']}"):
+        await websocket.close(code=4401)
+        return None
+
+    async with SessionLocal() as db:
+        user = await db.get(User, uuid.UUID(payload["sub"]))
+        if user is None or not user.is_active:
+            await websocket.close(code=4401)
+            return None
+        effective_role = await resolve_effective_role(db, user, org_id)
+        if ROLE_ORDER[effective_role] < ROLE_ORDER[Role.OPERATOR]:
+            await websocket.close(code=4403)
+            return None
+        host = await db.get(ManagedHost, host_id)
+        if host is None or host.org_id != org_id:
+            await websocket.close(code=4404)
+            return None
+        if not host.enrolled:
+            await websocket.close(code=4409)
+            return None
+        rdp_username, rdp_password = host.rdp_username, host.rdp_password
+
+    width = int(websocket.query_params.get("w", _DEFAULT_CONNECT_WIDTH))
+    height = int(websocket.query_params.get("h", _DEFAULT_CONNECT_HEIGHT))
+    return host, mode, rdp_username, rdp_password, width, height
+
+
+@router.websocket("/api/organizations/{org_id}/managed-hosts/{host_id}/session")
+async def managed_host_session_ws(websocket: WebSocket, org_id: uuid.UUID, host_id: uuid.UUID) -> None:
+    """The operator's session connection (see remote-agent/PROTOCOL.md and
+    services/remote_session.py). Two independent things happen here
+    depending on ?mode=:
+      - shadow: a dumb relay for the WebRTC SDP/ICE handshake with the
+        agent - once that completes, video/input flow directly between the
+        browser and the agent; this socket carries only the initial
+        handshake.
+      - connect: this socket carries the raw Guacamole protocol for the
+        WHOLE session - remote_session.open_guacd_connection() does the
+        select/connect handshake with guacd on the operator's behalf (the
+        browser never sees RDP credentials), then this route pumps bytes
+        both ways for as long as the session lasts."""
+    auth = await _authenticate_ws(websocket, org_id, host_id)
+    if auth is None:
+        return
+    host, mode, rdp_username, rdp_password, width, height = auth
+
+    agent = remote_session.get_agent(host_id)
+    if agent is None:
+        await websocket.close(code=4503, reason="agent is not currently connected")
+        return
+
+    await websocket.accept()
+    session_id_hex = uuid.uuid4().hex
+    conn = remote_session.SessionConnection(session_id=session_id_hex, host_id=host_id, mode=mode, websocket=websocket)
+    remote_session.register_session(conn)
+    async with SessionLocal() as db:
+        audit.record(
+            db, action="managed_host.session", target_type="managed_host", org_id=org_id,
+            user_id=None, target_id=host.id, detail={"name": host.name, "mode": mode},
+        )
+        await db.commit()
+    await remote_session.send_to_agent(agent, {"type": "session_start", "session_id": session_id_hex, "mode": mode})
+
+    try:
+        if mode == "shadow":
+            await _pump_shadow_signaling(websocket, agent, session_id_hex)
+        else:
+            await _pump_connect_tunnel(websocket, agent, session_id_hex, rdp_username, rdp_password, width, height)
+    finally:
+        remote_session.unregister_session(session_id_hex)
+        try:
+            await remote_session.send_to_agent(agent, {"type": "session_end", "session_id": session_id_hex})
+        except Exception:  # noqa: BLE001 - agent may already be gone, session is ending either way
+            pass
+
+
+async def _pump_shadow_signaling(websocket: WebSocket, agent: remote_session.AgentConnection, session_id_hex: str) -> None:
+    """Relays the browser's SDP offer answer / ICE candidates to the agent,
+    tagged with this session id - the agent's own replies are pushed
+    straight onto this same WebSocket by the agent-control handler's receive
+    loop (remote_agent.py), not read back here."""
+    try:
+        while True:
+            raw = await websocket.receive()
+            if raw["type"] == "websocket.disconnect":
+                break
+            if (text := raw.get("text")) is not None:
+                message = json.loads(text)
+                message["type"] = "signal"
+                message["session_id"] = session_id_hex
+                await remote_session.send_to_agent(agent, message)
+    except WebSocketDisconnect:
+        pass
+
+
+async def _pump_connect_tunnel(
+    websocket: WebSocket,
+    agent: remote_session.AgentConnection,
+    session_id_hex: str,
+    rdp_username: str | None,
+    rdp_password: str | None,
+    width: int,
+    height: int,
+) -> None:
+    session_id_bytes = bytes.fromhex(session_id_hex)
+
+    async def _bridge_listener_to_agent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """guacd connected to our ephemeral listener below - pump its bytes
+        to/from the agent's tunneled RDP stream (binary control-channel
+        frames tagged with this session's id)."""
+        remote_session.register_tunnel_writer(session_id_hex, writer)
+        try:
+            while True:
+                chunk = await reader.read(65536)
+                if not chunk:
+                    break
+                await remote_session.send_bytes_to_agent(agent, session_id_bytes + chunk)
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            remote_session.unregister_tunnel_writer(session_id_hex)
+            writer.close()
+
+    def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        asyncio.create_task(_bridge_listener_to_agent(reader, writer))
+
+    listener = await asyncio.start_server(_handle_client, host="0.0.0.0", port=0)
+    ephemeral_port = listener.sockets[0].getsockname()[1]
+
+    try:
+        guacd_reader, guacd_writer = await remote_session.open_guacd_connection(
+            host="api", port=ephemeral_port, username=rdp_username, password=rdp_password, width=width, height=height,
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced as a plain close code, not a stack trace to the browser
+        logger.warning("Connect-mode session %s: guacd handshake failed: %s", session_id_hex, exc)
+        listener.close()
+        await websocket.close(code=4502, reason="could not start the RDP session")
+        return
+
+    async def _from_guacd_to_browser() -> None:
+        try:
+            while True:
+                chunk = await guacd_reader.read(65536)
+                if not chunk:
+                    break
+                await websocket.send_bytes(chunk)
+        except Exception:  # noqa: BLE001 - browser disconnected or guacd went away, either way stop forwarding
+            pass
+
+    forward_task = asyncio.create_task(_from_guacd_to_browser())
+    try:
+        while True:
+            raw = await websocket.receive()
+            if raw["type"] == "websocket.disconnect":
+                break
+            if (data := raw.get("bytes")) is not None:
+                guacd_writer.write(data)
+                await guacd_writer.drain()
+            elif (text := raw.get("text")) is not None:
+                guacd_writer.write(text.encode())
+                await guacd_writer.drain()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        forward_task.cancel()
+        guacd_writer.close()
+        listener.close()

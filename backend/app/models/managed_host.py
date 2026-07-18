@@ -14,10 +14,9 @@ class ManagedHost(Base, UUIDPKMixin, TimestampMixin):
     """A server or workstation reachable through Remote Management -
     either linked back to a Deployment this project provisioned (see
     deployment_id), or added independently for a machine that wasn't:
-    the whole point of the agent being just the (rebranded) RustDesk
-    client is that either path ends up in exactly the same place, an
-    enrolled row here, with no special-casing downstream in the
-    connect flow for "how did this host come to exist."
+    either path ends up in exactly the same place, an enrolled row
+    here, with no special-casing downstream in the connect flow for
+    "how did this host come to exist."
 
     Always org-scoped (unlike DiskLayout/AppAsset/DeploymentTemplate,
     there's no "global" concept here - a specific physical or virtual
@@ -39,23 +38,30 @@ class ManagedHost(Base, UUIDPKMixin, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    # Single-use per-host token, generated when the host row is created
-    # (before the agent ever runs) - the agent's own one-time enrollment
-    # call (see api/routes/remote_agent.py) is authenticated by this, the same
-    # "guest already knows a secret DeployCore handed it in advance"
-    # pattern as Deployment.callback_token, not a user session (there
-    # isn't one on the machine running the agent).
+    # Permanent per-host identifier, generated when the host row is created
+    # (before the agent ever runs). Doubles as two things: the agent's
+    # one-time enrollment call (see api/routes/remote_agent.py) is
+    # authenticated by this - the same "guest already knows a secret
+    # DeployCore handed it in advance" pattern as Deployment.callback_token,
+    # not a user session (there isn't one on the machine running the agent) -
+    # and, after enrollment, the identifier the agent presents (alongside
+    # agent_key below) on every reconnect of its persistent control channel
+    # (see remote-agent/PROTOCOL.md). Never rotated, so "single-use" no
+    # longer describes it - kept as the one stable handle across the agent's
+    # whole lifetime instead of minting a second identifier for no reason.
     enroll_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, default=lambda: secrets.token_hex(32))
     enrolled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # Both populated by that one enrollment call, not chosen by
-    # DeployCore: the RustDesk client generates its own ID locally on
-    # first run, and the enrollment script (bundled in the agent
-    # installer) generates the permanent/unattended-access password
-    # locally too, immediately reporting both home rather than either
-    # ever being baked into the shared installer itself.
-    rustdesk_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    rustdesk_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Minted by DeployCore itself (not the agent) at the end of the one-time
+    # enrollment call, and returned to the agent exactly once - the agent
+    # persists it locally (DPAPI-protected) and presents it as the
+    # X-Agent-Key header on every control-channel connection afterward. This
+    # is the only credential anywhere in the native protocol; nothing is
+    # ever prompted for or shown to an operator (see PROTOCOL.md's "Why no
+    # password" section). Server-minted rather than agent-reported (the old
+    # rustdesk_key's pattern) so a not-yet-trusted caller never gets to
+    # dictate its own long-term credential.
+    agent_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -64,22 +70,22 @@ class ManagedHost(Base, UUIDPKMixin, TimestampMixin):
     )
 
     # Optional, operator-entered RDP credentials for this host - separate
-    # from rustdesk_key above (that's the agent's own unattended-access
-    # password, generated locally by the agent, never chosen by anyone).
-    # These are for the "Connect" button's best-effort auto-type-into-the-
-    # remote-login-screen flow (see services/remote_desktop.py /
-    # RemoteSession.tsx) - a real Windows account's own username/password,
-    # so encrypted at rest the same way rustdesk_key already is.
+    # from agent_key above (that's the control channel's own credential,
+    # server-minted, never chosen by anyone). These are a real Windows
+    # account's own username/password, used to auto-authenticate a real,
+    # separate "Connect" RDP session (see services/remote_session.py /
+    # RemoteSession.tsx) - so encrypted at rest the same way agent_key
+    # already is.
     rdp_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     rdp_password_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     @property
-    def rustdesk_key(self) -> str | None:
-        return crypto.decrypt(self.rustdesk_key_encrypted) if self.rustdesk_key_encrypted else None
+    def agent_key(self) -> str | None:
+        return crypto.decrypt(self.agent_key_encrypted) if self.agent_key_encrypted else None
 
-    @rustdesk_key.setter
-    def rustdesk_key(self, value: str) -> None:
-        self.rustdesk_key_encrypted = crypto.encrypt(value)
+    @agent_key.setter
+    def agent_key(self, value: str) -> None:
+        self.agent_key_encrypted = crypto.encrypt(value)
 
     @property
     def rdp_password(self) -> str | None:

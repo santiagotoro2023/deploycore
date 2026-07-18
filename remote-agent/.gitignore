@@ -2,6 +2,8 @@
 # .github/workflows/build-agent-msi.yml) - not committed.
 tray/bin/
 tray/obj/
+agent/bin/
+agent/obj/
 wix/Install-DeployCoreAgent.ps1
 wix/DeployCoreTray.exe
 wix/deploycore.ico

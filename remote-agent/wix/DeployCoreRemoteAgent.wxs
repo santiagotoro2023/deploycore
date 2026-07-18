@@ -6,36 +6,35 @@
   (Install-DeployCoreAgent.ps1, copied from backend/app/services/
   remote_agent_install.ps1 at build time by the CI workflow) into Program
   Files and runs it once, passing the SERVERURL and ENROLLTOKEN properties
-  straight through. All the real work (downloading/installing the stock
-  RustDesk client, configuring it headless, enrolling) lives in that script,
-  so the MSI and the copy-paste one-liner install path stay identical.
+  straight through. All the real work (installing DeployCoreAgent.exe,
+  enabling RDP, enrolling) lives in that script, so the MSI and the
+  copy-paste one-liner install path stay identical. No RustDesk anywhere in
+  this any more - see remote-agent/PROTOCOL.md.
 
-  The script is NOT run directly from a custom action. Two confirmed reasons,
-  found the hard way across two real failures:
+  The script is NOT run directly from a custom action. The original version
+  of this comment gave two reasons; only one still applies now that the
+  script has no RustDesk (and no nested msiexec.exe call of its own) left in
+  it at all:
 
-  1. The script itself invokes a second, nested msiexec.exe (to install the
-     bundled RustDesk client) - per Microsoft's own _MSIExecute Mutex docs
-     ("set only while processing the InstallExecuteSequence table"), that
-     mutex is held for this WHOLE table, so a custom action running inside it
-     cannot safely launch another msiexec.exe of its own.
-  2. Custom actions of type deferred/commit (what any elevated, WixQuietExec-
+  1. Custom actions of type deferred/commit (what any elevated, WixQuietExec-
      based action here is) can ONLY be scheduled between InstallInitialize and
      InstallFinalize - confirmed via Windows Installer Error 2762 ("the action
      must be scheduled between InstallInitialize and InstallFinalize") when
      this file first scheduled its single agent-install action AFTER
      InstallFinalize. That positioning is what actually produced the
      detail-free MSI 1603 on the very first real deployment test (this error
-     fires immediately, matching the fast ~46s failure observed) - not a
-     mutex conflict, which was a reasonable but wrong first guess, and not
-     the target VM's internet access, which was also fine.
+     fires immediately, matching the fast ~46s failure observed).
+  2. Independent of the above: the real work the script does (HTTP calls to
+     fetch config and enroll) would otherwise run synchronously inside the
+     MSI transaction, extending - and risking timing out - the visible
+     "installing..." step for no reason.
 
   The fix for both: the custom actions below (scheduled after InstallFiles,
   a valid position, not after InstallFinalize) register a Scheduled Task (as
   SYSTEM, triggered ONSTART - see its own comment for why not ONCE) and
   immediately trigger it too, then return right away - the outer MSI finishes
-  normally in moments, and the actual RustDesk install + enrollment runs
-  seconds later from Task Scheduler, fully outside any MSI transaction,
-  sidestepping the mutex concern too.
+  normally in moments, and the actual install + enrollment runs seconds later
+  from Task Scheduler, fully outside any MSI transaction.
 
   The MSI also bundles the DeployCore-branded tray companion (DeployCoreTray.exe)
   and its icon (deploycore.ico) - both produced by CI from remote-agent/tray/,
@@ -43,13 +42,14 @@
   user's session at logon. The one-liner install path does NOT include the tray;
   the .msi is the full branded package.
 
-  It ALSO bundles the stock RustDesk client installer itself
-  (rustdesk-x86_64.msi, fetched by CI from RustDesk's own GitHub release) so
-  the install script never needs outbound internet on the target machine -
-  confirmed necessary after the first real deployment-pipeline test: a
+  It ALSO bundles DeployCoreAgent.exe itself and ffmpeg.exe (built/fetched by
+  CI - see .github/workflows/build-agent-msi.yml) so the install script never
+  needs outbound internet on the target machine - confirmed necessary, back
+  when this bundled RustDesk instead, after a real deployment-pipeline test: a
   provisioned VM with no internet access failed with a bare MSI 1603 and no
-  detail, traced to this download failing. The one-liner path still downloads
-  it (a human runs that with their own internet, normally).
+  detail, traced to a download failing. The one-liner path still downloads a
+  zip of the same two files (a human runs that with their own internet,
+  normally).
 
   NOTE: MSI custom-action sequencing is exactly the kind of thing that needs
   validating on real Windows - the CI workflow builds this, but the first
@@ -125,15 +125,20 @@
           <IniFile Id="SetServerUrl" Directory="INSTALLFOLDER" Name="agent-params.ini" Action="createLine" Section="DeployCore" Key="ServerUrl" Value="[SERVERURL]" />
           <IniFile Id="SetEnrollToken" Directory="INSTALLFOLDER" Name="agent-params.ini" Action="addLine" Section="DeployCore" Key="EnrollToken" Value="[ENROLLTOKEN]" />
         </Component>
-        <!-- The stock RustDesk client installer, fetched by CI (which has
-             internet) and bundled here so the install script never needs
-             outbound internet access on the target machine - only to
-             DeployCore itself, which is where this .msi came from in the
-             first place. See remote_agent_install.ps1 step 2 for why this
-             matters: a VM the deployment pipeline just provisioned commonly
-             has no internet access at all. -->
-        <Component Id="RustDeskInstaller" Guid="*">
-          <File Id="RustDeskMsi" Source="rustdesk-x86_64.msi" KeyPath="yes" />
+        <!-- The agent itself (a self-contained .NET build - see
+             remote-agent/agent/) plus ffmpeg.exe (its capture/encode child
+             process, see PROTOCOL.md), both built/fetched by CI and bundled
+             here so the install script never needs outbound internet access
+             on the target machine - only to DeployCore itself, which is
+             where this .msi came from in the first place. See
+             remote_agent_install.ps1 step 2 for why this matters: a VM the
+             deployment pipeline just provisioned commonly has no internet
+             access at all. -->
+        <Component Id="AgentExe" Guid="*">
+          <File Id="DeployCoreAgentExe" Source="DeployCoreAgent.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="FfmpegExe" Guid="*">
+          <File Id="FfmpegExeFile" Source="ffmpeg.exe" KeyPath="yes" />
         </Component>
         <!-- Separate component (one file each) so WiX can auto-generate GUIDs -
              an unversioned keypath can't share a component with other files.
@@ -143,8 +148,8 @@
           <File Id="BrandIco" Source="deploycore.ico" KeyPath="yes" />
         </Component>
         <!-- Branded tray companion + a per-machine Run entry so it starts in
-             each user's session at logon. Cosmetic only - the headless RustDesk
-             service is what actually serves remote access. -->
+             each user's session at logon. Cosmetic only - the headless
+             DeployCoreRemoteAgent service is what actually serves remote access. -->
         <Component Id="TrayApp" Guid="*">
           <File Id="TrayExe" Source="DeployCoreTray.exe" KeyPath="yes" />
           <RegistryValue
@@ -189,7 +194,8 @@
       <ComponentRef Id="InstallScript" />
       <ComponentRef Id="RunScript" />
       <ComponentRef Id="AgentParams" />
-      <ComponentRef Id="RustDeskInstaller" />
+      <ComponentRef Id="AgentExe" />
+      <ComponentRef Id="FfmpegExe" />
       <ComponentRef Id="BrandIcon" />
       <ComponentRef Id="TrayApp" />
       <ComponentRef Id="TaskLauncher" />

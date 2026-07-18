@@ -595,7 +595,6 @@ interface RemoteManagementConfig {
   host: string;
   app_public_url: string;
   ports: { port: number; proto: string; purpose: string }[];
-  apply_status: { stage: string; error: string | null } | null;
 }
 
 function RemoteManagementPanel() {
@@ -617,13 +616,6 @@ function RemoteManagementPanel() {
     load();
   }, []);
 
-  // While an Apply is restarting the relay servers, poll so the status clears.
-  useEffect(() => {
-    if (config?.apply_status?.stage !== "applying") return;
-    const t = setInterval(load, 3000);
-    return () => clearInterval(t);
-  }, [config?.apply_status?.stage]);
-
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!host.trim()) return;
@@ -635,21 +627,20 @@ function RemoteManagementPanel() {
       setSaved(true);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to apply.");
+      setError(err instanceof ApiError ? err.message : "Failed to save.");
     } finally {
       setSaving(false);
     }
   }
 
-  const applyStage = config?.apply_status?.stage;
-
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-5 dark:border-neutral-700 dark:bg-neutral-900">
       <h2 className="mb-1 text-sm font-semibold">Remote Management</h2>
       <p className="mb-4 text-xs text-neutral-500">
-        The address agents and your browser use to reach this instance's Remote Management servers. Defaults to this
-        host's LAN IP, so machines on the same network work out of the box. To control machines from anywhere, forward
-        the ports below to this host and set your public IP or domain here.
+        The address the Shadow TURN fallback and your browser use to reach this instance. Defaults to this host's LAN
+        IP, so machines on the same network work out of the box - ICE always tries a direct connection first, so this
+        only matters for a host that isn't on this network. To control machines from anywhere, forward the ports below
+        to this host and set your public IP or domain here. Takes effect immediately - nothing to restart.
       </p>
 
       <form onSubmit={onSubmit}>
@@ -683,28 +674,14 @@ function RemoteManagementPanel() {
         </p>
 
         {error && <div className="mb-3 text-xs text-red-600">{error}</div>}
-        {saved && applyStage === "applying" && (
-          <div className="mb-3 text-xs text-amber-600 dark:text-amber-400">
-            Applying — restarting the relay servers with the new address…
-          </div>
-        )}
-        {applyStage === "done" && !saving && (
-          <div className="mb-3 text-xs text-emerald-600 dark:text-emerald-400">Applied.</div>
-        )}
-        {applyStage === "failed" && (
-          <div className="mb-3 text-xs text-red-600">
-            Couldn't restart the relay servers automatically ({config?.apply_status?.error || "unknown error"}). The new
-            address is saved and used for new agents/sessions; run <code>docker compose up -d rustdesk</code> on the host
-            to finish.
-          </div>
-        )}
+        {saved && !saving && <div className="mb-3 text-xs text-emerald-600 dark:text-emerald-400">Saved.</div>}
 
         <button
           type="submit"
           className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
           disabled={saving || !host.trim()}
         >
-          {saving ? "Applying…" : "Apply"}
+          {saving ? "Saving…" : "Save"}
         </button>
       </form>
 

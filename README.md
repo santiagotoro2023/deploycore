@@ -191,26 +191,25 @@ uploaded certificate expired, **Switch to self-signed temporarily** does
 exactly that without discarding the uploaded certificate, and **Use this
 certificate again** switches back to it, no re-upload needed.
 
-**Remote Management's embedded sessions need no separate step at all** -
-they share this same origin and certificate, not a different port. Getting
-there took a few real, load-bearing bugs, worth knowing about if you're
-touching this code: an early version loaded the web client from its own
-`http://<host>:21114` URL, which browsers block as mixed content inside an
-HTTPS page; a later version gave it a dedicated HTTPS port instead, which
-fixed that but meant a *separate* certificate a browser has to trust
-separately - and a browser flatly refuses to let you click through a
-certificate warning *inside* an embedded frame at all, so anyone who
-hadn't visited that port directly first got a silent, unexplained failure.
-The actual fix: RustDesk's bundled web client (`webclient2`) is proxied at
-the *exact* path it's built to expect (`/webclient2/`, confirmed against
-its own source), on DeployCore's own `:443` origin, alongside the one
-specific API call it needs for anonymous share-token sessions
-(`/api/shared-peer`, also confirmed against source, and confirmed not to
-collide with anything DeployCore's own API uses). Whatever already lets a
-browser load the rest of DeployCore - a real certificate, or having
-already clicked through the self-signed warning once - covers Remote
-Management automatically, for anyone who can already reach this instance
-at all.
+**Remote Management's sessions need no separate step at all** - they're just
+more WebSocket routes under DeployCore's own `/api/*`, on this same origin and
+certificate, not a different port. That's a deliberate design carried over
+from a real, load-bearing lesson learned the hard way on this app's old
+RustDesk-based version, worth knowing about if you're touching this code: an
+early version loaded the embedded web client from its own `http://<host>:21114`
+URL, which browsers block as mixed content inside an HTTPS page; a later
+version gave it a dedicated HTTPS port instead, which fixed that but meant a
+*separate* certificate a browser has to trust separately - and a browser
+flatly refuses to let you click through a certificate warning *inside* an
+embedded frame at all, so anyone who hadn't visited that port directly first
+got a silent, unexplained failure. The native agent's own design (see
+`remote-agent/PROTOCOL.md`) applies that lesson from the start instead of
+rediscovering it: `/api/remote/agent-control` and
+`/api/organizations/{org_id}/managed-hosts/{host_id}/session` are ordinary
+routes on this same origin, so whatever already lets a browser load the rest
+of DeployCore - a real certificate, or having already clicked through the
+self-signed warning once - covers Remote Management automatically, for
+anyone who can already reach this instance at all.
 
 If you'd rather skip that initial self-signed warning for the whole
 instance (not specific to Remote Management), `https://<your-instance>/ca.crt`
@@ -261,57 +260,56 @@ org-scoped copy.
 ## Remote Management
 
 See and control an enrolled server or workstation's screen from the browser,
-from anywhere — no file to download to connect, no VPN. You get the real
-machine console (including the Windows login screen, so you can sign in or
-switch users as if you were sitting at it), a Ctrl+Alt+Del button, a shared
-clipboard (copy on your laptop, paste on the server), and full-screen mode.
-Roughly a VNC/ESXi-console feature set with a modern UI, fully self-hosted —
-nothing goes through any third-party cloud.
+from anywhere — no file to download to connect, no VPN. Fully self-hosted and
+**entirely DeployCore's own software end to end** - no RustDesk, no
+third-party relay, nothing that isn't either DeployCore's own code or a
+well-known open-source building block (WebRTC, Apache Guacamole/FreeRDP,
+coturn) DeployCore controls the integration of. See
+[`remote-agent/PROTOCOL.md`](remote-agent/PROTOCOL.md) for the exact wire
+protocol and [`docs/remote-agent-native-plan.md`](docs/remote-agent-native-plan.md)
+for the full design.
 
-**It's automatic on install.** The Remote Management server (a self-hosted
-RustDesk relay/rendezvous + web client) ships in the `docker compose` stack,
-and `scripts/setup.sh` generates its secrets, points it at this host's detected
-address, and configures its admin account. A normal install brings it up with
+Two modes, both from the same enrolled agent:
+- **Shadow** — mirrors the machine's active console live (unattended,
+  no separate login), streamed over WebRTC straight from the agent to your
+  browser. No password ever appears anywhere - the one credential in this
+  whole system (`agent_key`) is minted by DeployCore at enroll time and never
+  shown to an operator, matching a decision already made when this ran on
+  RustDesk (`allow-hide-cm`, "permitted because we use a permanent
+  password") - just with nothing left needing to be shown at all now, since
+  there's no client-side password prompt to skip in the first place.
+- **Connect** — a real, separate native RDP login (Windows' own
+  `TermService`), reached through a self-hosted Apache Guacamole (`guacd` +
+  FreeRDP), auto-authenticated with the saved RDP username/password. Live,
+  exact resolution changes (RDP's own Display Control channel), not
+  something DeployCore has to solve itself.
+
+Both share a clipboard with your machine and support full-screen.
+
+**It's automatic on install.** `coturn` (STUN/TURN, for the rare host that
+isn't on this server's own LAN - Shadow's WebRTC path always tries a direct
+connection first) and `guacd` (Apache Guacamole's daemon) ship in the
+`docker compose` stack, and `scripts/setup.sh` generates the TURN secret and
+points it at this host's detected address. A normal install brings it up with
 no extra steps. The Remote Management tab shows a banner if anything still
 needs attention.
 
-**The one thing that can't be automated is network reachability.** Agents on
-the same LAN work out of the box. For agents on other networks or the internet,
-forward these ports to the DeployCore host (the tab lists them for your address
-too):
+**The one thing that can't be automated is network reachability**, and only
+for a host that isn't on this server's own LAN (the common case for this app
+needs nothing forwarded at all - Shadow's WebRTC negotiates a direct
+connection, and Connect's RDP traffic is tunneled through the agent's own
+outbound connection, never dialed into directly):
 
 | Port | Protocol | Purpose |
 |---|---|---|
-| 21115 | TCP | NAT type test |
-| 21116 | TCP+UDP | ID / rendezvous server (both protocols) |
-| 21117 | TCP | Relay server |
+| 3478 | TCP+UDP | STUN/TURN (coturn) |
+| 49160–49200 | UDP | TURN relay range |
 
 You set the public address in the app, not in files: **Settings → Remote
-Management** takes a public IP or domain and, on Apply, rewrites the config and
-restarts the relay servers for you (it defaults to your LAN IP). Agents bake in
-whichever address is set when they enrol, so set your public address before
-enrolling machines you want reachable from outside. `scripts/setup.sh` also
-detects your public IP and prints the internet-access steps at the end of the
-install; the Wiki (**Remote Management → Network & firewall setup**) has full
-step-by-step guides for home/office routers, cloud VMs, and DNS.
-
-**Remote Management through a port-forward.** If you reach this instance
-through a router's port-forward or NAT rule whose *external* address is
-different from the one set above (say, `some-router:9012` forwarding to this
-host's `:443`), Shadow/Connect can load and authenticate fine but the actual
-screen connection times out. This is a real limitation of the underlying
-RustDesk server, not a bug: it advertises a single relay-server hostname to
-every client, live, over its own protocol - never something DeployCore can
-rewrite per-request the way it does for other parts of this flow. A client
-reaching this instance through a different address combines that fixed
-hostname with *its own* port, a combination nothing is listening on.
-
-The fix: set `RUSTDESK_ALT_ACCESS_PORT` in `.env` to that external port (9012
-in the example above) and run a full `docker compose up -d --build` - this
-gives the relay a second, matching listener on this host's own real address,
-making that exact combination valid. Leave it unset if every operator reaches
-this instance the same way `RUSTDESK_RELAY_HOST` is already configured for -
-most installs never need this.
+Management** takes a public IP or domain (defaults to your LAN IP) and applies
+it immediately - nothing to restart, unlike the old RustDesk relay, since this
+is just data read live by every new session rather than baked into a
+container's own startup args.
 
 **Enrolling a machine.** Either attach the "DeployCore Remote Management Agent"
 App Asset to a template (every machine deployed from it enrolls automatically),
@@ -322,10 +320,13 @@ command shown (easiest, nothing to download) or the silent `.msi`:
 msiexec /i DeployCoreRemoteAgent.msi /qn SERVERURL="https://your-deploycore" ENROLLTOKEN=<token>
 ```
 
-**The agent `.msi`.** It's a stock RustDesk client installed as a hidden
-background service — no RustDesk UI on the machine. It's built automatically by
-GitHub Actions (`.github/workflows/build-agent-msi.yml`) on every push that
-touches the agent, and published to a rolling release. Direct download:
+**The agent `.msi`.** DeployCoreAgent.exe (this project's own service - capture,
+encode, WebRTC, and the RDP tunnel, see `remote-agent/agent/`) plus `ffmpeg.exe`,
+installed as a background service with no foreign product to hide (there's
+nothing here that isn't DeployCore's own, unlike the old RustDesk-based
+version). Built automatically by GitHub Actions
+(`.github/workflows/build-agent-msi.yml`) on every push that touches the
+agent, and published to a rolling release. Direct download:
 [**DeployCoreRemoteAgent.msi**](https://github.com/santiagotoro2023/deploycore/releases/download/agent-latest/DeployCoreRemoteAgent.msi).
 DeployCore also **auto-fetches it on startup** and registers it as the global
 "Remote Agent" App Asset, so the Remote Management tab's download button and the
@@ -333,6 +334,27 @@ auto-install-on-deploy path work with no manual upload. (Air-gapped? Set
 `REMOTE_AGENT_MSI_URL=` empty and upload the `.msi` as a global App Asset
 yourself, then **Set as agent**.) Full details in
 [`remote-agent/README.md`](remote-agent/README.md).
+
+> **Status:** the agent (`remote-agent/agent/`) is written against the
+> documented Win32/SIPSorcery/FFmpeg APIs but has not yet been compiled or
+> run on a real Windows machine - this sandbox has no Windows environment to
+> build or test it in. The backend/frontend/infra side has been verified
+> (imports cleanly, every route registers, full dependency install
+> succeeds) but not exercised against a live agent yet. First real
+> verification needs a Windows 11 or Windows Server VM with RDP enabled on
+> your ESXi environment, and the CI pipeline (`.github/workflows/build-agent-msi.yml`)
+> needs a real push to actually run - see the PR/commit this shipped in for
+> whether that's happened yet.
+>
+> Resolution and Ctrl+Alt+Del are both real, working features today, not
+> placeholders: Shadow changes the VM's actual resolution via the standard
+> `ChangeDisplaySettingsEx` API, snapping to the closest mode the adapter
+> supports (exactly like the RustDesk-based version did, just computed
+> against this machine's real mode list instead of a hardcoded guess list) -
+> a bundled virtual-display driver (see `IVirtualDisplay` in
+> `remote-agent/agent/`) is the further upgrade to exact arbitrary sizing,
+> not yet bundled, but not required for resolution changes to work at all.
+> Ctrl+Alt+Del has a toolbar button in both Shadow and Connect.
 
 ## Capabilities
 
@@ -1745,10 +1767,8 @@ fills in `APP_SECRET_KEY` for you.
 | `BACKUP_DIR` | no | `/data/backups` | Where database backups are written and served from |
 | `TLS_CERTS_PATH` | no | `/data/tls` | Where an uploaded HTTPS certificate/key pair is stored, shared with the `proxy` container |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | no | `deploycore` / `deploycore` / `deploycore` | Postgres container credentials |
-| `RUSTDESK_RELAY_HOST` | no | `localhost`, auto-set to the detected LAN IP by `scripts/setup.sh` | Address remote agents and the browser use to reach the Remote Management relay/rendezvous servers; like `APP_PUBLIC_URL`, must not be `localhost` for real use |
-| `RUSTDESK_JWT_KEY` | no | generated by `scripts/setup.sh` | Shared secret between the Remote Management relay and API servers |
-| `RUSTDESK_ADMIN_USERNAME` / `RUSTDESK_ADMIN_PASSWORD` | no | `admin` / generated by `scripts/setup.sh` | Service account DeployCore logs into the Remote Management server as to mint session links; `setup.sh` also applies the password to the server itself |
-| `RUSTDESK_API_INTERNAL_URL` / `RUSTDESK_API_PUBLIC_URL` | no | `http://rustdesk:21114` / auto-set to `http://<detected-ip>:21114` | Internal (compose-network) URL the API uses to reach the Remote Management server, and the public URL the browser loads the embedded session from |
+| `TURN_HOST` | no | `localhost`, auto-set to the detected LAN IP by `scripts/setup.sh` | Address the browser and agents use to reach coturn (STUN/TURN) for Shadow's WebRTC path; only matters for a host that isn't on this server's own LAN - ICE always tries a direct connection first |
+| `TURN_USERNAME` / `TURN_PASSWORD` | no | `deploycore` / generated by `scripts/setup.sh` | Static long-term coturn credentials, shared by every agent and browser session |
 | `REMOTE_AGENT_MSI_URL` | no | the repo's `agent-latest` release asset | Where DeployCore auto-fetches the agent `.msi` from on startup to seed the global Remote Agent asset; set empty to disable (air-gapped, upload by hand) |
 | `PROJECT_DIR` | no | auto-detected | Only needed if the `updater` container's automatic self-discovery of this repo's host path doesn't work in your Docker setup; overrides it with an absolute host path when set |
 

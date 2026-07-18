@@ -2,15 +2,19 @@
 REM Launched by a one-time Scheduled Task the MSI's custom action registers and
 REM immediately triggers (see DeployCoreRemoteAgent.wxs's RegisterAgentTask /
 REM RunAgentTask custom actions) - deliberately NOT run directly from inside
-REM the MSI's own custom action, because that would nest a second msiexec.exe
-REM call (to install the bundled RustDesk client) inside the _MSIExecute mutex
-REM the outer MSI still holds for its entire InstallExecuteSequence, including
-REM anything scheduled after InstallFinalize (confirmed via Microsoft's own
-REM _MSIExecute Mutex docs) - a deadlock/ERROR_INSTALL_ALREADY_RUNNING that is
-REM exactly what produced a bare, detail-free MSI 1603 on the first real test.
-REM Running this from a Scheduled Task instead means the outer MSI has already
-REM fully exited (mutex released) by the time this, and the nested msiexec it
-REM runs, actually executes.
+REM the MSI's own custom action. The original reason this pattern exists was
+REM RustDesk-specific (a nested msiexec.exe call installing RustDesk would
+REM have deadlocked inside the outer MSI's own _MSIExecute mutex) and no
+REM longer applies - this script has no nested msiexec at all now, just
+REM extracting a bundled zip. It's kept anyway for a reason that was always
+REM independently true: deferred/commit custom actions can only be scheduled
+REM between InstallInitialize and InstallFinalize (Windows Installer error
+REM 2762), and the real work here - HTTP calls to fetch config and enroll -
+REM would otherwise run synchronously inside the MSI transaction, extending
+REM (and risking timing out) the visible "installing..." step for no reason.
+REM Running from a Scheduled Task instead lets the outer MSI finish in
+REM moments, with the actual work happening moments later, fully outside any
+REM MSI transaction.
 REM
 REM No arguments here on purpose - the Scheduled Task's own /tr is a bare path
 REM (see RegisterAgentTask), not a multi-argument command line. SERVERURL/
