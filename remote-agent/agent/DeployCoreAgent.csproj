@@ -6,9 +6,11 @@
        project's own README ("What this is NOT" - Windows only, a hard Win32
        dependency throughout is expected, not a compromise).
 
-       CI (.github/workflows/build-agent-msi.yml) publishes with:
-         dotnet publish remote-agent/agent/DeployCoreAgent.csproj -c Release -r win-x64 \
-           --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+       CI (.github/workflows/build-agent-msi.yml) publishes with self
+       contained true and the PublishSingleFile/IncludeNativeLibrariesForSelfExtract
+       flags set on the `dotnet publish` command line (a literal double-hyphen
+       isn't valid inside an XML comment, which is why this isn't just quoted
+       verbatim - see that workflow file for the exact invocation).
        SelfContained/PublishSingleFile/IncludeNativeLibrariesForSelfExtract are
        deliberately NOT set here - the CLI flags above are the one source of
        truth for those, so there's nothing in this file that can silently
