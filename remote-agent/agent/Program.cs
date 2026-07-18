@@ -4,6 +4,33 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Hosting.WindowsServices; // UseWindowsService() - belt-and-suspenders alongside Microsoft.Extensions.Hosting, in case the extension method itself resolves from this namespace instead
 using Microsoft.Extensions.Logging;
 
+// One-shot CLI mode, not the normal service entry point: ShadowSession
+// launches THIS SAME exe with these two args (via SessionCapture, see that
+// class's own doc comment) instead of calling ChangeDisplaySettingsEx
+// in-process, because that API requires the CALLING THREAD to be attached
+// to the interactive desktop to succeed at all - confirmed against
+// Microsoft's own documented behavior for it, not assumed, and confirmed
+// live: agent.log showed ChangeDisplaySettingsEx failing with code -1
+// (DISP_CHANGE_FAILED) on literally every attempt, before AND after login,
+// at every resolution tried - the exact fingerprint of this restriction,
+// not a per-mode compatibility problem. The agent SERVICE's own process,
+// like every Windows service, runs on a non-interactive window station in
+// Session 0, so it can never satisfy that requirement regardless of login
+// state. A child launched via SessionCapture.StartInActiveSession, by
+// contrast, has its desktop assignment set correctly from the moment it's
+// created (that's the same fix already applied to ffmpeg's own capture) -
+// so doing the ACTUAL ChangeDisplaySettingsEx call from inside a process
+// launched that way is what makes it work at all. Exits immediately either
+// way - never reaches the normal service bootstrap below.
+if (args is ["--set-resolution", var widthArg, var heightArg]
+    && int.TryParse(widthArg, out var targetWidth) && int.TryParse(heightArg, out var targetHeight))
+{
+    using var oneShotLoggerFactory = LoggerFactory.Create(builder => builder.AddProvider(new FileLoggerProvider(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DeployCore", "agent.log"))));
+    Win32Interop.TrySetNearestResolution(targetWidth, targetHeight, oneShotLoggerFactory.CreateLogger("Win32Interop"));
+    return;
+}
+
 // A modern .NET Windows Service: Microsoft.Extensions.Hosting +
 // Microsoft.Extensions.Hosting.WindowsServices already solve "run a
 // cancellable background loop under the Service Control Manager" for free

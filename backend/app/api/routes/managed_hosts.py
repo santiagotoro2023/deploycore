@@ -276,7 +276,22 @@ async def managed_host_session_ws(websocket: WebSocket, org_id: uuid.UUID, host_
         WHOLE session - remote_session.open_guacd_connection() does the
         select/connect handshake with guacd on the operator's behalf (the
         browser never sees RDP credentials), then this route pumps bytes
-        both ways for as long as the session lasts."""
+        both ways for as long as the session lasts.
+
+    Accepts FIRST, before any validation - confirmed against the ASGI spec
+    itself (not assumed): a close() sent while still in the CONNECTING state
+    (i.e. before accept()) makes the server respond with a bare HTTP 403 and
+    never complete the handshake at all, so the browser never sees a real
+    WebSocket close event with a reason - just a hard connection-refused
+    with zero information. Confirmed live as exactly what was breaking
+    Connect mode's error reporting (NS_ERROR_WEBSOCKET_CONNECTION_REFUSED in
+    Firefox, no close reason visible anywhere), and it silently affected
+    every other failure path here too - a bad token, insufficient role, an
+    unenrolled host, a disconnected agent - not just this one. Accepting
+    first means every close() below now delivers a normal, readable
+    close event to ws.onclose in the browser instead."""
+    await websocket.accept()
+
     auth = await _authenticate_ws(websocket, org_id, host_id)
     if auth is None:
         return
@@ -287,7 +302,6 @@ async def managed_host_session_ws(websocket: WebSocket, org_id: uuid.UUID, host_
         await websocket.close(code=4503, reason="agent is not currently connected")
         return
 
-    await websocket.accept()
     session_id_hex = uuid.uuid4().hex
     conn = remote_session.SessionConnection(session_id=session_id_hex, host_id=host_id, mode=mode, websocket=websocket)
     remote_session.register_session(conn)

@@ -319,7 +319,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     ///   - config.VirtualDisplay (a real IDD driver installed): exact
     ///     arbitrary sizing via IVirtualDisplay - not bundled yet, so this
     ///     is dormant in practice (see that interface's own docs).
-    ///   - Otherwise (every install today): Win32Interop.TrySetNearestResolution
+    ///   - Otherwise (every install today): TrySetNearestResolutionInActiveSession
     ///     actually changes THIS machine's real display resolution via the
     ///     standard ChangeDisplaySettingsEx API, snapping to the closest mode
     ///     the adapter actually supports - a real, live resolution change,
@@ -341,11 +341,61 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         }
         else
         {
-            var applied = Win32Interop.TrySetNearestResolution(width, height, logger);
-            if (applied is { } size) _nativeScreenSize = size;
+            _nativeScreenSize = TrySetNearestResolutionInActiveSession(width, height);
         }
 
         StartCapture(width, height);
+    }
+
+    /// <summary>
+    /// ChangeDisplaySettingsEx (Win32Interop.TrySetNearestResolution) needs
+    /// the calling thread attached to the INTERACTIVE desktop to succeed at
+    /// all - confirmed against Microsoft's own documented behavior for this
+    /// API, not assumed, and confirmed live: agent.log showed it failing
+    /// with code -1 on literally every attempt, regardless of login state or
+    /// requested size, which this agent SERVICE's own process (Session 0,
+    /// same as every Windows service) can structurally never satisfy. So
+    /// this launches a one-shot self-invocation of THIS SAME exe
+    /// (Program.cs's own "--set-resolution" branch) into the active console
+    /// session via SessionCapture - the exact same session-boundary problem
+    /// already solved for ffmpeg's own capture, applied to the one other
+    /// place this agent touches the display - and waits for it to exit
+    /// (bounded) since StartCapture immediately after needs the change to
+    /// have already landed.
+    /// </summary>
+    private (int Width, int Height) TrySetNearestResolutionInActiveSession(int width, int height)
+    {
+        var exePath = Path.Combine(AppContext.BaseDirectory, "DeployCoreAgent.exe");
+        var commandLine = $"\"{exePath}\" --set-resolution {width} {height}";
+        try
+        {
+            var pid = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory, logger);
+            try
+            {
+                using var proc = Process.GetProcessById((int)pid);
+                // 1.5s is generous for a call that's normally near-instant -
+                // this is a genuinely different process/session, not a local
+                // method call, so a bounded wait (not indefinite) protects
+                // against it somehow hanging and stalling this session's
+                // next capture restart.
+                if (!proc.WaitForExit(1500))
+                    logger.LogWarning("Shadow session {SessionId}: resolution-change helper did not exit within 1.5s - proceeding anyway.", sessionId);
+            }
+            catch (ArgumentException)
+            {
+                // Already exited by the time we asked - the expected fast path.
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Shadow session {SessionId}: failed to launch the resolution-change helper into the active console session - screen size unchanged.", sessionId);
+        }
+
+        // Reads back whatever's ACTUALLY on screen now, whether or not the
+        // change above landed - GetSystemMetrics (unlike
+        // ChangeDisplaySettingsEx) has no desktop-attachment restriction, so
+        // this is accurate even called from this service's own Session 0.
+        return Win32Interop.GetPrimaryScreenSize();
     }
 
     // --- ffmpeg capture process ---
@@ -426,6 +476,14 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
             logger.LogError(ex, "Shadow session {SessionId}: failed to launch ffmpeg into the active console session.", sessionId);
             return;
         }
+        // Confirms the launch itself succeeded, distinct from whether ffmpeg
+        // then actually produces frames (TailCaptureFileAsync's own 5s
+        // progress log / 10s "never appeared" warning cover that side) -
+        // added specifically because the first real test's log had no way to
+        // tell "ffmpeg never launched" from "launched but silent" apart from
+        // both looking like a black screen with no capture-launch failure
+        // logged either.
+        logger.LogInformation("Shadow session {SessionId}: launched ffmpeg (pid {Pid}) into the active console session.", sessionId, pid);
 
         _ffmpegProcessId = pid;
         _captureWidth = width ?? _nativeScreenSize.Width;
