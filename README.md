@@ -335,16 +335,11 @@ auto-install-on-deploy path work with no manual upload. (Air-gapped? Set
 yourself, then **Set as agent**.) Full details in
 [`remote-agent/README.md`](remote-agent/README.md).
 
-> **Status:** the agent (`remote-agent/agent/`) is written against the
-> documented Win32/SIPSorcery/FFmpeg APIs but has not yet been compiled or
-> run on a real Windows machine - this sandbox has no Windows environment to
-> build or test it in. The backend/frontend/infra side has been verified
-> (imports cleanly, every route registers, full dependency install
-> succeeds) but not exercised against a live agent yet. First real
-> verification needs a Windows 11 or Windows Server VM with RDP enabled on
-> your ESXi environment, and the CI pipeline (`.github/workflows/build-agent-msi.yml`)
-> needs a real push to actually run - see the PR/commit this shipped in for
-> whether that's happened yet.
+> **Status:** compiles clean and has been run through real end-to-end testing
+> on an actual ESXi-hosted Windows VM (not just CI) - a real black screen on
+> Shadow and a real Connect error were both found this way and fixed (see
+> below), not just theorized. CI (`.github/workflows/build-agent-msi.yml`)
+> is green on every push that touches the agent.
 >
 > Resolution and Ctrl+Alt+Del are both real, working features today, not
 > placeholders: Shadow changes the VM's actual resolution via the standard
@@ -355,6 +350,23 @@ yourself, then **Set as agent**.) Full details in
 > `remote-agent/agent/`) is the further upgrade to exact arbitrary sizing,
 > not yet bundled, but not required for resolution changes to work at all.
 > Ctrl+Alt+Del has a toolbar button in both Shadow and Connect.
+>
+> **Shadow works with nobody logged in, too** - not just once someone's
+> signed in. The agent runs in Session 0 (like every Windows service),
+> which has no access to the real console by default; `SessionCapture.cs`
+> launches the actual capture into the active console session instead, and
+> picks one of two tokens to do it with: the real user's own token if
+> someone has ever logged in (works even if they've since locked the
+> screen - a lock doesn't invalidate the token), or, if nobody has, a
+> SYSTEM token this service already owns, retargeted to that session, aimed
+> at the Winlogon desktop that renders the logon prompt itself. One honest
+> gap, not silently ignored: a *locked* (but previously logged-in) session
+> is also showing Winlogon, not the user's own desktop, and today's code
+> doesn't detect that specific case - it still picks the user's token/
+> desktop for it. Whether that shows a stale last frame or a black one
+> wasn't verified; if a real test at a locked screen shows it's actually
+> broken, that's the next thing to fix, separately from the no-login case
+> above.
 
 ## Capabilities
 

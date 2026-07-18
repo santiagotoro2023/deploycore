@@ -42,17 +42,39 @@ namespace DeployCoreAgent;
 /// all, at the cost of a small amount of disk I/O that's genuinely
 /// negligible at this data rate (a low-fps H.264 stream, not raw video).
 ///
-/// KNOWN LIMITATION, stated plainly, not hidden: WTSQueryUserToken needs an
-/// ACTUAL logged-in user session to query a token from. If nobody is signed
-/// in yet (the Windows lock/login screen itself - the original "including
-/// the Windows login screen" goal from this feature's own README), there is
-/// no token to query and StartInActiveSessionAsync throws. Capturing the
-/// pre-login secure desktop is a genuinely separate, harder problem
-/// (attaching to WinSta0's "Winlogon" desktop specifically, with its own
-/// distinct restrictions even for SYSTEM) that mature remote-desktop
-/// products have entire subsystems for - not attempted here. Shadow today
-/// requires someone already logged into the target machine; test it that
-/// way, not sitting at the lock screen.
+/// Works with or without anyone logged in. Two paths, chosen per-launch:
+///
+/// 1. WTSQueryUserToken succeeds - someone has logged into this session (even
+///    if they've since locked it: a LOCK is a desktop switch layered on top
+///    of a still-real, still-queryable user token, it does not invalidate
+///    the token). Use their own token, target "winsta0\default".
+///
+/// 2. WTSQueryUserToken fails - this only happens when nobody has EVER
+///    logged into this session (a fresh boot sitting at the very first
+///    logon prompt; there is no user to query a token from at all). Fall
+///    back to a token this SYSTEM-context service already legitimately
+///    owns: duplicate our own process token and retarget it to the active
+///    session via SetTokenInformation(TokenSessionId) - confirmed against
+///    learn.microsoft.com's own TOKEN_INFORMATION_CLASS reference, which
+///    documents exactly this ("the application must have the Act As Part Of
+///    the Operating System privilege" - i.e. SeTcbPrivilege, already enabled
+///    by EnsureTcbPrivilege below) - then target "winsta0\winlogon", the
+///    secure desktop Winlogon itself owns to render the logon prompt. This
+///    is the same technique real unattended-access tools use to reach a
+///    machine nobody has touched yet.
+///
+/// One honest, NOT-yet-handled gap: a LOCKED (but previously logged-in)
+/// session is momentarily showing the same Winlogon secure desktop as case 2
+/// - not "winsta0\default" - while WTSQueryUserToken still succeeds, so
+/// today's logic still picks "default" for it. Whether that actually shows a
+/// black screen or a stale-but-recognizable last frame depends on DWM
+/// composition behavior for a non-input desktop, which was not verified
+/// (the API that WOULD detect lock state directly,
+/// WTSQuerySessionInformation(WTSSessionInfoEx), is documented as having
+/// reversed flag semantics on some older OS versions - not a foundation to
+/// guess a struct layout on for a target that's Windows 11 anyway). If a
+/// real test shows the locked case is actually broken, that is the next
+/// thing to fix here, not this login-vs-no-login case.
 /// </summary>
 internal static class SessionCapture
 {
@@ -63,9 +85,18 @@ internal static class SessionCapture
     private const uint INVALID_SESSION_ID = 0xFFFFFFFF;
     private static readonly IntPtr WTS_CURRENT_SERVER_HANDLE = IntPtr.Zero;
 
-    private const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
+    private const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
+    private const uint TOKEN_DUPLICATE = 0x0002;
     private const uint TOKEN_QUERY = 0x0008;
+    private const uint TOKEN_ADJUST_DEFAULT = 0x0080;
+    private const uint TOKEN_ADJUST_SESSIONID = 0x0100;
+    private const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
     private const uint SE_PRIVILEGE_ENABLED = 0x00000002;
+
+    // TOKEN_INFORMATION_CLASS.TokenSessionId - confirmed against
+    // learn.microsoft.com/windows/win32/api/winnt/ne-winnt-token_information_class
+    // (12th member, enum starts at TokenUser = 1), not guessed.
+    private const int TokenSessionId = 12;
 
     #endregion
 
@@ -155,6 +186,10 @@ internal static class SessionCapture
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool SetTokenInformation(IntPtr tokenHandle, int tokenInformationClass,
+        IntPtr tokenInformation, uint tokenInformationLength);
 
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool LookupPrivilegeValue(string? lpSystemName, string lpName, out LUID lpLuid);
@@ -247,36 +282,56 @@ internal static class SessionCapture
     /// the new process's id (so the caller can later terminate it via the
     /// normal System.Diagnostics.Process.GetProcessById/.Kill(), which works
     /// on any process this SYSTEM-context service has rights over regardless
-    /// of who actually started it).
+    /// of who actually started it). Works whether or not anyone is logged
+    /// in - see this class's own doc comment for the two paths involved.
     /// </summary>
-    public static uint StartInActiveSession(string commandLine, string? workingDirectory)
+    public static uint StartInActiveSession(string commandLine, string? workingDirectory, ILogger logger)
     {
         var sessionId = GetActiveConsoleSessionId();
         if (sessionId == INVALID_SESSION_ID)
         {
-            throw new InvalidOperationException("No active console session found - is anyone actually logged into this machine? (see this class's own \"known limitation\" doc comment - the pre-login lock/login screen has no user token to query).");
+            throw new InvalidOperationException("No active console session found - is a display/console session even attached (e.g. the VM powered on)?");
         }
 
-        if (!WTSQueryUserToken(sessionId, out var hImpersonationToken))
+        IntPtr hLaunchToken;
+        string desktop;
+
+        if (WTSQueryUserToken(sessionId, out var hImpersonationToken))
         {
-            throw new InvalidOperationException($"WTSQueryUserToken for session {sessionId} failed (0x{Marshal.GetLastWin32Error():X}) - no logged-in user to launch into, or SeTcbPrivilege isn't enabled (see EnsureTcbPrivilege).");
+            try
+            {
+                // An impersonation token from WTSQueryUserToken must be
+                // duplicated to a PRIMARY token before CreateProcessAsUser
+                // will accept it - confirmed against the reference
+                // implementation, not assumed.
+                var hDup = IntPtr.Zero;
+                if (!DuplicateTokenEx(hImpersonationToken, 0, IntPtr.Zero,
+                        (int)SECURITY_IMPERSONATION_LEVEL.SecurityImpersonation, (int)TOKEN_TYPE.TokenPrimary, ref hDup))
+                {
+                    throw new InvalidOperationException($"DuplicateTokenEx (user token) failed (0x{Marshal.GetLastWin32Error():X}).");
+                }
+                hLaunchToken = hDup;
+            }
+            finally
+            {
+                CloseHandle(hImpersonationToken);
+            }
+            desktop = "winsta0\\default";
+        }
+        else
+        {
+            logger.LogInformation(
+                "No user token for session {SessionId} (nobody has logged in yet on this session) - " +
+                "falling back to a SYSTEM token retargeted to that session, against the Winlogon desktop.",
+                sessionId);
+            hLaunchToken = DuplicateSystemTokenForSession(sessionId);
+            desktop = "winsta0\\winlogon";
         }
 
-        var hUserToken = IntPtr.Zero;
         var pEnv = IntPtr.Zero;
         try
         {
-            // An impersonation token from WTSQueryUserToken must be
-            // duplicated to a PRIMARY token before CreateProcessAsUser will
-            // accept it - confirmed against the reference implementation,
-            // not assumed.
-            if (!DuplicateTokenEx(hImpersonationToken, 0, IntPtr.Zero,
-                    (int)SECURITY_IMPERSONATION_LEVEL.SecurityImpersonation, (int)TOKEN_TYPE.TokenPrimary, ref hUserToken))
-            {
-                throw new InvalidOperationException($"DuplicateTokenEx failed (0x{Marshal.GetLastWin32Error():X}).");
-            }
-
-            if (!CreateEnvironmentBlock(ref pEnv, hUserToken, false))
+            if (!CreateEnvironmentBlock(ref pEnv, hLaunchToken, false))
             {
                 throw new InvalidOperationException($"CreateEnvironmentBlock failed (0x{Marshal.GetLastWin32Error():X}).");
             }
@@ -284,14 +339,14 @@ internal static class SessionCapture
             var startupInfo = new STARTUPINFO
             {
                 cb = Marshal.SizeOf<STARTUPINFO>(),
-                lpDesktop = "winsta0\\default",
+                lpDesktop = desktop,
             };
             const uint creationFlags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
 
-            if (!CreateProcessAsUser(hUserToken, null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
+            if (!CreateProcessAsUser(hLaunchToken, null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
                     creationFlags, pEnv, workingDirectory, ref startupInfo, out var processInfo))
             {
-                throw new InvalidOperationException($"CreateProcessAsUser failed (0x{Marshal.GetLastWin32Error():X}).");
+                throw new InvalidOperationException($"CreateProcessAsUser (desktop \"{desktop}\") failed (0x{Marshal.GetLastWin32Error():X}).");
             }
 
             CloseHandle(processInfo.hThread);
@@ -301,8 +356,57 @@ internal static class SessionCapture
         finally
         {
             if (pEnv != IntPtr.Zero) DestroyEnvironmentBlock(pEnv);
-            if (hUserToken != IntPtr.Zero) CloseHandle(hUserToken);
-            CloseHandle(hImpersonationToken);
+            CloseHandle(hLaunchToken);
+        }
+    }
+
+    /// <summary>
+    /// Duplicates THIS SERVICE's own SYSTEM token (LocalSystem's token,
+    /// already trusted, already privileged) and retargets the duplicate at
+    /// <paramref name="sessionId"/> via SetTokenInformation(TokenSessionId) -
+    /// requires SeTcbPrivilege (see EnsureTcbPrivilege, called once at agent
+    /// startup) exactly as learn.microsoft.com's own TOKEN_INFORMATION_CLASS
+    /// reference documents. This is how a SYSTEM-context service reaches a
+    /// session nobody has ever logged into (no WTSQueryUserToken result to
+    /// work with at all).
+    /// </summary>
+    private static IntPtr DuplicateSystemTokenForSession(uint sessionId)
+    {
+        const uint access = TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID;
+
+        if (!OpenProcessToken(GetCurrentProcess(), access, out var hProcessToken))
+        {
+            throw new InvalidOperationException($"OpenProcessToken (own SYSTEM process) failed (0x{Marshal.GetLastWin32Error():X}).");
+        }
+        try
+        {
+            var hDup = IntPtr.Zero;
+            if (!DuplicateTokenEx(hProcessToken, access, IntPtr.Zero,
+                    (int)SECURITY_IMPERSONATION_LEVEL.SecurityImpersonation, (int)TOKEN_TYPE.TokenPrimary, ref hDup))
+            {
+                throw new InvalidOperationException($"DuplicateTokenEx (own SYSTEM token) failed (0x{Marshal.GetLastWin32Error():X}).");
+            }
+
+            var pSessionId = Marshal.AllocHGlobal(sizeof(uint));
+            try
+            {
+                Marshal.WriteInt32(pSessionId, unchecked((int)sessionId));
+                if (!SetTokenInformation(hDup, TokenSessionId, pSessionId, sizeof(uint)))
+                {
+                    var error = Marshal.GetLastWin32Error();
+                    CloseHandle(hDup);
+                    throw new InvalidOperationException($"SetTokenInformation(TokenSessionId={sessionId}) failed (0x{error:X}) - SeTcbPrivilege not enabled? (see EnsureTcbPrivilege).");
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pSessionId);
+            }
+            return hDup;
+        }
+        finally
+        {
+            CloseHandle(hProcessToken);
         }
     }
 }

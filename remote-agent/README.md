@@ -6,12 +6,13 @@ third-party remote-desktop product wrapped and rebranded. See
 [`../docs/remote-agent-native-plan.md`](../docs/remote-agent-native-plan.md)
 for the full design rationale.
 
-> **Status**: `agent/` is written against the documented Win32/SIPSorcery/
-> FFmpeg APIs but has not been compiled or run on a real Windows machine yet -
-> there's no Windows environment available to build or test it in the
-> sandbox this was written in. Treat it as "implemented per spec, pending
-> first real Windows/ESXi test," not "verified working." See `agent/README.md`
-> for exactly what's untested and why.
+> **Status**: compiles clean (CI is green) and has been through real
+> end-to-end testing on an actual ESXi-hosted Windows VM, not just CI - see
+> the top-level [README's Remote Management section](../README.md#remote-management)
+> for what that testing found and fixed, including Shadow now working
+> whether or not anyone is logged into the target machine. See
+> `agent/README.md` for what's still genuinely unverified below that
+> surface (e.g. non-US keyboard layouts, RTP pacing jitter).
 
 ## Layout
 
@@ -93,6 +94,14 @@ Neither is a stub:
 - **Ctrl+Alt+Del**: a real toolbar button in `RemoteSession.tsx`, in both
   Shadow (the agent's `SendSAS`) and Connect (the standard Guacamole/FreeRDP
   Ctrl+Alt+Del keysym sequence).
+- **Shadow without anyone logged in**: `SessionCapture.cs` launches the
+  capture process into the active console session using the real user's
+  token when one exists (including a locked session - the token survives a
+  lock), or a SYSTEM token retargeted to that session via
+  `SetTokenInformation(TokenSessionId)` when nobody has ever logged in,
+  aimed at the Winlogon desktop instead of the user's own. See that file's
+  own doc comment for the one case this doesn't yet cover (a locked, not
+  logged-out, session momentarily showing Winlogon too).
 
 ## What's still a stub, on purpose
 

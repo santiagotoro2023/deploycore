@@ -419,7 +419,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         uint pid;
         try
         {
-            pid = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory);
+            pid = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory, logger);
         }
         catch (Exception ex)
         {
