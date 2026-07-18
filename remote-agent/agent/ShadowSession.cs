@@ -440,8 +440,10 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                 {
                     if (_pc is null) continue;
 
-                    // SIPSorcery 6.x API as documented (see file header) -
-                    // unverified call site.
+                    // SIPSorcery 6.2.3 (confirmed live via the first real CI
+                    // build, CS4008 "cannot await 'void'"): SendVideo is
+                    // synchronous, not awaitable - fixed here, not just
+                    // guessed at.
                     //
                     // ponytail: passes the full per-frame RTP duration on
                     // EVERY NAL of a multi-NAL access unit (SPS/PPS/slice),
@@ -456,7 +458,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                     // start code) and only pass a nonzero duration on the
                     // first VCL NAL (types 1/5) of each access unit, 0 on
                     // SPS/PPS/SEI.
-                    await _pc.SendVideo(FrameDurationRtpUnits, nal);
+                    _pc.SendVideo(FrameDurationRtpUnits, nal);
                 }
             }
         }
