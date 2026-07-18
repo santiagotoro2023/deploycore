@@ -196,7 +196,14 @@ export default function RemoteSession() {
         }
       };
       pc.ontrack = (event) => {
-        if (videoRef.current) videoRef.current.srcObject = event.streams[0];
+        if (!videoRef.current) return;
+        // event.streams can be empty if the offering side's SDP doesn't
+        // include a stream/track (msid) association - a real, common
+        // cross-implementation WebRTC gotcha, not specific to any one
+        // stack. Constructing a MediaStream directly from the track is the
+        // standard, safe fallback: it doesn't depend on the offering side
+        // having set msid up correctly at all.
+        videoRef.current.srcObject = event.streams[0] ?? new MediaStream([event.track]);
       };
       pc.ondatachannel = (event) => {
         dataChannelRef.current = event.channel;
@@ -240,7 +247,14 @@ export default function RemoteSession() {
         }
       };
       ws.onerror = () => setError("Could not reach the remote session.");
-      ws.onclose = () => setSessionReady(false);
+      ws.onclose = (event) => {
+        setSessionReady(false);
+        // A non-normal close with a server-supplied reason (agent not
+        // connected, etc. - see managed_hosts.py's _authenticate_ws) is more
+        // useful on screen than nothing, matching the same improvement made
+        // for Connect mode's own close reasons.
+        if (event.code !== 1000 && event.reason) setError(event.reason);
+      };
     },
     [selectedOrgId]
   );

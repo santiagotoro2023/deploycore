@@ -238,7 +238,19 @@ async def open_guacd_connection(
         "resize-method": "display-update",
         "ignore-cert": "true",  # internal network, target's own self-signed RDP cert
         "enable-drive": "false",
-        "enable-audio": "false",
+        # NOT "enable-audio" (that key was simply wrong - confirmed against
+        # guacd's own source, src/protocols/rdp/settings.c's GUAC_RDP_CLIENT_ARGS,
+        # after a real Connect-mode failure on the first live test): the real
+        # arg is "disable-audio", inverted sense. Left unset before this fix,
+        # every OTHER guacd arg this dict doesn't name (security, domain,
+        # server-layout, etc.) silently fell back to "" via connect_args'
+        # own dict.get(name, "") default, which guacd/FreeRDP treat as "use
+        # the built-in default" for nearly everything - "security" is the
+        # one worth setting explicitly rather than trusting that default,
+        # since RDP security negotiation failing outright is a real, higher-
+        # stakes way for a connection to fail than most other unset options.
+        "disable-audio": "true",
+        "security": "any",  # let FreeRDP negotiate the best mode the target actually supports
     }
     connect_args = [values.get(name, "") for name in arg_names]
     writer.write(_encode_instruction("connect", *connect_args))
@@ -247,7 +259,12 @@ async def open_guacd_connection(
     ready = await asyncio.wait_for(_read_instruction(reader), timeout=_GUACD_CONNECT_TIMEOUT_SECONDS)
     if not ready or ready[0] != "ready":
         writer.close()
-        raise RemoteSessionError(f"guacd did not accept the connection (got {ready!r})")
+        # ready[0] here is commonly "error" with guacd's own real reason as
+        # ready[1] (its actual wire protocol, not guessed) - surfaced via
+        # RemoteSessionError so it reaches the operator's browser (see
+        # managed_hosts.py's own except block) instead of only ever showing
+        # up in this container's own logs.
+        raise RemoteSessionError(f"guacd did not accept the connection: {ready[1:] if len(ready) > 1 else ready!r}")
 
     return reader, writer
 

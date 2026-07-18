@@ -369,10 +369,19 @@ async def _pump_connect_tunnel(
         guacd_reader, guacd_writer = await remote_session.open_guacd_connection(
             host="api", port=ephemeral_port, username=rdp_username, password=rdp_password, width=width, height=height,
         )
-    except Exception as exc:  # noqa: BLE001 - surfaced as a plain close code, not a stack trace to the browser
+    except Exception as exc:  # noqa: BLE001 - surfaced as a close reason, not a stack trace to the browser
         logger.warning("Connect-mode session %s: guacd handshake failed: %s", session_id_hex, exc)
         listener.close()
-        await websocket.close(code=4502, reason="could not start the RDP session")
+        # A previous version of this used a fixed generic reason - real
+        # guacd/FreeRDP failures (bad credentials, RDP disabled on the
+        # target, a security-mode mismatch) need their actual text to reach
+        # the operator, or every failure looks identical from the browser.
+        # WebSocket close reasons are capped at 123 UTF-8 BYTES (RFC 6455's
+        # 125-byte control-frame payload minus the 2-byte status code) -
+        # truncated defensively rather than trusting every possible
+        # exception message to already fit.
+        reason = str(exc).encode("utf-8")[:120].decode("utf-8", errors="ignore")
+        await websocket.close(code=4502, reason=reason or "could not start the RDP session")
         return
 
     async def _from_guacd_to_browser() -> None:

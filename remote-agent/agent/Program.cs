@@ -18,6 +18,8 @@ IHost host = Host.CreateDefaultBuilder(args)
         // registered ("DeployCoreRemoteAgent"), fixed independently of this.
         options.ServiceName = "DeployCoreRemoteAgent";
     })
+    .ConfigureLogging(logging => logging.AddProvider(new FileLoggerProvider(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DeployCore", "agent.log"))))
     .ConfigureServices((_, services) => services.AddHostedService<AgentWorker>())
     .Build();
 

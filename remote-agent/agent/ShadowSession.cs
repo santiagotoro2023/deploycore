@@ -156,8 +156,18 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         // "H264", clock rate 90000, dynamic payload type 96 - a conventional
         // choice, not one PROTOCOL.md pins to a specific number; the SDP
         // negotiation is what actually tells the browser which payload type
-        // to expect.
-        var videoFormat = new SDPAudioVideoMediaFormat(SDPMediaTypesEnum.video, 96, "H264", VideoClockRateHz);
+        // to expect. The fmtp line matters, not just cosmetic: confirmed
+        // against SIPSorcery's own source (SDPAudioVideoMediaFormat.CheckCompatible)
+        // that a missing/ambiguous packetization-mode is exactly the kind of
+        // thing that can leave the offer without a fully specified H264
+        // profile - packetization-mode=1 (non-interleaved) matches how
+        // SendVideo's own per-NAL calls are packetized (see
+        // ReadNalUnitsAsync below) and is what every mainstream browser
+        // expects by default; profile-level-id 42e01f is Constrained
+        // Baseline, level 3.1 - the safest, most broadly-decodable choice
+        // for a first real test, not tuned for quality yet.
+        const string h264Fmtp = "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1";
+        var videoFormat = new SDPAudioVideoMediaFormat(SDPMediaTypesEnum.video, 96, "H264", VideoClockRateHz, fmtp: h264Fmtp);
         var videoTrack = new MediaStreamTrack(SDPMediaTypesEnum.video, false,
             new List<SDPAudioVideoMediaFormat> { videoFormat }, MediaStreamStatusEnum.SendOnly);
         pc.addTrack(videoTrack);
@@ -429,6 +439,8 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         var splitter = new AnnexBNalSplitter();
         var buffer = new byte[65536];
         var stream = ffmpeg.StandardOutput.BaseStream;
+        long nalCount = 0, byteCount = 0;
+        var lastProgressLog = DateTime.UtcNow;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -445,6 +457,29 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                     // synchronous, not awaitable - fixed here, not just
                     // guessed at.
                     //
+                    // Per-NAL try/catch, not just the outer one around this
+                    // whole loop: confirmed against SIPSorcery's own source
+                    // (MediaStream.GetSendingFormat, called internally by
+                    // SendVideo) that it can throw if no compatible format is
+                    // resolved yet - a real possibility right after
+                    // StartAsync, since capture starts immediately while the
+                    // SDP answer is still in flight over the signaling
+                    // round-trip. An unhandled exception here previously
+                    // propagated out of this whole loop's own try block,
+                    // permanently ending frame forwarding for the rest of
+                    // the session after the very first failure - "connects,
+                    // then black forever" is exactly what that looks like
+                    // from the browser side. Now it just skips that one NAL.
+                    try
+                    {
+                        _pc.SendVideo(FrameDurationRtpUnits, nal);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex, "Shadow session {SessionId}: SendVideo failed for one NAL (skipping it).", sessionId);
+                        continue;
+                    }
+
                     // ponytail: passes the full per-frame RTP duration on
                     // EVERY NAL of a multi-NAL access unit (SPS/PPS/slice),
                     // not just the last one - would over-advance
@@ -458,7 +493,19 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                     // start code) and only pass a nonzero duration on the
                     // first VCL NAL (types 1/5) of each access unit, 0 on
                     // SPS/PPS/SEI.
-                    _pc.SendVideo(FrameDurationRtpUnits, nal);
+                    nalCount++;
+                    byteCount += nal.Length;
+                }
+
+                // Added specifically because the first real end-to-end test
+                // had no way to tell "ffmpeg is producing nothing" apart
+                // from "frames are flowing but never rendering in the
+                // browser" - both look identical (black screen) from the
+                // browser side alone.
+                if (DateTime.UtcNow - lastProgressLog > TimeSpan.FromSeconds(5))
+                {
+                    logger.LogInformation("Shadow session {SessionId}: {NalCount} NAL units / {ByteCount} bytes sent to SIPSorcery so far.", sessionId, nalCount, byteCount);
+                    lastProgressLog = DateTime.UtcNow;
                 }
             }
         }
