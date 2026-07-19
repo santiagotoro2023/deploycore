@@ -87,8 +87,12 @@ namespace DeployCoreAgent
 
             // Same reasoning, same "ensure once at startup" pattern - see
             // SessionCapture's own doc comment for why Shadow's capture
-            // needs this at all (Session 0 isolation).
-            SessionCapture.EnsureTcbPrivilege(loggerFactory.CreateLogger("SessionCapture"));
+            // needs both of these (Session 0 isolation, and stealing
+            // winlogon.exe's/explorer.exe's own token across a session
+            // boundary).
+            var sessionCaptureLogger = loggerFactory.CreateLogger("SessionCapture");
+            SessionCapture.EnsureTcbPrivilege(sessionCaptureLogger);
+            SessionCapture.EnsureDebugPrivilege(sessionCaptureLogger);
 
             AgentConfig config;
             try

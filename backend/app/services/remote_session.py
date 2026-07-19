@@ -266,21 +266,11 @@ async def open_guacd_connection(
         # up in this container's own logs.
         raise RemoteSessionError(f"guacd did not accept the connection: {ready[1:] if len(ready) > 1 else ready!r}")
 
+    # Confirms the select/args/connect handshake itself succeeded, distinct
+    # from whether guacd's own outbound "RDP" connection (to the tunnel
+    # below) then actually completes the RDP handshake - added specifically
+    # so a session that hangs at "Establishing a secure session" has a way
+    # to tell "guacd never even accepted this" from "it did, and got stuck
+    # somewhere in the tunnel after."
+    logger.info("guacd accepted the connect handshake (tunnel target %s:%d).", host, port)
     return reader, writer
-
-
-async def pump(read_from: asyncio.StreamReader, write_to: asyncio.StreamWriter) -> None:
-    """Raw byte pump, one direction - used for both the guacd<->ephemeral
-    listener leg and (via the WebSocket wrapper in managed_hosts.py) the
-    browser<->guacd leg. Stops cleanly on EOF or a closed peer either way."""
-    try:
-        while True:
-            chunk = await read_from.read(65536)
-            if not chunk:
-                break
-            write_to.write(chunk)
-            await write_to.drain()
-    except (ConnectionResetError, BrokenPipeError):
-        pass
-    finally:
-        write_to.close()

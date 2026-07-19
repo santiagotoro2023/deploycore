@@ -361,15 +361,25 @@ async def _pump_connect_tunnel(
         to/from the agent's tunneled RDP stream (binary control-channel
         frames tagged with this session's id)."""
         remote_session.register_tunnel_writer(session_id_hex, writer)
+        byte_count = 0
+        logger.info("Connect-mode session %s: guacd connected to the ephemeral listener.", session_id_hex)
         try:
             while True:
                 chunk = await reader.read(65536)
                 if not chunk:
                     break
+                byte_count += len(chunk)
                 await remote_session.send_bytes_to_agent(agent, session_id_bytes + chunk)
         except (ConnectionResetError, BrokenPipeError):
             pass
         finally:
+            # Confirms whether ANY RDP bytes ever made it from guacd toward
+            # the agent for this session - distinct from whether the agent's
+            # own reply bytes come back (see ConnectTunnel's matching log on
+            # the agent side) - a session stuck at "Establishing a secure
+            # session" needs to be able to tell which of the two directions,
+            # if either, is actually moving.
+            logger.info("Connect-mode session %s: guacd->agent leg ended after %d bytes.", session_id_hex, byte_count)
             remote_session.unregister_tunnel_writer(session_id_hex)
             writer.close()
 

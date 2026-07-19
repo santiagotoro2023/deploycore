@@ -60,6 +60,7 @@ internal sealed class ConnectTunnel(string sessionId, ControlChannelClient contr
     private async Task PumpSocketToAgentAsync()
     {
         var buffer = new byte[65536];
+        long byteCount = 0;
         try
         {
             var stream = _tcpClient!.GetStream();
@@ -67,6 +68,7 @@ internal sealed class ConnectTunnel(string sessionId, ControlChannelClient contr
             {
                 var read = await stream.ReadAsync(buffer, _cts.Token);
                 if (read == 0) break; // local RDP side closed cleanly
+                byteCount += read;
                 await controlChannel.SendBinaryAsync(sessionId, buffer.AsMemory(0, read));
             }
         }
@@ -78,6 +80,14 @@ internal sealed class ConnectTunnel(string sessionId, ControlChannelClient contr
         {
             logger.LogDebug(ex, "Connect session {SessionId}: local socket read loop ended.", sessionId);
         }
+        // Confirms whether the target's own RDP server ever sent anything
+        // back through this tunnel at all - distinct from whether the
+        // connect handshake to it merely succeeded (see this class's own
+        // "tunnel open" log above) - matches the same byte-progress
+        // diagnostic Shadow's capture loop already has, for the same reason:
+        // a session stuck at "Establishing a secure session" needs to be
+        // able to tell which direction, if either, is actually moving.
+        logger.LogInformation("Connect session {SessionId}: local-RDP->agent leg ended after {ByteCount} bytes.", sessionId, byteCount);
 
         // The local socket closing (RDP session ended, TermService dropped
         // it, etc.) needs to reach the backend too, or its side of the
@@ -85,16 +95,10 @@ internal sealed class ConnectTunnel(string sessionId, ControlChannelClient contr
         // listener in managed_hosts.py) never finds out and just hangs -
         // see PROTOCOL.md's Connect-mode cleanup paragraph.
         //
-        // Honesty note, read directly from backend/app/api/routes/remote_agent.py's
-        // agent_control() receive loop at the time this was written: it only
-        // branches on incoming "heartbeat" and "signal" message types from
-        // the agent - there is no handler there for an agent-INITIATED
-        // "session_end" today, so the backend currently just ignores this
-        // message. Sending it anyway because it's what PROTOCOL.md specifies
-        // and it's forward-compatible/harmless either way; flagged here so
-        // it isn't mistaken for a bug in THIS file if a browser session
-        // doesn't notice a dead tunnel promptly - the gap, if any, is
-        // server-side.
+        // remote_agent.py's agent_control() receive loop does handle an
+        // agent-initiated "session_end" today (closes the browser's own
+        // WebSocket with a reason) - re-confirmed by reading it directly,
+        // not assumed stale from an earlier note here.
         await SendSessionEndAsync();
 
         // Whether or not the server ever acts on the message above, this
