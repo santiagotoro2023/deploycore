@@ -84,24 +84,31 @@ Neither is a stub:
 
 - **Resolution**: Shadow changes the VM's actual display resolution via the
   standard `ChangeDisplaySettingsEx` API (`Win32Interop.TrySetNearestResolution`),
-  snapping to the closest mode the adapter actually supports - the same
-  mechanism (and the same real constraint) the RustDesk-based version used,
-  just computed against this machine's real, enumerated mode list
-  (`EnumDisplaySettings`) instead of a hardcoded guess list. `ffmpeg`'s own
+  snapping to the closest mode the adapter actually supports. That API only
+  succeeds when called from a thread attached to the interactive desktop -
+  confirmed live, the agent service's own process (Session 0) failed it with
+  `DISP_CHANGE_FAILED` on every attempt - so it now runs inside a one-shot
+  self-invocation of the agent exe (`DeployCoreAgent.exe --set-resolution W H`,
+  see `Program.cs`), launched into the active session by `SessionCapture`
+  exactly like ffmpeg's own capture is, not in-process. `ffmpeg`'s own
   `-vf scale` filter still resamples to the exact requested size on top of
   that, so the final video is always pixel-exact regardless of how close the
   underlying mode switch landed.
 - **Ctrl+Alt+Del**: a real toolbar button in `RemoteSession.tsx`, in both
   Shadow (the agent's `SendSAS`) and Connect (the standard Guacamole/FreeRDP
   Ctrl+Alt+Del keysym sequence).
-- **Shadow without anyone logged in**: `SessionCapture.cs` launches the
-  capture process into the active console session using the real user's
-  token when one exists (including a locked session - the token survives a
-  lock), or a SYSTEM token retargeted to that session via
-  `SetTokenInformation(TokenSessionId)` when nobody has ever logged in,
-  aimed at the Winlogon desktop instead of the user's own. See that file's
-  own doc comment for the one case this doesn't yet cover (a locked, not
-  logged-out, session momentarily showing Winlogon too).
+- **Shadow without anyone logged in**: `SessionCapture.cs` finds
+  explorer.exe (someone's logged in) or winlogon.exe (nobody has - it's the
+  process rendering the logon/lock screen itself) already running in the
+  target session, and steals *that* process's own token directly via
+  `OpenProcessToken` - the same mechanism rustdesk/rustdesk's own Windows
+  service uses (`src/platform/windows.cc`, fetched and reviewed directly).
+  An earlier version of this fallback (retargeting the service's own SYSTEM
+  token's session id via `SetTokenInformation`) compiled and ran with no
+  error but was confirmed live not to actually work - not repeating that
+  mistake. See that file's own doc comment for the full history and
+  citations, and the top-level README's Status callout for what's confirmed
+  vs. not yet re-tested.
 
 ## What's still a stub, on purpose
 

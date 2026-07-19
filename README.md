@@ -335,38 +335,52 @@ auto-install-on-deploy path work with no manual upload. (Air-gapped? Set
 yourself, then **Set as agent**.) Full details in
 [`remote-agent/README.md`](remote-agent/README.md).
 
-> **Status:** compiles clean and has been run through real end-to-end testing
-> on an actual ESXi-hosted Windows VM (not just CI) - a real black screen on
-> Shadow and a real Connect error were both found this way and fixed (see
-> below), not just theorized. CI (`.github/workflows/build-agent-msi.yml`)
-> is green on every push that touches the agent.
+> **Status:** compiles clean and has been through several rounds of real
+> end-to-end testing on an actual ESXi-hosted Windows VM (not just CI) -
+> several real bugs were found this way and fixed, including one where an
+> earlier fix compiled, ran, and reported no error but turned out not to
+> actually work (see below) - not everything here is "theorized," but not
+> everything is "confirmed working" either; read this status honestly.
+> CI (`.github/workflows/build-agent-msi.yml`) is green on every push that
+> touches the agent.
 >
 > Resolution and Ctrl+Alt+Del are both real, working features today, not
 > placeholders: Shadow changes the VM's actual resolution via the standard
 > `ChangeDisplaySettingsEx` API, snapping to the closest mode the adapter
-> supports (exactly like the RustDesk-based version did, just computed
-> against this machine's real mode list instead of a hardcoded guess list) -
-> a bundled virtual-display driver (see `IVirtualDisplay` in
-> `remote-agent/agent/`) is the further upgrade to exact arbitrary sizing,
-> not yet bundled, but not required for resolution changes to work at all.
+> supports. That call has a real constraint - it only succeeds when made
+> from a thread attached to the interactive desktop, which the agent
+> service's own process (Session 0, like every Windows service) never is -
+> so it now runs in a tiny one-shot self-invocation of the agent exe
+> (`DeployCoreAgent.exe --set-resolution W H`), launched into the active
+> session the same way ffmpeg's own capture is, rather than in-process.
 > Ctrl+Alt+Del has a toolbar button in both Shadow and Connect.
 >
 > **Shadow works with nobody logged in, too** - not just once someone's
-> signed in. The agent runs in Session 0 (like every Windows service),
-> which has no access to the real console by default; `SessionCapture.cs`
-> launches the actual capture into the active console session instead, and
-> picks one of two tokens to do it with: the real user's own token if
-> someone has ever logged in (works even if they've since locked the
-> screen - a lock doesn't invalidate the token), or, if nobody has, a
-> SYSTEM token this service already owns, retargeted to that session, aimed
-> at the Winlogon desktop that renders the logon prompt itself. One honest
-> gap, not silently ignored: a *locked* (but previously logged-in) session
-> is also showing Winlogon, not the user's own desktop, and today's code
-> doesn't detect that specific case - it still picks the user's token/
-> desktop for it. Whether that shows a stale last frame or a black one
-> wasn't verified; if a real test at a locked screen shows it's actually
-> broken, that's the next thing to fix, separately from the no-login case
-> above.
+> signed in. The agent runs in Session 0, which has no access to the real
+> console by default; `SessionCapture.cs` launches the actual capture into
+> the active console session instead. The FIRST version of this fallback
+> (retargeting the service's own SYSTEM token to the target session)
+> compiled and ran with no error, but real testing showed it didn't
+> actually work - ffmpeg's capture file never appeared. Replaced with the
+> mechanism a real, shipping tool (rustdesk/rustdesk) actually uses:
+> find explorer.exe (someone's logged in) or winlogon.exe (nobody has -
+> it's the process that owns and renders the logon/lock screen, and exists
+> in every session regardless of login state) already running in the
+> target session, and steal *that* process's own token directly, rather
+> than manufacture one. Not yet re-confirmed on real hardware as of this
+> write-up - see `remote-agent/agent/SessionCapture.cs`'s own doc comment
+> for the full reasoning and citations.
+>
+> **Connect mode**: a real bug (closing the WebSocket before accepting it,
+> which the ASGI spec says produces a bare HTTP 403 instead of a real close
+> event) was found and fixed - confirmed live, the browser now gets a real
+> connection instead of an opaque refusal. Past that point, a session was
+> still seen hanging at "Establishing a secure session" with no error -
+> static review of the whole tunnel (browser → backend → agent → target
+> RDP port) didn't turn up a further bug, so byte-progress logging was
+> added on both ends of that tunnel instead of guessing again; the next
+> real test's logs should show conclusively which leg, if any, isn't
+> moving bytes.
 
 ## Capabilities
 
