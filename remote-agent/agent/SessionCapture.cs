@@ -354,9 +354,33 @@ internal static class SessionCapture
         var pEnv = IntPtr.Zero;
         try
         {
-            if (!CreateEnvironmentBlock(ref pEnv, hToken, false))
+            // Only build a custom environment block for a REAL logged-in
+            // user's own token (explorer.exe) - confirmed against
+            // rustdesk/rustdesk's own LaunchProcessWin, which does exactly
+            // this and nothing else: for the winlogon.exe/no-login case, it
+            // leaves lpEnvironment NULL rather than calling
+            // CreateEnvironmentBlock at all. This was NOT matched here
+            // originally (this code called CreateEnvironmentBlock
+            // unconditionally for both cases) - confirmed live as the
+            // likely real cause of ffmpeg dying near-instantly with no
+            // -report file ever written (crashing before even reaching its
+            // own main(), the signature of a broken startup environment):
+            // winlogon.exe is not a normal interactively-logged-on user
+            // with a loaded profile, so CreateEnvironmentBlock building an
+            // environment "from its profile" plausibly produces something
+            // missing basics like PATH/SystemRoot that any child process's
+            // own CRT init needs. Passing NULL instead makes the new
+            // process inherit THIS SERVICE's own environment (a normal,
+            // complete SYSTEM environment, since this service starts
+            // normally under the SCM) - matches rustdesk's proven behavior
+            // exactly rather than trying to fix CreateEnvironmentBlock's
+            // input instead.
+            if (foundLoggedInUser)
             {
-                throw new InvalidOperationException($"CreateEnvironmentBlock failed (0x{Marshal.GetLastWin32Error():X}).");
+                if (!CreateEnvironmentBlock(ref pEnv, hToken, true))
+                {
+                    throw new InvalidOperationException($"CreateEnvironmentBlock failed (0x{Marshal.GetLastWin32Error():X}).");
+                }
             }
 
             var startupInfo = new STARTUPINFO
@@ -364,10 +388,14 @@ internal static class SessionCapture
                 cb = Marshal.SizeOf<STARTUPINFO>(),
                 lpDesktop = "winsta0\\default",
             };
-            const uint creationFlags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+            // CREATE_UNICODE_ENVIRONMENT only makes sense (and is only set
+            // by rustdesk's own reference) when an actual Unicode
+            // environment block is being passed - meaningless, and not
+            // worth risking undefined behavior over, when pEnv is NULL.
+            var creationFlags = CREATE_NO_WINDOW | (pEnv != IntPtr.Zero ? CREATE_UNICODE_ENVIRONMENT : 0);
 
             if (!CreateProcessAsUser(hToken, null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
-                    creationFlags, pEnv, workingDirectory, ref startupInfo, out var processInfo))
+                    (uint)creationFlags, pEnv, workingDirectory, ref startupInfo, out var processInfo))
             {
                 throw new InvalidOperationException($"CreateProcessAsUser failed (0x{Marshal.GetLastWin32Error():X}).");
             }

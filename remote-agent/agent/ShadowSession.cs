@@ -625,7 +625,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         }
 
         logger.LogWarning(
-            "Shadow session {SessionId}: capture file {Path} never appeared after 10s - ffmpeg process {StillRunning} still running. ffmpeg's own -report log:\n{ReportContent}",
+            "Shadow session {SessionId}: capture file {Path} has no data - ffmpeg process {StillRunning} still running. ffmpeg's own -report log:\n{ReportContent}",
             sessionId, capturePath, stillRunning ? "IS" : "is NOT",
             reportContent ?? "(no -report log file found - ffmpeg may not have started at all)");
     }
