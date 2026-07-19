@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using SIPSorcery.Net; // RTCPeerConnection and friends live here as of the 6.x line, per SIPSorcery's own examples - if a real restore/build puts some of these types (e.g. MediaStreamTrack/SDPAudioVideoMediaFormat) in a sibling namespace instead, add that using too; see the file-level note below.
@@ -414,7 +415,16 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         // NOTE: gdigrab and ddagrab are equally affected by the Session 0
         // problem SessionCapture solves - this is a session-level
         // restriction, not specific to either capture API.
-        const string baseArgs = "-f gdigrab -framerate 30 -i desktop";
+        // -report: ffmpeg's OWN diagnostic log (full command line, every
+        // stderr line, the real reason gdigrab/libx264 fails if either
+        // does) written to a file in the working directory - added after a
+        // real test showed the capture file simply never appearing, with no
+        // way to tell WHY from this agent's own side (stdout/stderr were
+        // never captured at all - see SessionCapture's own doc comment on
+        // why piping them across the CreateProcessAsUser boundary wasn't
+        // attempted). TailCaptureFileAsync reads this file back and logs
+        // its content itself if the capture file still never shows up.
+        const string baseArgs = "-report -f gdigrab -framerate 30 -i desktop";
         // -y: overwrite the output file without an interactive prompt - now
         // load-bearing, not cosmetic, since output is a real file path that
         // may already exist from this session's own previous
@@ -469,7 +479,10 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         uint pid;
         try
         {
-            pid = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory, logger);
+            // dataDir, not AppContext.BaseDirectory - this is where -report's
+            // own log file lands (ffmpeg writes it relative to its working
+            // directory), the same place TailCaptureFileAsync looks for it.
+            pid = SessionCapture.StartInActiveSession(commandLine, dataDir, logger);
         }
         catch (Exception ex)
         {
@@ -525,6 +538,72 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     }
 
     /// <summary>
+    /// Called when the capture file never appears within TailCaptureFileAsync's
+    /// own 10s retry window. Two concrete, distinguishing checks - added
+    /// after a real test showed this still happening even once the launch
+    /// mechanism itself started reporting success at every step (a real
+    /// session, a real desktop, a real PID - see SessionCapture) - so the
+    /// remaining open question is specifically what ffmpeg itself is doing:
+    ///   1. Is the process even still alive? (a crash vs. a genuine hang
+    ///      look identical from the capture-file side alone.)
+    ///   2. What does ffmpeg's OWN -report log say? (BuildFfmpegArgs adds
+    ///      -report specifically for this - it's ffmpeg's real stderr
+    ///      output, including the actual reason gdigrab or libx264 failed,
+    ///      if either did - this agent has never been able to see that
+    ///      before, since stdout/stderr were never captured across the
+    ///      CreateProcessAsUser boundary at all.)
+    /// </summary>
+    private void LogFfmpegFailureDiagnostics(string capturePath)
+    {
+        var stillRunning = false;
+        if (_ffmpegProcessId is { } pid)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById((int)pid);
+                stillRunning = !proc.HasExited;
+            }
+            catch (ArgumentException)
+            {
+                // already exited - stillRunning stays false
+            }
+        }
+
+        string? reportContent = null;
+        try
+        {
+            var dir = Path.GetDirectoryName(capturePath);
+            if (dir is not null)
+            {
+                var report = Directory.GetFiles(dir, "ffmpeg-*.log")
+                    .Select(f => new FileInfo(f))
+                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                    .FirstOrDefault();
+                if (report is not null)
+                {
+                    using var reportStream = new FileStream(report.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var reportReader = new StreamReader(reportStream);
+                    var text = reportReader.ReadToEnd();
+                    // Tail only - a long-lived ffmpeg's own report can run to
+                    // many KB of per-frame logging; the actual failure
+                    // reason is always near the end, close to wherever it
+                    // gave up or crashed.
+                    reportContent = text.Length > 4000 ? text[^4000..] : text;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Shadow session {SessionId}: could not read ffmpeg's own -report log.", sessionId);
+        }
+
+        logger.LogWarning(
+            "Shadow session {SessionId}: capture file {Path} never appeared after 10s - ffmpeg process {StillRunning} still running. ffmpeg's own -report log:\n{ReportContent}",
+            sessionId, capturePath, stillRunning ? "IS" : "is NOT",
+            reportContent ?? "(no -report log file found - ffmpeg may not have started at all)");
+    }
+
+    /// <summary>
     /// Reads NAL units from ffmpeg's OUTPUT FILE as it grows, not from a
     /// redirected stdout pipe - see SessionCapture's own doc comment for
     /// why (ffmpeg writing to a Windows named pipe as OUTPUT is a confirmed
@@ -575,7 +654,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         }
         if (stream is null)
         {
-            logger.LogWarning("Shadow session {SessionId}: capture file {Path} never appeared after 10s - ffmpeg likely failed to start in the target session (nobody logged in? see SessionCapture's own \"known limitation\" doc comment).", sessionId, path);
+            LogFfmpegFailureDiagnostics(path);
             return;
         }
 
