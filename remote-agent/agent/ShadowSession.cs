@@ -513,6 +513,28 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
 
         if (_ffmpegProcessId is { } pid)
         {
+            // Checked BEFORE killing the process below, and regardless of
+            // how long this capture attempt lived - confirmed live that
+            // sessions were consistently torn down (peer connection closed)
+            // within 3-9 seconds, always shortly after a resize-triggered
+            // restart, well under TailCaptureFileAsync's own 10s "never
+            // appeared" threshold - so that check never got a chance to
+            // fire, and this agent still had no visibility into what a
+            // short-lived capture attempt was actually doing. A real file
+            // with real bytes already has TailCaptureFileAsync's own 5s
+            // progress log covering it - this only dumps ffmpeg's own
+            // -report content for the empty-or-missing case.
+            long fileBytes = -1;
+            if (_captureFilePath is { } checkPath)
+            {
+                try { fileBytes = new FileInfo(checkPath).Length; }
+                catch { /* doesn't exist yet / not accessible */ }
+            }
+            if (fileBytes <= 0 && _captureFilePath is not null)
+            {
+                LogFfmpegFailureDiagnostics(_captureFilePath);
+            }
+
             try
             {
                 using var proc = Process.GetProcessById((int)pid);
@@ -538,9 +560,14 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     }
 
     /// <summary>
-    /// Called when the capture file never appears within TailCaptureFileAsync's
-    /// own 10s retry window. Two concrete, distinguishing checks - added
-    /// after a real test showed this still happening even once the launch
+    /// Called both when the capture file never appears within
+    /// TailCaptureFileAsync's own 10s retry window, AND from StopCapture
+    /// for a capture that ended (for any reason) before that 10s window
+    /// even elapsed with nothing written yet - confirmed live that the
+    /// latter is the common case, not the former: real sessions were
+    /// consistently torn down well under 10 seconds. Two concrete,
+    /// distinguishing checks - added after a real test showed this still
+    /// happening even once the launch
     /// mechanism itself started reporting success at every step (a real
     /// session, a real desktop, a real PID - see SessionCapture) - so the
     /// remaining open question is specifically what ffmpeg itself is doing:
