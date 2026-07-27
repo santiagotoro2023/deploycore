@@ -45,6 +45,15 @@ if (args is ["--session-helper", var pipeName])
     return;
 }
 
+// Runtime self-check (see SelfTest.cs) - exercises the WebRTC/ffmpeg/helper-
+// pipe paths that a plain compile can't, and sets a nonzero exit code if any
+// critical check fails. Run on a windows-latest CI runner before publishing.
+if (args is ["--selftest"])
+{
+    Environment.ExitCode = await SelfTest.RunAsync();
+    return;
+}
+
 // A modern .NET Windows Service: Microsoft.Extensions.Hosting +
 // Microsoft.Extensions.Hosting.WindowsServices already solve "run a
 // cancellable background loop under the Service Control Manager" for free

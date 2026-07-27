@@ -75,6 +75,21 @@ jobs:
           Copy-Item $exe.FullName remote-agent/wix/ffmpeg.exe
           if (-not (Test-Path remote-agent/wix/ffmpeg.exe)) { throw "ffmpeg download failed" }
 
+      # Runtime self-test: actually RUN the freshly-built agent and exercise
+      # the paths a plain compile can't - the SIPSorcery WebRTC offer (the
+      # "written from memory" API), the Annex-B NAL splitter, the bundled
+      # ffmpeg binary, and the new in-session helper's pipe protocol end to end
+      # (it launches the --session-helper child and round-trips a JSON command).
+      # Critical checks fail the build; best-effort ones that need a real
+      # interactive desktop (a live gdigrab capture, clipboard) only warn, since
+      # a CI runner may not provide one - those are validated on the real VM.
+      - name: Agent runtime self-test
+        shell: pwsh
+        working-directory: remote-agent/wix
+        run: |
+          & .\DeployCoreAgent.exe --selftest
+          if ($LASTEXITCODE -ne 0) { throw "agent self-test failed (exit $LASTEXITCODE)" }
+
       # Build the branded tray companion, then use it to emit the DeployCore
       # .ico (drawn with GDI+, so no ImageMagick/Inkscape needed). Both get
       # staged next to the .wxs for the MSI to bundle.

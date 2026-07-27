@@ -1,0 +1,68 @@
+name: Backend tests
+
+# Runs the backend pytest suite (including the new guacd-handshake and
+# managed-host power-endpoint tests) against real Postgres + Redis service
+# containers, so the Connect-mode bridge logic and the power toolbar are
+# exercised in CI on every backend change - no VM deployment required.
+
+on:
+  push:
+    branches: [main, remote-management-rebuild]
+    paths:
+      - "backend/**"
+      - ".github/workflows/test-backend.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: deploycore
+          POSTGRES_PASSWORD: deploycore
+          POSTGRES_DB: deploycore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U deploycore"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      APP_SECRET_KEY: test-secret-key-for-ci-only
+      DATABASE_URL: postgresql+asyncpg://deploycore:deploycore@localhost:5432/deploycore
+      REDIS_URL: redis://localhost:6379/0
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend + test deps
+        run: pip install -e ".[test]"
+
+      - name: Run pytest
+        run: pytest -q
