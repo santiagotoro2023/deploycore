@@ -353,9 +353,21 @@ internal static class SessionCapture
     /// step is needed before CreateProcessAsUser. IntPtr.Zero if it couldn't
     /// be found or opened.
     /// </summary>
-    private static IntPtr FindWinlogonToken(uint sessionId)
+    private static IntPtr FindWinlogonToken(uint sessionId) => FindProcessToken(sessionId, "winlogon");
+
+    /// <summary>
+    /// That process's OWN token, opened directly - already a primary token
+    /// (unlike WTSQueryUserToken's impersonation-type result), so it needs no
+    /// DuplicateTokenEx before CreateProcessAsUser. Used for winlogon.exe
+    /// (SYSTEM, exists in every session even with nobody signed in) and for
+    /// explorer.exe (the signed-in user, and the reliable way to get that
+    /// user's token when WTSQueryUserToken refuses - this path needs only
+    /// SeDebugPrivilege, which is already proven to work here, rather than
+    /// SeTcbPrivilege). IntPtr.Zero if not found or not openable.
+    /// </summary>
+    private static IntPtr FindProcessToken(uint sessionId, string processName)
     {
-        var pid = FindProcessIdInSession(sessionId, "winlogon");
+        var pid = FindProcessIdInSession(sessionId, processName);
         if (pid == 0) return IntPtr.Zero;
 
         var hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, false, pid);
@@ -401,36 +413,82 @@ internal static class SessionCapture
         // interactive session". WTSQueryUserToken fails when nobody is signed
         // in - that's the sign-in-screen case, where winlogon's token IS the
         // right one, paired with the Winlogon desktop rather than Default.
-        var hToken = IntPtr.Zero;
-        var usingUserToken = false;
-        var desktop = DesktopWinlogon;
+        // WHICH DESKTOP is decided by whether a user is actually signed in -
+        // NOT by which token we manage to get. Getting this backwards is what
+        // produced a "working but black" capture on a real VM: WTSQueryUserToken
+        // failed, the code fell back to winlogon's token AND to the Winlogon
+        // desktop, and ffmpeg then faithfully captured the sign-in desktop
+        // (a static, empty screen, encoded as all-SKIP macroblocks) while the
+        // user was signed in and looking at Default. explorer.exe running in
+        // the session is the signal for "somebody is signed in".
+        var explorerPid = FindProcessIdInSession(sessionId, "explorer");
+        var userSignedIn = explorerPid != 0;
+        var desktop = userSignedIn ? DesktopDefault : DesktopWinlogon;
 
-        if (WTSQueryUserToken(sessionId, out var hUserToken))
+        var hToken = IntPtr.Zero;
+        var tokenKind = "winlogon.exe's token";
+
+        if (userSignedIn)
         {
-            try
+            // First choice: the documented API. It needs SeTcbPrivilege and
+            // returns an impersonation-type token, so it also needs
+            // duplicating to a primary token.
+            if (WTSQueryUserToken(sessionId, out var hUserToken))
             {
-                if (DuplicateTokenEx(hUserToken, MAXIMUM_ALLOWED, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out var hPrimary))
+                try
                 {
-                    hToken = hPrimary;
-                    usingUserToken = true;
-                    desktop = DesktopDefault;
+                    if (DuplicateTokenEx(hUserToken, MAXIMUM_ALLOWED, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out var hPrimary))
+                    {
+                        hToken = hPrimary;
+                        tokenKind = "the signed-in user's token (WTSQueryUserToken)";
+                    }
+                    else
+                    {
+                        logger.LogWarning("DuplicateTokenEx on the session user's token failed (0x{Error:X}).", Marshal.GetLastWin32Error());
+                    }
                 }
-                else
+                finally
                 {
-                    logger.LogWarning("DuplicateTokenEx on the session user's token failed (0x{Error:X}) - falling back to winlogon.exe's token.", Marshal.GetLastWin32Error());
+                    CloseHandle(hUserToken);
                 }
             }
-            finally
+            else
             {
-                CloseHandle(hUserToken);
+                logger.LogWarning(
+                    "WTSQueryUserToken for session {SessionId} failed (0x{Error:X}) - is SeTcbPrivilege enabled? Falling back to explorer.exe's own token.",
+                    sessionId, Marshal.GetLastWin32Error());
+            }
+
+            // Second choice, and the one that actually matters in practice:
+            // take explorer.exe's own token. It belongs to the same signed-in
+            // user, is already a primary token, and only needs SeDebugPrivilege
+            // - which this agent has already proven it can use (it opens
+            // winlogon.exe's token the same way). Without this, a
+            // WTSQueryUserToken failure silently degrades to a SYSTEM token,
+            // which cannot read the interactive desktop's screen at all
+            // (BitBlt -> ERROR_ACCESS_DENIED, "Failed to capture image
+            // (error 5)").
+            if (hToken == IntPtr.Zero)
+            {
+                hToken = FindProcessToken(sessionId, "explorer");
+                if (hToken != IntPtr.Zero) tokenKind = "the signed-in user's token (explorer.exe)";
             }
         }
 
+        // Nobody signed in (the sign-in screen), or both user-token routes
+        // failed: winlogon's SYSTEM token, which owns the Winlogon desktop.
         if (hToken == IntPtr.Zero)
         {
             hToken = FindWinlogonToken(sessionId);
-            desktop = DesktopWinlogon;
+            if (userSignedIn)
+            {
+                logger.LogWarning(
+                    "Could not obtain the signed-in user's token for session {SessionId}; falling back to winlogon.exe's token on the {Desktop} desktop - screen capture will likely be denied. Check SeDebugPrivilege.",
+                    sessionId, desktop);
+            }
         }
+
+        var usingUserToken = tokenKind != "winlogon.exe's token";
 
         if (hToken == IntPtr.Zero)
         {
@@ -440,8 +498,8 @@ internal static class SessionCapture
         }
 
         logger.LogInformation(
-            "Launching into session {SessionId} on desktop {Desktop} using {TokenKind}.",
-            sessionId, desktop, usingUserToken ? "the signed-in user's own token" : "winlogon.exe's token");
+            "Launching into session {SessionId} on desktop {Desktop} using {TokenKind} (signed-in user: {SignedIn}).",
+            sessionId, desktop, tokenKind, userSignedIn ? "yes" : "no");
 
         // A user token needs that user's own environment block, or the child
         // inherits nothing usable (no TEMP/APPDATA/PATH for that account).

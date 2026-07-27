@@ -219,6 +219,21 @@ async def open_guacd_connection(
     reader, writer = await asyncio.wait_for(
         asyncio.open_connection(settings.guacd_host, settings.guacd_port), timeout=_GUACD_CONNECT_TIMEOUT_SECONDS
     )
+
+    # The address guacd should dial back on for the tunnel. Taken from THIS
+    # connection's own local address rather than the "api" service name: that
+    # is, by construction, an address guacd can reach (it's the peer address of
+    # the socket guacd is already talking to), so it can't be broken by a
+    # renamed service, a compose project prefix, or a DNS quirk. A silent
+    # failure here is expensive - guacd simply never connects to the tunnel
+    # listener, the agent reports "local-RDP->agent leg ended after 0 bytes",
+    # and the session hangs with no error anywhere. Falls back to the caller's
+    # value if the socket can't report one.
+    sockname = writer.get_extra_info("sockname")
+    if isinstance(sockname, tuple) and sockname and isinstance(sockname[0], str):
+        host = sockname[0]
+    logger.info("guacd will be told to dial the session tunnel at %s:%d.", host, port)
+
     writer.write(_encode_instruction("select", "rdp"))
     await writer.drain()
 
