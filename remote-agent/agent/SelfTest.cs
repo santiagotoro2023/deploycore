@@ -58,16 +58,17 @@ internal static class SelfTest
 
     private static void CheckNalSplitter()
     {
-        // Two NALs: a 4-byte start code then a 3-byte start code.
-        var stream = new byte[] { 0, 0, 0, 1, 0x67, 0x42, 0, 0, 1, 0x65, 0xAA, 0xBB };
+        // 4-byte start code, NAL #1 = {0x67}, 3-byte start code, NAL #2 =
+        // {0x65,0xAA,0xBB}. The splitter emits NAL #1 once it sees the SECOND
+        // start code; NAL #2 stays buffered until more data / EOF, matching how
+        // the real tail loop works. One complete NAL is enough to prove the
+        // split logic.
+        var stream = new byte[] { 0, 0, 0, 1, 0x67, 0, 0, 1, 0x65, 0xAA, 0xBB };
         var splitter = new AnnexBNalSplitter();
         var nals = splitter.Append(stream).ToList();
-        // The first NAL is emitted once the SECOND start code is seen; the
-        // trailing NAL stays buffered until more data / EOF - matching how the
-        // real tail loop works. One complete NAL here is enough to prove the
-        // split logic.
         if (nals.Count < 1) throw new Exception("no NAL units split out");
-        if (nals[0].Length != 3 || nals[0][0] != 0x67) throw new Exception("first NAL content wrong");
+        if (nals[0].Length != 1 || nals[0][0] != 0x67)
+            throw new Exception($"first NAL wrong (len {nals[0].Length}, byte0 0x{nals[0][0]:X2}, expected len 1 / 0x67)");
         Console.WriteLine($"    split {nals.Count} NAL unit(s), first is SPS (0x67)");
     }
 
@@ -110,39 +111,49 @@ internal static class SelfTest
                           ?? throw new Exception("could not launch --session-helper child");
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            await server.WaitForConnectionAsync(cts.Token);
-
-            var writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true };
-            var reader = new StreamReader(server, new UTF8Encoding(false));
-
-            // The helper sends a "screensize" immediately on connect, and again
-            // after a "resize". Send a resize and confirm we get a screensize
-            // reply back - proves the whole JSON pipe protocol round-trips.
-            await writer.WriteLineAsync("{\"t\":\"resize\",\"w\":800,\"h\":600}");
-
-            string? gotScreensize = null;
-            for (var i = 0; i < 5 && gotScreensize is null; i++)
-            {
-                var line = await reader.ReadLineAsync(cts.Token);
-                if (line is null) break;
-                try
-                {
-                    var msg = JsonDocument.Parse(line).RootElement;
-                    if (msg.TryGetProperty("t", out var t) && t.GetString() == "screensize"
-                        && msg.TryGetProperty("w", out var w) && w.GetInt32() > 0)
-                        gotScreensize = line;
-                }
-                catch (JsonException) { /* ignore non-JSON */ }
-            }
-            if (gotScreensize is null) throw new Exception("no valid 'screensize' reply from the helper");
-            Console.WriteLine($"    helper replied: {gotScreensize}");
+            // Task.WaitAsync bounds the WHOLE round-trip hard: unlike a
+            // CancellationToken (which a named-pipe WaitForConnection/ReadLine
+            // may not actually honor - that's what hung an earlier run), this
+            // abandons the wait after the timeout no matter what, throwing
+            // TimeoutException, so this check can never stall the self-test.
+            await DoHelperRoundTripAsync(server).WaitAsync(TimeSpan.FromSeconds(25));
         }
         finally
         {
             try { server.Dispose(); } catch { /* ignore */ }
             try { if (!child.WaitForExit(3000)) child.Kill(entireProcessTree: true); } catch { /* ignore */ }
         }
+    }
+
+    private static async Task DoHelperRoundTripAsync(System.IO.Pipes.NamedPipeServerStream server)
+    {
+        await server.WaitForConnectionAsync();
+        Console.WriteLine("    helper connected to the pipe");
+
+        var writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true };
+        var reader = new StreamReader(server, new UTF8Encoding(false));
+
+        // The helper sends a "screensize" immediately on connect and again
+        // after a "resize". Send a resize and confirm a screensize reply comes
+        // back - proves the whole JSON pipe protocol round-trips both ways.
+        await writer.WriteLineAsync("{\"t\":\"resize\",\"w\":800,\"h\":600}");
+
+        string? gotScreensize = null;
+        for (var i = 0; i < 5 && gotScreensize is null; i++)
+        {
+            var line = await reader.ReadLineAsync();
+            if (line is null) break;
+            try
+            {
+                var msg = JsonDocument.Parse(line).RootElement;
+                if (msg.TryGetProperty("t", out var t) && t.GetString() == "screensize"
+                    && msg.TryGetProperty("w", out var w) && w.GetInt32() > 0)
+                    gotScreensize = line;
+            }
+            catch (JsonException) { /* ignore non-JSON */ }
+        }
+        if (gotScreensize is null) throw new Exception("no valid 'screensize' reply from the helper");
+        Console.WriteLine($"    helper replied: {gotScreensize}");
     }
 
     private static void CheckGdigrabCapture()
