@@ -49,8 +49,8 @@ internal static class SessionHelper
         // so without this the console would be left at whatever size the last
         // browser viewport requested.
         var originalSize = Win32Interop.GetPrimaryScreenSize();
-        logger.LogInformation("session-helper connected on pipe {Pipe}; console resolution {W}x{H}.",
-            pipeName, originalSize.Width, originalSize.Height);
+        logger.LogInformation("session-helper connected on pipe {Pipe}; console resolution {W}x{H}; {Station}.",
+            pipeName, originalSize.Width, originalSize.Height, Win32Interop.DescribeStationAndDesktop());
 
         var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true };
         var reader = new StreamReader(pipe, new UTF8Encoding(false));

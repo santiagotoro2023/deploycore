@@ -82,23 +82,33 @@ export default function RemoteSession() {
     pcRef.current?.close();
     pcRef.current = null;
     dataChannelRef.current = null;
+    // Quiesce the keyboard BEFORE disconnecting the client, and reset() BEFORE
+    // nulling the handlers - both orderings matter, per Guacamole.Keyboard
+    // 1.5.5's actual source. reset() releases every key it believes is held,
+    // but release() only emits the keyup `if (onkeyup)`, so nulling first
+    // silently swallows those releases and strands modifiers held down on the
+    // remote machine; and the keyups have to be sent while the client is still
+    // connected to reach it. reset() also clears the key-repeat timers, whose
+    // callback would otherwise fire into null handlers.
+    const keyboard = guacKeyboardRef.current;
+    if (keyboard) {
+      try {
+        keyboard.reset();
+      } catch {
+        // Best-effort cleanup; never block teardown on it.
+      }
+      // Guacamole.Keyboard has NO detach API (listenTo adds anonymous
+      // capture-phase listeners that can't be removed). Nulling both handlers
+      // is what makes every listener early-return before its preventDefault -
+      // that plus binding to the display element (dropped below) is what stops
+      // it swallowing keystrokes for the rest of the app.
+      keyboard.onkeydown = null;
+      keyboard.onkeyup = null;
+      guacKeyboardRef.current = null;
+    }
     guacClientRef.current?.disconnect();
     guacClientRef.current = null;
     guacMouseRef.current = null;
-    // Drop the key handlers and release any keys Guacamole thinks are still
-    // held before letting go of the object - otherwise navigating away
-    // mid-keypress leaves a stuck modifier and (with the old document-level
-    // binding) swallowed keystrokes for the rest of the app.
-    if (guacKeyboardRef.current) {
-      guacKeyboardRef.current.onkeydown = null;
-      guacKeyboardRef.current.onkeyup = null;
-      try {
-        guacKeyboardRef.current.reset();
-      } catch {
-        // reset() is best-effort cleanup; never block teardown on it.
-      }
-      guacKeyboardRef.current = null;
-    }
     if (videoRef.current) videoRef.current.srcObject = null;
     if (viewerRef.current) viewerRef.current.replaceChildren();
     setSessionReady(false);

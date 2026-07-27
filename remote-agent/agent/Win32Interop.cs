@@ -396,6 +396,68 @@ internal static class Win32Interop
 
     #endregion
 
+    #region Window station / desktop diagnostics
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetProcessWindowStation();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetThreadDesktop(uint threadId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool GetUserObjectInformation(
+        IntPtr hObj, int index, byte[] pvInfo, uint nLength, out uint lpnLengthNeeded);
+
+    private const int UOI_NAME = 2;
+    private const int UOI_FLAGS = 1;
+    private const uint WSF_VISIBLE = 0x0001;
+
+    private static string ObjectName(IntPtr handle)
+    {
+        var buffer = new byte[512];
+        return GetUserObjectInformation(handle, UOI_NAME, buffer, (uint)buffer.Length, out var needed)
+            ? Encoding.Unicode.GetString(buffer, 0, (int)Math.Max(0, needed - 2))
+            : $"<unknown 0x{Marshal.GetLastWin32Error():X}>";
+    }
+
+    /// <summary>
+    /// Which window station + desktop this process actually landed on, and
+    /// whether that station is the visible/interactive one. Worth logging
+    /// because "the launch succeeded" and "the process can actually see the
+    /// screen" are different things: a process on the service window station
+    /// (Service-0x0-3e7$, not visible) attaches fine and answers geometry
+    /// queries, but every screen READ fails with ERROR_ACCESS_DENIED - the
+    /// exact "Failed to capture image (error 5)" seen live. One log line here
+    /// tells "wrong station" apart from "right station, denied by DACL"
+    /// instead of guessing from ffmpeg's symptoms.
+    /// </summary>
+    public static string DescribeStationAndDesktop()
+    {
+        try
+        {
+            var station = GetProcessWindowStation();
+            var desktop = GetThreadDesktop(GetCurrentThreadId());
+            var flags = new byte[8];
+            var visible = "unknown";
+            if (GetUserObjectInformation(station, UOI_FLAGS, flags, (uint)flags.Length, out _))
+            {
+                // USEROBJECTFLAGS: BOOL fInherit; BOOL fReserved; DWORD dwFlags
+                var dwFlags = BitConverter.ToUInt32(flags, 8 - 4);
+                visible = (dwFlags & WSF_VISIBLE) != 0 ? "visible" : "NOT visible";
+            }
+            return $"winsta={ObjectName(station)} desktop={ObjectName(desktop)} ({visible})";
+        }
+        catch (Exception ex)
+        {
+            return $"<could not determine: {ex.Message}>";
+        }
+    }
+
+    #endregion
+
     #region SendSAS (Ctrl+Alt+Del)
 
     [DllImport("sas.dll")]
