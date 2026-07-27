@@ -122,6 +122,7 @@ internal static class SelfTest
         {
             try { server.Dispose(); } catch { /* ignore */ }
             try { if (!child.WaitForExit(3000)) child.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            DumpAgentLog(); // the helper's own log - shows its side of the round-trip
         }
     }
 
@@ -131,17 +132,20 @@ internal static class SelfTest
         Console.WriteLine("    helper connected to the pipe");
 
         var writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true };
-        var reader = new StreamReader(server, new UTF8Encoding(false));
+        var reader = new StreamReader(server, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false);
 
         // The helper sends a "screensize" immediately on connect and again
         // after a "resize". Send a resize and confirm a screensize reply comes
         // back - proves the whole JSON pipe protocol round-trips both ways.
         await writer.WriteLineAsync("{\"t\":\"resize\",\"w\":800,\"h\":600}");
+        await writer.FlushAsync();
+        Console.WriteLine("    sent resize to helper");
 
         string? gotScreensize = null;
-        for (var i = 0; i < 5 && gotScreensize is null; i++)
+        for (var i = 0; i < 8 && gotScreensize is null; i++)
         {
             var line = await reader.ReadLineAsync();
+            Console.WriteLine($"    read[{i}]: {(line is null ? "<null/EOF>" : line)}");
             if (line is null) break;
             try
             {
@@ -154,6 +158,21 @@ internal static class SelfTest
         }
         if (gotScreensize is null) throw new Exception("no valid 'screensize' reply from the helper");
         Console.WriteLine($"    helper replied: {gotScreensize}");
+    }
+
+    private static void DumpAgentLog()
+    {
+        try
+        {
+            var log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DeployCore", "agent.log");
+            if (!File.Exists(log)) { Console.WriteLine("    (no helper agent.log found)"); return; }
+            var text = File.ReadAllText(log);
+            Console.WriteLine("    --- helper agent.log (tail) ---");
+            foreach (var l in (text.Length > 1500 ? text[^1500..] : text).Split('\n'))
+                if (l.Trim().Length > 0) Console.WriteLine("    | " + l.TrimEnd());
+            Console.WriteLine("    --- end agent.log ---");
+        }
+        catch (Exception ex) { Console.WriteLine("    (agent.log dump failed: " + ex.Message + ")"); }
     }
 
     private static void CheckGdigrabCapture()

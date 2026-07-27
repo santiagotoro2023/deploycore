@@ -393,7 +393,11 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     {
         var json = JsonSerializer.Serialize(message);
         await _helperWriteSem.WaitAsync();
-        try { await writer.WriteLineAsync(json); }
+        try
+        {
+            await writer.WriteLineAsync(json);
+            await writer.FlushAsync(); // explicit, not just AutoFlush - see SessionHelper.SendAsync
+        }
         catch (Exception ex) { logger.LogDebug(ex, "Shadow session {SessionId}: send to helper failed.", sessionId); }
         finally { _helperWriteSem.Release(); }
     }
