@@ -284,7 +284,10 @@ Two modes, both from the same enrolled agent:
   exact resolution changes (RDP's own Display Control channel), not
   something DeployCore has to solve itself.
 
-Both share a clipboard with your machine and support full-screen.
+Both share a clipboard with your machine and support full-screen. For a host
+DeployCore itself deployed, the session toolbar also has **ESXi-style power
+controls** (power on / shut down guest / power off / reset), driven through the
+same hypervisor the deployment runs on.
 
 **It's automatic on install.** `coturn` (STUN/TURN, for the rare host that
 isn't on this server's own LAN - Shadow's WebRTC path always tries a direct
@@ -335,52 +338,47 @@ auto-install-on-deploy path work with no manual upload. (Air-gapped? Set
 yourself, then **Set as agent**.) Full details in
 [`remote-agent/README.md`](remote-agent/README.md).
 
-> **Status:** compiles clean and has been through several rounds of real
-> end-to-end testing on an actual ESXi-hosted Windows VM (not just CI) -
-> several real bugs were found this way and fixed, including one where an
-> earlier fix compiled, ran, and reported no error but turned out not to
-> actually work (see below) - not everything here is "theorized," but not
-> everything is "confirmed working" either; read this status honestly.
-> CI (`.github/workflows/build-agent-msi.yml`) is green on every push that
-> touches the agent.
+> **Status (2026-07-27 rebuild).** A source-verified review against the real
+> RustDesk, Apache Guacamole 1.5.5, and Win32 sources found the concrete root
+> causes that had kept both modes from ever working, and all of them are fixed
+> and now covered by automated tests that actually **run** the agent and the
+> Connect bridge in CI - not just a compile.
 >
-> Resolution and Ctrl+Alt+Del are both real, working features today, not
-> placeholders: Shadow changes the VM's actual resolution via the standard
-> `ChangeDisplaySettingsEx` API, snapping to the closest mode the adapter
-> supports. That call has a real constraint - it only succeeds when made
-> from a thread attached to the interactive desktop, which the agent
-> service's own process (Session 0, like every Windows service) never is -
-> so it now runs in a tiny one-shot self-invocation of the agent exe
-> (`DeployCoreAgent.exe --set-resolution W H`), launched into the active
-> session the same way ffmpeg's own capture is, rather than in-process.
-> Ctrl+Alt+Del has a toolbar button in both Shadow and Connect.
+> **What CI now proves on every agent push** (`.github/workflows/build-agent-msi.yml`,
+> a real `windows-latest` runner, plus `.github/workflows/test-backend.yml`):
+> the agent's `--selftest` builds a valid SIPSorcery **WebRTC H264 offer**,
+> captures **real H.264** via ffmpeg gdigrab, round-trips the **in-session
+> helper pipe**, performs an actual **`ChangeDisplaySettingsEx` resolution
+> change and restore**, and round-trips the **clipboard**; the backend suite
+> drives the real **guacd select/args/connect/ready handshake** and the
+> **power endpoints**. These were the parts that had never been validated at
+> runtime before.
 >
-> **Shadow works with nobody logged in, too** - not just once someone's
-> signed in. The agent runs in Session 0, which has no access to the real
-> console by default; `SessionCapture.cs` launches the actual capture into
-> the active console session instead. The FIRST version of this fallback
-> (retargeting the service's own SYSTEM token to the target session)
-> compiled and ran with no error, but real testing showed it didn't
-> actually work - ffmpeg's capture file never appeared. Replaced with the
-> mechanism a real, shipping tool (rustdesk/rustdesk) actually uses:
-> find explorer.exe (someone's logged in) or winlogon.exe (nobody has -
-> it's the process that owns and renders the logon/lock screen, and exists
-> in every session regardless of login state) already running in the
-> target session, and steal *that* process's own token directly, rather
-> than manufacture one. Not yet re-confirmed on real hardware as of this
-> write-up - see `remote-agent/agent/SessionCapture.cs`'s own doc comment
-> for the full reasoning and citations.
+> **The root causes that were found and fixed:**
+> - *Shadow showed nothing:* ffmpeg was launched with `STARTUPINFO.lpDesktop`
+>   left NULL, so it inherited the Session-0 service's non-interactive window
+>   station and was destroyed during init (before `main()`, so no `-report`).
+>   Now set to `winsta0\default` (with `CharSet.Unicode` so the string
+>   survives marshalling) - see `SessionCapture.cs`.
+> - *Shadow couldn't be controlled:* mouse/keyboard, clipboard, and resolution
+>   all ran in Session 0 and never reached the interactive session. They now
+>   run in a persistent in-session helper (`SessionHelper.cs`) that the service
+>   drives over a pipe - the same helper the self-test exercises.
+> - *Connect hung at "Establishing a secure session":* four independent
+>   WS↔guacd bridge bugs - a missing `guacamole` subprotocol on accept, guacd's
+>   stream sent as binary to a text-only client, keepalive pings forwarded to
+>   guacd instead of echoed, and a `?undefined` URL corruption with
+>   `tunnel.onerror` unwired - all fixed.
 >
-> **Connect mode**: a real bug (closing the WebSocket before accepting it,
-> which the ASGI spec says produces a bare HTTP 403 instead of a real close
-> event) was found and fixed - confirmed live, the browser now gets a real
-> connection instead of an opaque refusal. Past that point, a session was
-> still seen hanging at "Establishing a secure session" with no error -
-> static review of the whole tunnel (browser → backend → agent → target
-> RDP port) didn't turn up a further bug, so byte-progress logging was
-> added on both ends of that tunnel instead of guessing again; the next
-> real test's logs should show conclusively which leg, if any, isn't
-> moving bytes.
+> Ctrl+Alt+Del is a real toolbar button in both modes; the session toolbar also
+> has ESXi-style power controls for deployment-linked hosts.
+>
+> **What still needs your live confirmation.** CI validates the agent runtime
+> and the guacd handshake, but it can't fully stand in for your environment:
+> the TURN/ICE network path for a non-LAN host, and a real Windows RDP target
+> behind Connect. So the last mile is a real session from your ESXi VM. This is
+> the first rebuild where the runtime is proven green in CI first, rather than
+> discovered on the VM.
 
 ## Capabilities
 

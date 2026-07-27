@@ -1701,7 +1701,8 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
               separate login — you see the real Windows login screen and can sign in as if sitting at it),
               and <strong>Connect</strong> opens a real, separate native RDP session, signed in with the
               host's saved RDP credentials. Both share a clipboard with your computer and support
-              full-screen.
+              full-screen, and for a host DeployCore deployed the toolbar adds ESXi-style power controls
+              (power on / shut down / power off / reset).
             </P>
             <P>
               It works by running a lightweight agent — <strong>DeployCore's own software</strong>, not a
@@ -1953,6 +1954,10 @@ export const WIKI_CATEGORIES: WikiCategory[] = [
                 <><strong>Shared clipboard</strong> — copy on your computer and paste into the remote machine,
                   and vice-versa, automatically while connected.</>,
                 <><strong>Credentials</strong> (Connect only) — see/copy the RDP username and password in use.</>,
+                <><strong>Power controls</strong> (hosts DeployCore deployed) — power on, shut down guest,
+                  power off, or reset the machine, the same as an ESXi console. Available even while
+                  disconnected, so you can power on an off machine and then connect to it. Runs through the
+                  hypervisor the deployment lives on; standalone (agent-only) hosts don't show it.</>,
               ]}
             />
             <P>
