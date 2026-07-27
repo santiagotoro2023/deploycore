@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using SIPSorcery.Net; // RTCPeerConnection and friends live here as of the 6.x line, per SIPSorcery's own examples - if a real restore/build puts some of these types (e.g. MediaStreamTrack/SDPAudioVideoMediaFormat) in a sibling namespace instead, add that using too; see the file-level note below.
@@ -42,6 +44,17 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     // and gets replaced on every resize.
     private readonly CancellationTokenSource _sessionCts = new();
     private string? _lastClipboardText;
+
+    // The in-session helper (see SessionHelper.cs) that actually performs
+    // input injection, clipboard, and resolution changes on the interactive
+    // desktop - the agent SERVICE runs in Session 0 and can't. This end is
+    // the pipe server; the helper (a child launched into the active session)
+    // is the client. Everything the old code called Win32Interop for directly
+    // in OnDataChannelMessage now goes over this pipe instead.
+    private NamedPipeServerStream? _helperPipe;
+    private StreamWriter? _helperWriter;
+    private readonly SemaphoreSlim _helperWriteSem = new(1, 1);
+    private uint? _helperProcessId;
 
     private RTCPeerConnection? _pc;
     private RTCDataChannel? _dataChannel;
@@ -87,7 +100,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         });
 
         StartCapture(width: null, height: null); // native desktop resolution until the first resize
-        _ = ClipboardPollLoopAsync(_sessionCts.Token);
+        StartHelper(); // input/clipboard/resolution, performed in the active session
     }
 
     /// <summary>Dispatches an incoming "signal" message for this session
@@ -123,8 +136,9 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     public void Stop()
     {
         _sessionCts.Cancel();
-        _sessionCts.Dispose();
         StopCapture();
+        StopHelper(); // closes the pipe -> helper restores the original resolution and exits
+        _sessionCts.Dispose();
         try
         {
             _dataChannel?.close(); // SIPSorcery API as documented - unverified, see file header
@@ -215,39 +229,47 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         }
 
         if (!msg.TryGetProperty("t", out var tEl)) return;
+        // Every interactive operation below (mouse, keys, Ctrl+Alt+Del,
+        // clipboard, resolution) MUST run in the active console session, not
+        // here in Session 0 - so each is forwarded to the in-session helper
+        // over the pipe rather than calling Win32Interop directly (which would
+        // silently act on Session 0's own dead desktop). Mouse coordinates are
+        // normalized to SendInput's 0..65535 space HERE (this side owns the
+        // capture-size/native-size state the math needs); the helper just
+        // injects them.
         try
         {
             switch (tEl.GetString())
             {
                 case "mousemove":
-                    Win32Interop.MoveMouseAbsolute(ScaleX(msg.GetProperty("x").GetInt32()), ScaleY(msg.GetProperty("y").GetInt32()));
+                    SendToHelper(new { t = "mouseabs", x = ScaleX(msg.GetProperty("x").GetInt32()), y = ScaleY(msg.GetProperty("y").GetInt32()) });
                     break;
                 case "mousedown":
-                    Win32Interop.MouseButton(msg.GetProperty("button").GetInt32(), down: true);
+                    SendToHelper(new { t = "mousedown", button = msg.GetProperty("button").GetInt32() });
                     break;
                 case "mouseup":
-                    Win32Interop.MouseButton(msg.GetProperty("button").GetInt32(), down: false);
+                    SendToHelper(new { t = "mouseup", button = msg.GetProperty("button").GetInt32() });
                     break;
                 case "wheel":
-                    Win32Interop.MouseWheel(msg.GetProperty("dy").GetInt32());
+                    SendToHelper(new { t = "wheel", dy = msg.GetProperty("dy").GetInt32() });
                     break;
                 case "keydown":
-                    Win32Interop.KeyEvent(msg.GetProperty("code").GetString() ?? "", down: true);
+                    SendToHelper(new { t = "keydown", code = msg.GetProperty("code").GetString() ?? "" });
                     break;
                 case "keyup":
-                    Win32Interop.KeyEvent(msg.GetProperty("code").GetString() ?? "", down: false);
+                    SendToHelper(new { t = "keyup", code = msg.GetProperty("code").GetString() ?? "" });
                     break;
                 case "cad":
-                    Win32Interop.SendSecureAttentionSequence(logger);
+                    SendToHelper(new { t = "cad" });
                     break;
                 case "clipboard":
                 {
                     var text = msg.GetProperty("text").GetString() ?? "";
-                    Win32Interop.SetClipboardText(text);
-                    // Remember this as "already synced" so ClipboardPollLoopAsync
-                    // doesn't immediately echo it straight back as if it were a
-                    // brand new local change.
+                    // Remember it so the helper's own clipboard poll (echoed
+                    // back over the pipe) doesn't bounce this straight back to
+                    // the browser as if it were a fresh local change.
                     _lastClipboardText = text;
+                    SendToHelper(new { t = "clipset", text });
                     break;
                 }
                 case "resize":
@@ -261,52 +283,140 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         }
     }
 
+    // --- In-session helper (input / clipboard / resolution) ---
+
     /// <summary>
-    /// clipboard is bidirectional per PROTOCOL.md ("both"). The
-    /// browser-to-agent direction is a direct data-channel message handled
-    /// above; this is the other direction.
-    ///
-    /// ponytail: polls the local clipboard every 2s rather than reacting to
-    /// a real WM_CLIPBOARDUPDATE notification - a Windows Service has no
-    /// message-only window/message pump by default, and standing one up
-    /// (AddClipboardFormatListener needs an HWND) is real extra plumbing for
-    /// what's a "keep both ends in sync" nicety, not the core of Shadow
-    /// mode. Up to ~2s of latency on an agent-to-browser clipboard push is a
-    /// fine v1 trade. Upgrade path: a dedicated hidden message-only window +
-    /// AddClipboardFormatListener, if that latency ever actually matters to
-    /// someone.
+    /// Launches the "--session-helper" child into the active console session
+    /// and wires up the duplex pipe to it (see SessionHelper.cs). Input
+    /// injection, the clipboard, and ChangeDisplaySettingsEx all have to run
+    /// on the interactive desktop, which this Session-0 service can't touch -
+    /// the helper does them on its behalf. Best-effort: if the helper can't
+    /// launch, Shadow still streams video, just without input/clipboard/
+    /// resolution, and logs why.
     /// </summary>
-    private async Task ClipboardPollLoopAsync(CancellationToken ct)
+    private void StartHelper()
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        var pipeName = $"DeployCoreAgentSession-{sessionId}";
         try
         {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                try
-                {
-                    var text = Win32Interop.GetClipboardText();
-                    if (text is null || text == _lastClipboardText) continue;
-                    _lastClipboardText = text;
+            _helperPipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Shadow session {SessionId}: could not create the helper pipe - input/clipboard/resolution disabled.", sessionId);
+            return;
+        }
 
-                    var json = JsonSerializer.Serialize(new { t = "clipboard", text });
-                    _dataChannel?.send(json); // SIPSorcery API as documented - unverified, see file header
-                }
-                catch (Exception ex)
+        var exePath = Path.Combine(AppContext.BaseDirectory, "DeployCoreAgent.exe");
+        var commandLine = $"\"{exePath}\" --session-helper {pipeName}";
+        try
+        {
+            _helperProcessId = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory, logger);
+            logger.LogInformation("Shadow session {SessionId}: launched session-helper (pid {Pid}).", sessionId, _helperProcessId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Shadow session {SessionId}: failed to launch the session-helper - input/clipboard/resolution disabled.", sessionId);
+            return;
+        }
+
+        _ = HelperConnectAndReadAsync(_helperPipe, _sessionCts.Token);
+    }
+
+    /// <summary>
+    /// Waits for the helper to connect, then reads its messages: "clip" (the
+    /// in-session clipboard changed - forward it to the browser) and
+    /// "screensize" (the real console resolution - keep _nativeScreenSize in
+    /// step so mouse-coordinate normalization stays correct after a resize).
+    /// </summary>
+    private async Task HelperConnectAndReadAsync(NamedPipeServerStream pipe, CancellationToken ct)
+    {
+        try
+        {
+            await pipe.WaitForConnectionAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Shadow session {SessionId}: session-helper never connected.", sessionId);
+            return;
+        }
+        logger.LogInformation("Shadow session {SessionId}: session-helper connected.", sessionId);
+
+        _helperWriter = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true };
+        var reader = new StreamReader(pipe, new UTF8Encoding(false));
+        try
+        {
+            string? line;
+            while (!ct.IsCancellationRequested && (line = await reader.ReadLineAsync(ct)) is not null)
+            {
+                JsonElement msg;
+                try { msg = JsonDocument.Parse(line).RootElement; }
+                catch (JsonException) { continue; }
+                if (!msg.TryGetProperty("t", out var tEl)) continue;
+
+                switch (tEl.GetString())
                 {
-                    // Per-tick try/catch, not one around the whole loop
-                    // (contrast ReadNalUnitsAsync): a single failed tick
-                    // (e.g. the data channel isn't open quite yet) shouldn't
-                    // silently end clipboard sync for the rest of a
-                    // potentially hours-long session - just skip this tick
-                    // and try again in 2s.
-                    logger.LogDebug(ex, "Shadow session {SessionId}: clipboard poll tick failed.", sessionId);
+                    case "clip":
+                    {
+                        var text = msg.TryGetProperty("text", out var txtEl) ? txtEl.GetString() : null;
+                        if (text is null || text == _lastClipboardText) break;
+                        _lastClipboardText = text;
+                        try { _dataChannel?.send(JsonSerializer.Serialize(new { t = "clipboard", text })); }
+                        catch (Exception ex) { logger.LogDebug(ex, "Shadow session {SessionId}: forwarding helper clipboard to browser failed.", sessionId); }
+                        break;
+                    }
+                    case "screensize":
+                    {
+                        if (msg.TryGetProperty("w", out var wEl) && msg.TryGetProperty("h", out var hEl))
+                            _nativeScreenSize = (wEl.GetInt32(), hEl.GetInt32());
+                        break;
+                    }
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) { /* session teardown */ }
+        catch (Exception ex)
         {
-            // expected on session teardown
+            logger.LogDebug(ex, "Shadow session {SessionId}: helper read loop ended.", sessionId);
+        }
+    }
+
+    private void SendToHelper(object message)
+    {
+        var writer = _helperWriter;
+        if (writer is null) return; // helper not connected (yet / at all) - input is best-effort
+        _ = SendToHelperAsync(writer, message);
+    }
+
+    private async Task SendToHelperAsync(StreamWriter writer, object message)
+    {
+        var json = JsonSerializer.Serialize(message);
+        await _helperWriteSem.WaitAsync();
+        try { await writer.WriteLineAsync(json); }
+        catch (Exception ex) { logger.LogDebug(ex, "Shadow session {SessionId}: send to helper failed.", sessionId); }
+        finally { _helperWriteSem.Release(); }
+    }
+
+    private void StopHelper()
+    {
+        // Closing the pipe makes the helper's own read loop hit EOF, at which
+        // point it restores the original console resolution and exits on its
+        // own. We still bound-wait and then force-kill as a backstop.
+        _helperWriter = null;
+        try { _helperPipe?.Dispose(); } catch { /* best-effort */ }
+        _helperPipe = null;
+
+        if (_helperProcessId is { } pid)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById((int)pid);
+                if (!proc.HasExited && !proc.WaitForExit(2000)) proc.Kill(entireProcessTree: true);
+            }
+            catch (ArgumentException) { /* already exited */ }
+            catch (Exception ex) { logger.LogDebug(ex, "Shadow session {SessionId}: error stopping session-helper.", sessionId); }
+            _helperProcessId = null;
         }
     }
 
@@ -332,71 +442,34 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     /// </summary>
     private void HandleResize(int width, int height)
     {
+        // Even dimensions only. libx264 + yuv420p (4:2:0 chroma) rejects an
+        // odd width or height outright ("width/height not divisible by 2") and
+        // ffmpeg exits instead of rounding - which showed up as a permanent
+        // black screen after any resize to an odd size (the browser sends the
+        // raw clientWidth/clientHeight of a flex-filled div, frequently odd
+        // like 1283x817). Round down to even so the encoded size, the scale
+        // filter, and the capture size used for mouse math all agree.
+        width &= ~1;
+        height &= ~1;
+        if (width < 2 || height < 2) return;
+
         if (config.VirtualDisplay)
         {
-            // Real driver isn't bundled yet - see IVirtualDisplay. Once one
-            // exists, this actually changes the console's own resolution to
-            // exactly w x h, and the -vf scale filter StartCapture applies
-            // below becomes a same-size no-op rather than a real resample.
+            // Real IDD driver (not bundled yet - see IVirtualDisplay): exact
+            // arbitrary sizing, and the -vf scale filter becomes a no-op.
             _virtualDisplay.SetResolution(width, height);
         }
         else
         {
-            _nativeScreenSize = TrySetNearestResolutionInActiveSession(width, height);
+            // The actual ChangeDisplaySettingsEx mode switch runs in the
+            // session-helper - it has to be on the interactive desktop, which
+            // this Session-0 service isn't. The helper reports the resulting
+            // real size back as a "screensize" message, which updates
+            // _nativeScreenSize for mouse-coordinate math.
+            SendToHelper(new { t = "resize", w = width, h = height });
         }
 
         StartCapture(width, height);
-    }
-
-    /// <summary>
-    /// ChangeDisplaySettingsEx (Win32Interop.TrySetNearestResolution) needs
-    /// the calling thread attached to the INTERACTIVE desktop to succeed at
-    /// all - confirmed against Microsoft's own documented behavior for this
-    /// API, not assumed, and confirmed live: agent.log showed it failing
-    /// with code -1 on literally every attempt, regardless of login state or
-    /// requested size, which this agent SERVICE's own process (Session 0,
-    /// same as every Windows service) can structurally never satisfy. So
-    /// this launches a one-shot self-invocation of THIS SAME exe
-    /// (Program.cs's own "--set-resolution" branch) into the active console
-    /// session via SessionCapture - the exact same session-boundary problem
-    /// already solved for ffmpeg's own capture, applied to the one other
-    /// place this agent touches the display - and waits for it to exit
-    /// (bounded) since StartCapture immediately after needs the change to
-    /// have already landed.
-    /// </summary>
-    private (int Width, int Height) TrySetNearestResolutionInActiveSession(int width, int height)
-    {
-        var exePath = Path.Combine(AppContext.BaseDirectory, "DeployCoreAgent.exe");
-        var commandLine = $"\"{exePath}\" --set-resolution {width} {height}";
-        try
-        {
-            var pid = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory, logger);
-            try
-            {
-                using var proc = Process.GetProcessById((int)pid);
-                // 1.5s is generous for a call that's normally near-instant -
-                // this is a genuinely different process/session, not a local
-                // method call, so a bounded wait (not indefinite) protects
-                // against it somehow hanging and stalling this session's
-                // next capture restart.
-                if (!proc.WaitForExit(1500))
-                    logger.LogWarning("Shadow session {SessionId}: resolution-change helper did not exit within 1.5s - proceeding anyway.", sessionId);
-            }
-            catch (ArgumentException)
-            {
-                // Already exited by the time we asked - the expected fast path.
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Shadow session {SessionId}: failed to launch the resolution-change helper into the active console session - screen size unchanged.", sessionId);
-        }
-
-        // Reads back whatever's ACTUALLY on screen now, whether or not the
-        // change above landed - GetSystemMetrics (unlike
-        // ChangeDisplaySettingsEx) has no desktop-attachment restriction, so
-        // this is accurate even called from this service's own Session 0.
-        return Win32Interop.GetPrimaryScreenSize();
     }
 
     // --- ffmpeg capture process ---
@@ -538,7 +611,18 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
             try
             {
                 using var proc = Process.GetProcessById((int)pid);
-                if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+                if (!proc.HasExited)
+                {
+                    proc.Kill(entireProcessTree: true);
+                    // Wait for it to actually exit before StartCapture (right
+                    // after) deletes and relaunches ffmpeg at the SAME output
+                    // path - otherwise the dying ffmpeg can still hold
+                    // shadow-{sessionId}.h264 open for a few ms, colliding with
+                    // the new writer (a sharing violation or a burst of garbled
+                    // H264 right after every resize). Bounded so a wedged
+                    // process can't stall the restart forever.
+                    proc.WaitForExit(2000);
+                }
             }
             catch (ArgumentException)
             {

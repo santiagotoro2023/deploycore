@@ -27,7 +27,13 @@ internal sealed class ConnectTunnel(string sessionId, ControlChannelClient contr
     {
         try
         {
-            _tcpClient = new TcpClient();
+            _tcpClient = new TcpClient { NoDelay = true };
+            // NoDelay (disable Nagle): the RDP/NLA/TLS handshake is a series of
+            // small request/response PDUs, and with Nagle on, each can sit up
+            // to a delayed-ACK interval before being sent - adding avoidable
+            // latency to connection setup and interactivity. Every other leg of
+            // this tunnel already writes eagerly, so this is the only
+            // Nagle-delayed hop.
             await _tcpClient.ConnectAsync(IPAddress.Loopback, RdpPort, _cts.Token);
             logger.LogInformation("Connect session {SessionId}: tunnel to 127.0.0.1:{Port} open.", sessionId, RdpPort);
             _ = PumpSocketToAgentAsync(); // long-running background loop for this session's lifetime

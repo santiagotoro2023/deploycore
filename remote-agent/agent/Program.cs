@@ -31,6 +31,20 @@ if (args is ["--set-resolution", var widthArg, var heightArg]
     return;
 }
 
+// Persistent in-session helper, launched by ShadowSession into the active
+// console session (see SessionHelper's own doc comment). Runs until the pipe
+// to the service closes. Same Session-0-isolation reason as --set-resolution
+// above, but for the whole of input/clipboard/resolution rather than a single
+// one-shot resolution change - a persistent process is required because mouse
+// movement is far too high-frequency for a process-per-event.
+if (args is ["--session-helper", var pipeName])
+{
+    using var helperLoggerFactory = LoggerFactory.Create(builder => builder.AddProvider(new FileLoggerProvider(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DeployCore", "agent.log"))));
+    await SessionHelper.RunAsync(pipeName, helperLoggerFactory.CreateLogger("SessionHelper"));
+    return;
+}
+
 // A modern .NET Windows Service: Microsoft.Extensions.Hosting +
 // Microsoft.Extensions.Hosting.WindowsServices already solve "run a
 // cancellable background loop under the Service Control Manager" for free
