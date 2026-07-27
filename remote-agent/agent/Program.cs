@@ -50,8 +50,11 @@ if (args is ["--session-helper", var pipeName])
 // critical check fails. Run on a windows-latest CI runner before publishing.
 if (args is ["--selftest"])
 {
-    Environment.ExitCode = await SelfTest.RunAsync();
-    return;
+    // Environment.Exit, not "return" - the self-test constructs a SIPSorcery
+    // RTCPeerConnection, which can leave non-background threads running even
+    // after close(); a plain return would then wait on them forever instead of
+    // exiting. Force the process down with the self-test's own exit code.
+    Environment.Exit(await SelfTest.RunAsync());
 }
 
 // A modern .NET Windows Service: Microsoft.Extensions.Hosting +

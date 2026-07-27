@@ -86,6 +86,7 @@ jobs:
       - name: Agent runtime self-test
         shell: pwsh
         working-directory: remote-agent/wix
+        timeout-minutes: 5
         run: |
           & .\DeployCoreAgent.exe --selftest
           if ($LASTEXITCODE -ne 0) { throw "agent self-test failed (exit $LASTEXITCODE)" }

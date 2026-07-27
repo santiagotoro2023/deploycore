@@ -92,17 +92,9 @@ internal static class SelfTest
 
     private static void CheckFfmpegVersion()
     {
-        var ffmpeg = FfmpegPath();
-        var psi = new ProcessStartInfo(ffmpeg, "-hide_banner -version")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        using var proc = Process.Start(psi) ?? throw new Exception("could not start ffmpeg");
-        var stdout = proc.StandardOutput.ReadToEnd();
-        proc.WaitForExit(15000);
-        if (!stdout.Contains("ffmpeg version")) throw new Exception("ffmpeg -version output unexpected");
+        var (code, stdout, _, timedOut) = RunProcess(FfmpegPath(), "-hide_banner -version", 15000);
+        if (timedOut) throw new Exception("ffmpeg -version timed out");
+        if (!stdout.Contains("ffmpeg version")) throw new Exception($"unexpected ffmpeg -version output (exit {code})");
         Console.WriteLine("    " + stdout.Split('\n')[0].Trim());
     }
 
@@ -159,22 +151,49 @@ internal static class SelfTest
         var args = $"-hide_banner -f gdigrab -framerate 10 -t 1 -i desktop -c:v libx264 -preset ultrafast -pix_fmt yuv420p -f h264 -y \"{outPath}\"";
         try
         {
-            using var proc = Process.Start(new ProcessStartInfo(FfmpegPath(), args)
-            {
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            }) ?? throw new Exception("could not start ffmpeg");
-            var stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit(30000);
+            var (_, _, stderr, timedOut) = RunProcess(FfmpegPath(), args, 20000);
             var bytes = File.Exists(outPath) ? new FileInfo(outPath).Length : 0;
+            if (timedOut) throw new Exception("gdigrab timed out (a CI runner may have no capturable desktop)");
             if (bytes <= 0)
-                throw new Exception($"gdigrab produced no output (a CI runner may have no capturable desktop). ffmpeg tail: {Tail(stderr)}");
+                throw new Exception($"gdigrab produced no output. ffmpeg tail: {Tail(stderr)}");
             Console.WriteLine($"    gdigrab captured {bytes} bytes of H264");
         }
         finally
         {
             try { File.Delete(outPath); } catch { /* ignore */ }
         }
+    }
+
+    /// <summary>
+    /// Runs a child process with BOTH stdout/stderr drained asynchronously
+    /// (so a full pipe buffer can never deadlock it) and a hard timeout+kill.
+    /// A plain ReadToEnd() has no timeout and blocks forever if the child
+    /// never exits - which is exactly how gdigrab hung the whole self-test on
+    /// a desktopless CI runner.
+    /// </summary>
+    private static (int exitCode, string stdout, string stderr, bool timedOut) RunProcess(string exe, string args, int timeoutMs)
+    {
+        var psi = new ProcessStartInfo(exe, args)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi) ?? throw new Exception($"could not start {Path.GetFileName(exe)}");
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (stdout) stdout.AppendLine(e.Data); };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (stderr) stderr.AppendLine(e.Data); };
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
+        if (!proc.WaitForExit(timeoutMs))
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            return (-1, stdout.ToString(), stderr.ToString(), true);
+        }
+        proc.WaitForExit(); // let the async output handlers flush
+        return (proc.ExitCode, stdout.ToString(), stderr.ToString(), false);
     }
 
     private static void CheckClipboardRoundTrip()
