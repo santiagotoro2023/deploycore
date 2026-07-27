@@ -137,7 +137,15 @@ async def test_open_guacd_connection_echoes_version_and_aligns_args(monkeypatch)
     # The fix: the VERSION_* slot is answered with the version, NOT "" (which
     # would downgrade guacd to protocol 1.0.0).
     assert values["VERSION_1_5_0"] == "VERSION_1_5_0"
-    assert values["hostname"] == "api"
+    # The hostname handed to guacd is deliberately NOT the caller's value: it's
+    # the local address of the socket guacd is already connected on, which is
+    # by construction an address guacd can dial back on. Telling it the literal
+    # service name instead was why guacd silently never reached the tunnel
+    # listener (the agent saw "local-RDP->agent leg ended after 0 bytes"). The
+    # fake guacd here listens on loopback, so that address is 127.0.0.1 - the
+    # point of the assertion is that it is the CONNECTION's address, not the
+    # "api" string passed in.
+    assert values["hostname"] == "127.0.0.1"
     assert values["port"] == "54321"
     assert values["username"] == "Administrator"
     assert values["password"] == "s3cret"
