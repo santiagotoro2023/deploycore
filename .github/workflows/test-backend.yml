@@ -45,7 +45,10 @@ jobs:
           --health-retries 15
 
     env:
-      APP_SECRET_KEY: test-secret-key-for-ci-only
+      # Must be a valid Fernet key (32 url-safe base64 bytes) - app/security/
+      # crypto.py uses APP_SECRET_KEY directly as one. This is a throwaway
+      # all-zeros key for CI only.
+      APP_SECRET_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       DATABASE_URL: postgresql+asyncpg://deploycore:deploycore@localhost:5432/deploycore
       REDIS_URL: redis://localhost:6379/0
 
@@ -64,5 +67,10 @@ jobs:
       - name: Install backend + test deps
         run: pip install -e ".[test]"
 
-      - name: Run pytest
-        run: pytest -q
+      # Scoped to the Remote Management tests this workflow exists to gate (the
+      # guacd Connect-mode handshake and the power endpoints). The full backend
+      # suite has pre-existing CI-environment needs unrelated to this feature
+      # (mtools for the floppy builder, a writable /data, etc.) and has never
+      # had a CI workflow - retrofitting that is a separate task.
+      - name: Run Remote Management tests
+        run: pytest -q tests/test_remote_session_guacd.py tests/test_managed_hosts_power.py
