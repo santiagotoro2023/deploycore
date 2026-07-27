@@ -329,21 +329,30 @@ internal static class Win32Interop
         var candidates = EnumerateSupportedResolutions();
         if (candidates.Count == 0) return null;
 
+        // Deliberately does NOT require the mode to fit INSIDE the viewport.
+        // That restriction produced genuinely bad picks on real hardware: a
+        // 1402x658 browser window (short and wide) rejected 1024x768 for being
+        // 110px too tall and fell all the way back to 854x480, which then had
+        // to be upscaled - visibly blurry. Since ffmpeg's scale filter makes
+        // the stream exactly the requested size either way, a mode LARGER than
+        // the viewport is strictly better (downscaling stays sharp; upscaling
+        // does not), so candidates are scored purely on how close they are in
+        // aspect ratio and pixel count, in both directions.
         var targetAspect = (double)targetWidth / targetHeight;
+        var targetArea = (double)targetWidth * targetHeight;
         DevMode? best = null;
         var bestScore = double.MaxValue;
         foreach (var mode in candidates)
         {
             int w = mode.DmPelsWidth, h = mode.DmPelsHeight;
-            if (w > targetWidth || h > targetHeight) continue;
+            if (w <= 0 || h <= 0) continue;
             var aspectDiff = Math.Abs((double)w / h - targetAspect);
-            var areaDiff = (double)(targetWidth * targetHeight - w * h) / (targetWidth * targetHeight);
+            var areaDiff = Math.Abs(targetArea - (double)w * h) / targetArea;
+            // Aspect is weighted heavily: matching the window's shape avoids
+            // letterboxing, which matters more than exact pixel count.
             var score = aspectDiff * 5 + areaDiff;
             if (score < bestScore) { bestScore = score; best = mode; }
         }
-        // Nothing fit under the target (a very small requested viewport) -
-        // fall back to the smallest available mode rather than refusing to
-        // change resolution at all.
         return best ?? candidates.OrderBy(c => c.DmPelsWidth * c.DmPelsHeight).FirstOrDefault();
     }
 

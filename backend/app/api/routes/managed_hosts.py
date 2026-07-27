@@ -540,7 +540,7 @@ async def _pump_connect_tunnel(
     ephemeral_port = listener.sockets[0].getsockname()[1]
 
     try:
-        guacd_reader, guacd_writer = await remote_session.open_guacd_connection(
+        guacd_reader, guacd_writer, ready_instruction = await remote_session.open_guacd_connection(
             host="api", port=ephemeral_port, username=rdp_username, password=rdp_password, width=width, height=height,
         )
     except Exception as exc:  # noqa: BLE001 - surfaced as a close reason, not a stack trace to the browser
@@ -580,6 +580,13 @@ async def _pump_connect_tunnel(
                     await websocket.send_text(text)
         except Exception:  # noqa: BLE001 - browser disconnected or guacd went away, either way stop forwarding
             pass
+
+    # Replay guacd's "ready" to the browser FIRST - this backend consumed it
+    # during its own handshake, but Guacamole.Client only reaches
+    # STATE_CONNECTED on receiving it (see open_guacd_connection). Without
+    # this the session hangs at "Establishing a secure session" and dies at
+    # the client's 15s receive timeout with "Server timeout".
+    await websocket.send_text(ready_instruction)
 
     forward_task = asyncio.create_task(_from_guacd_to_browser())
     try:

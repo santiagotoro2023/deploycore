@@ -45,20 +45,32 @@ namespace DeployCoreAgent;
 ///     `if (as_user) CreateEnvironmentBlock(...)` never runs either -
 ///     lpEnvironment stays NULL.
 ///
-/// FOURTH REVISION (the working one). The token/environment lessons above
-/// hold - always winlogon.exe's own token, no custom environment block - but
-/// the "leave lpDesktop unset like RustDesk's show=FALSE" conclusion was
-/// WRONG for a spawned gdigrab and was the real reason ffmpeg kept dying
-/// before main() with no -report. RustDesk's show=FALSE launch works for IT
-/// only because its "--server" is RustDesk's OWN in-process DXGI/GDI capture
-/// engine, not a separate gdigrab child that needs the interactive desktop.
-/// Per the CreateProcessAsUser docs, a NULL lpDesktop makes the child inherit
-/// the PARENT's window station - here this Session-0 service's non-interactive
-/// service station - which, being both non-interactive and cross-session,
-/// win32k/csrss cannot bind, so the process is destroyed during init. The fix
-/// (see StartInActiveSession) is to set lpDesktop = "winsta0\default"
-/// explicitly, with CharSet.Unicode on the STARTUPINFO struct so the string
-/// actually survives marshalling into CreateProcessAsUserW.
+/// FIFTH REVISION. Two separate things had to be right, and each was found
+/// the hard way on real hardware:
+///
+/// 1. lpDesktop must be set EXPLICITLY. A NULL lpDesktop makes the child
+///    inherit the PARENT's window station - this Session-0 service's
+///    non-interactive service station - which, being both non-interactive and
+///    cross-session, win32k/csrss cannot bind, so the process is destroyed
+///    during init (ffmpeg died before main(), never writing its own -report).
+///    Copying rustdesk's show=FALSE/no-lpDesktop launch was the wrong lesson:
+///    its "--server" is rustdesk's OWN in-process capture engine that
+///    re-attaches to the input desktop at runtime, not a spawned gdigrab.
+///    Needs CharSet.Unicode on STARTUPINFO or the string is silently mangled
+///    into CreateProcessAsUserW.
+///
+/// 2. The TOKEN must be the signed-in user's, not winlogon's SYSTEM token.
+///    With lpDesktop fixed, ffmpeg started and read the screen geometry
+///    ("Capturing whole desktop as 1024x768x32") but every frame failed with
+///    "Failed to capture image (error 5)" = ERROR_ACCESS_DENIED, and the
+///    in-session helper's ChangeDisplaySettingsEx returned -1
+///    (DISP_CHANGE_FAILED) - both symptoms of acting on a desktop the process
+///    doesn't own. StartInActiveSession now uses WTSQueryUserToken to get the
+///    signed-in user's own token (duplicated to a primary token, with that
+///    user's environment block) and the Default desktop, falling back to
+///    winlogon.exe's token and the WINLOGON desktop only when nobody is
+///    signed in - which is exactly the sign-in-screen case where the Winlogon
+///    desktop is the one actually on screen.
 ///
 /// Requires SeDebugPrivilege (see EnsureDebugPrivilege), not just
 /// SeTcbPrivilege - confirmed via rustdesk-org's own "impersonate-system"
@@ -187,6 +199,40 @@ internal static class SessionCapture
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetCurrentProcess();
+
+    // The logged-in user's own token for a session (fails with
+    // ERROR_NO_TOKEN when nobody is logged in - that's the login-screen case,
+    // handled by falling back to winlogon's token).
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    private static extern bool WTSQueryUserToken(uint sessionId, out IntPtr phToken);
+
+    // WTSQueryUserToken hands back an impersonation-capable token;
+    // CreateProcessAsUser requires a PRIMARY one.
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool DuplicateTokenEx(
+        IntPtr hExistingToken, uint dwDesiredAccess, IntPtr lpTokenAttributes,
+        int impersonationLevel, int tokenType, out IntPtr phNewToken);
+
+    [DllImport("userenv.dll", SetLastError = true)]
+    private static extern bool CreateEnvironmentBlock(out IntPtr lpEnvironment, IntPtr hToken, bool bInherit);
+
+    [DllImport("userenv.dll", SetLastError = true)]
+    private static extern bool DestroyEnvironmentBlock(IntPtr lpEnvironment);
+
+    private const uint MAXIMUM_ALLOWED = 0x02000000;
+    private const int SecurityImpersonation = 2;
+    private const int TokenPrimary = 1;
+    private const int CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+
+    // The interactive desktop of a normal, signed-in session. Anything that
+    // draws, captures, injects input, or changes the display mode must be on
+    // this desktop (or on Winlogon below, at the sign-in screen).
+    private const string DesktopDefault = @"winsta0\default";
+    // The sign-in / lock / UAC desktop. When nobody is signed in, THIS is the
+    // desktop actually being displayed - capturing "default" there yields an
+    // access error or a blank image, which is why the two cases can't share
+    // one desktop name.
+    private const string DesktopWinlogon = @"winsta0\Winlogon";
 
     #endregion
 
@@ -344,15 +390,69 @@ internal static class SessionCapture
             throw new InvalidOperationException("No active console session found - is a display/console session even attached (e.g. the VM powered on)?");
         }
 
-        var hToken = FindWinlogonToken(sessionId);
+        // Prefer the SIGNED-IN USER's own token. Confirmed live that using
+        // winlogon's SYSTEM token instead is why capture and resolution both
+        // failed on a real VM: gdigrab read the screen geometry fine but
+        // BitBlt returned "Failed to capture image (error 5)"
+        // (ERROR_ACCESS_DENIED), and the helper's ChangeDisplaySettingsEx
+        // returned -1 (DISP_CHANGE_FAILED). A SYSTEM process is not the owner
+        // of the interactive desktop; the user's own token is, which is the
+        // standard pattern for "a service launches something into the
+        // interactive session". WTSQueryUserToken fails when nobody is signed
+        // in - that's the sign-in-screen case, where winlogon's token IS the
+        // right one, paired with the Winlogon desktop rather than Default.
+        var hToken = IntPtr.Zero;
+        var usingUserToken = false;
+        var desktop = DesktopWinlogon;
+
+        if (WTSQueryUserToken(sessionId, out var hUserToken))
+        {
+            try
+            {
+                if (DuplicateTokenEx(hUserToken, MAXIMUM_ALLOWED, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out var hPrimary))
+                {
+                    hToken = hPrimary;
+                    usingUserToken = true;
+                    desktop = DesktopDefault;
+                }
+                else
+                {
+                    logger.LogWarning("DuplicateTokenEx on the session user's token failed (0x{Error:X}) - falling back to winlogon.exe's token.", Marshal.GetLastWin32Error());
+                }
+            }
+            finally
+            {
+                CloseHandle(hUserToken);
+            }
+        }
+
+        if (hToken == IntPtr.Zero)
+        {
+            hToken = FindWinlogonToken(sessionId);
+            desktop = DesktopWinlogon;
+        }
+
         if (hToken == IntPtr.Zero)
         {
             throw new InvalidOperationException(
-                $"Could not find winlogon.exe running in session {sessionId}, or could not open its token " +
-                $"(0x{Marshal.GetLastWin32Error():X}) - is SeDebugPrivilege enabled? (see EnsureDebugPrivilege).");
+                $"Could not obtain a token for session {sessionId} - neither the signed-in user's token nor " +
+                $"winlogon.exe's (0x{Marshal.GetLastWin32Error():X}). Is SeDebugPrivilege enabled? (see EnsureDebugPrivilege).");
         }
 
-        logger.LogInformation("Launching into session {SessionId} using winlogon.exe's own token.", sessionId);
+        logger.LogInformation(
+            "Launching into session {SessionId} on desktop {Desktop} using {TokenKind}.",
+            sessionId, desktop, usingUserToken ? "the signed-in user's own token" : "winlogon.exe's token");
+
+        // A user token needs that user's own environment block, or the child
+        // inherits nothing usable (no TEMP/APPDATA/PATH for that account).
+        // The winlogon/SYSTEM path deliberately passes NULL, matching what
+        // rustdesk does for its own no-login launch.
+        var environmentBlock = IntPtr.Zero;
+        if (usingUserToken && !CreateEnvironmentBlock(out environmentBlock, hToken, false))
+        {
+            logger.LogWarning("CreateEnvironmentBlock failed (0x{Error:X}) - continuing with an inherited environment.", Marshal.GetLastWin32Error());
+            environmentBlock = IntPtr.Zero;
+        }
 
         try
         {
@@ -378,11 +478,14 @@ internal static class SessionCapture
             var startupInfo = new STARTUPINFO
             {
                 cb = Marshal.SizeOf<STARTUPINFO>(),
-                lpDesktop = @"winsta0\default",
+                lpDesktop = desktop,
             };
 
+            var creationFlags = CREATE_NO_WINDOW;
+            if (environmentBlock != IntPtr.Zero) creationFlags |= CREATE_UNICODE_ENVIRONMENT;
+
             if (!CreateProcessAsUser(hToken, null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
-                    CREATE_NO_WINDOW, IntPtr.Zero, workingDirectory, ref startupInfo, out var processInfo))
+                    (uint)creationFlags, environmentBlock, workingDirectory, ref startupInfo, out var processInfo))
             {
                 throw new InvalidOperationException($"CreateProcessAsUser failed (0x{Marshal.GetLastWin32Error():X}).");
             }
@@ -393,6 +496,7 @@ internal static class SessionCapture
         }
         finally
         {
+            if (environmentBlock != IntPtr.Zero) DestroyEnvironmentBlock(environmentBlock);
             CloseHandle(hToken);
         }
     }

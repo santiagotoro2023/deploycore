@@ -206,7 +206,7 @@ async def _read_instruction(reader: asyncio.StreamReader) -> list[str]:
 
 async def open_guacd_connection(
     *, host: str, port: int, username: str | None, password: str | None, width: int, height: int, dpi: int = 96,
-) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
     """Does the select/args/connect/ready handshake with guacd on the
     operator's behalf - the browser (guacamole-common-js) never sees RDP
     credentials or connection parameters at all, only the raw protocol
@@ -282,4 +282,12 @@ async def open_guacd_connection(
     # to tell "guacd never even accepted this" from "it did, and got stuck
     # somewhere in the tunnel after."
     logger.info("guacd accepted the connect handshake (tunnel target %s:%d).", host, port)
-    return reader, writer
+    # The "ready" instruction MUST be replayed to the browser. This backend
+    # performs guacd's select/args/connect handshake itself, so it consumes
+    # "ready" here - but guacamole-common-js's Guacamole.Client only reaches
+    # STATE_CONNECTED when IT receives "ready" (that's where it takes the
+    # connection id from). Swallowing it left the client sitting at
+    # "Establishing a secure session" until its 15s receive timeout fired as
+    # "Server timeout" - the exact symptom seen live. Returned re-encoded so
+    # the caller can forward it verbatim before piping the rest of the stream.
+    return reader, writer, _encode_instruction(*ready).decode()

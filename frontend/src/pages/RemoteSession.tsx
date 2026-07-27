@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, ClipboardCheck, Copy, Keyboard, KeySquare, Loader2, Maximize, Power, PowerOff, RefreshCw, RotateCcw, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Copy, Keyboard, KeySquare, Loader2, Maximize, Power, PowerOff, RefreshCw, RotateCcw, X } from "lucide-react";
 // Namespace import, not a default import: the ambient declaration below
 // uses `export =` (matching the real package's CommonJS shape), and this
 // tsconfig has no esModuleInterop set - `import * as X` is the form that
@@ -85,7 +85,20 @@ export default function RemoteSession() {
     guacClientRef.current?.disconnect();
     guacClientRef.current = null;
     guacMouseRef.current = null;
-    guacKeyboardRef.current = null;
+    // Drop the key handlers and release any keys Guacamole thinks are still
+    // held before letting go of the object - otherwise navigating away
+    // mid-keypress leaves a stuck modifier and (with the old document-level
+    // binding) swallowed keystrokes for the rest of the app.
+    if (guacKeyboardRef.current) {
+      guacKeyboardRef.current.onkeydown = null;
+      guacKeyboardRef.current.onkeyup = null;
+      try {
+        guacKeyboardRef.current.reset();
+      } catch {
+        // reset() is best-effort cleanup; never block teardown on it.
+      }
+      guacKeyboardRef.current = null;
+    }
     if (videoRef.current) videoRef.current.srcObject = null;
     if (viewerRef.current) viewerRef.current.replaceChildren();
     setSessionReady(false);
@@ -339,10 +352,21 @@ export default function RemoteSession() {
         mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state) => client.sendMouseState(state);
         guacMouseRef.current = mouse;
 
-        const keyboard = new GuacamoleLib.Keyboard(document);
+        // Attached to the display element, NOT document: Guacamole.Keyboard
+        // calls preventDefault on every key it handles, so a document-level
+        // listener swallows keystrokes for the WHOLE app - and it kept doing
+        // so after navigating away from the session (confirmed live: the
+        // keyboard was dead on the Remote Management page itself). Bound to a
+        // focusable element instead, keys are only captured while the remote
+        // screen actually has focus, and teardown() drops the handlers.
+        displayElement.tabIndex = 0;
+        const keyboard = new GuacamoleLib.Keyboard(displayElement);
         keyboard.onkeydown = (keysym) => client.sendKeyEvent(1, keysym);
         keyboard.onkeyup = (keysym) => client.sendKeyEvent(0, keysym);
         guacKeyboardRef.current = keyboard;
+        // Clicking the screen focuses it, so typing goes to the remote machine
+        // without the operator having to think about focus.
+        displayElement.addEventListener("mousedown", () => displayElement.focus());
 
         const onPaste = (e: ClipboardEvent) => {
           const text = e.clipboardData?.getData("text");
@@ -516,13 +540,6 @@ export default function RemoteSession() {
                 {selectedOrgId && id && host?.deployment_id && (
                   <PowerMenu orgId={selectedOrgId} hostId={id} />
                 )}
-                <span
-                  className="hidden items-center gap-1 text-xs text-neutral-400 sm:flex"
-                  title="Copy on your computer and paste into the remote session (and vice-versa) - clipboard is shared automatically while connected."
-                >
-                  <ClipboardCheck size={12} strokeWidth={1.75} />
-                  Clipboard shared
-                </span>
                 {hasCreds && (
                   <button
                     className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"

@@ -116,13 +116,19 @@ async def test_open_guacd_connection_echoes_version_and_aligns_args(monkeypatch)
     await fake.start()
     _point_settings_at(monkeypatch, fake.port)
     try:
-        reader, writer = await remote_session.open_guacd_connection(
+        reader, writer, ready_instruction = await remote_session.open_guacd_connection(
             host="api", port=54321, username="Administrator", password="s3cret",
             width=1280, height=800,
         )
         writer.close()
     finally:
         await fake.stop()
+
+    # The "ready" instruction must come back out so the route can replay it to
+    # the browser: this backend consumes it during its own handshake, but
+    # Guacamole.Client only reaches STATE_CONNECTED when IT receives "ready".
+    # Swallowing it was the live "Server timeout" bug.
+    assert _parse_instruction(ready_instruction.encode()) == ["ready", "$fake-connection-id"]
 
     assert fake.select == ["select", "rdp"]
     assert fake.connect is not None

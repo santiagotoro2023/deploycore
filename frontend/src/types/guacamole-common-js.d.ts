@@ -78,6 +78,9 @@ declare module "guacamole-common-js" {
       constructor(element: HTMLElement | Document);
       onkeydown: ((keysym: number) => void) | null;
       onkeyup: ((keysym: number) => void) | null;
+      // Releases every key Guacamole currently believes is held - called on
+      // teardown so navigating away mid-keypress can't strand a modifier.
+      reset(): void;
     }
   }
   export = Guacamole;
