@@ -323,6 +323,17 @@ export default function RemoteSession() {
         // forever-spinner into a real, readable error.
         tunnel.onerror = (status) => setError(status.message || "The remote session's connection failed.");
         client.onerror = (status) => setError(status.message || "The remote desktop session failed.");
+        // guacd asks for credentials it considers missing via "required" and
+        // then WAITS for an argv reply. Unanswered, that's indistinguishable
+        // from a dead session until the tunnel's own 15s timeout fires as a
+        // bare "Server timeout". Surface it as the actionable thing it is -
+        // the backend also refuses to start a Connect session with no saved
+        // credentials, so reaching this means guacd wants something more
+        // (a domain, or the account was rejected).
+        client.onrequired = () =>
+          setError(
+            "The remote desktop is asking for different credentials. Check this host's saved RDP username and password (the pencil button on the Remote Management page)."
+          );
         client.onstatechange = (state) => {
           if (state === GUAC_STATE_CONNECTED) setSessionReady(true);
         };

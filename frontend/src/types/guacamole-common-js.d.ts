@@ -27,6 +27,9 @@ declare module "guacamole-common-js" {
       onerror: ((status: { message?: string; code?: number }) => void) | null;
       onstatechange: ((state: number) => void) | null;
       onclipboard: ((stream: InputStream, mimetype: string) => void) | null;
+      // guacd's credential-prompt flow (protocol 1.5+): it sends "required"
+      // and waits for an argv reply rather than failing outright.
+      onrequired: ((parameters: string[]) => void) | null;
     }
 
     class InputStream {

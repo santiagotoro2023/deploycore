@@ -504,6 +504,20 @@ async def _pump_connect_tunnel(
     width: int,
     height: int,
 ) -> None:
+    # Fail fast, with a message the operator can act on, rather than handing
+    # guacd empty credentials. Since the protocol version is now negotiated
+    # properly (1.5.0), guacd answers missing credentials with a "required"
+    # instruction and WAITS for an argv reply instead of erroring - which,
+    # unanswered, looks exactly like a dead session until the browser's own
+    # 15s receive timeout fires as "Server timeout". Better to say what's
+    # actually wrong.
+    if not rdp_username or not rdp_password:
+        await websocket.close(
+            code=4501,
+            reason="This host has no saved RDP username/password - set them with the pencil (edit) button.",
+        )
+        return
+
     session_id_bytes = bytes.fromhex(session_id_hex)
 
     async def _bridge_listener_to_agent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -570,6 +584,8 @@ async def _pump_connect_tunnel(
         # already buffers partial *instructions* across frames, but only for
         # valid strings.
         decoder = codecs.getincrementaldecoder("utf-8")()
+        total = 0
+        logged = 0
         try:
             while True:
                 chunk = await guacd_reader.read(65536)
@@ -577,15 +593,36 @@ async def _pump_connect_tunnel(
                     break
                 text = decoder.decode(chunk)
                 if text:
+                    total += len(text)
+                    # The browser's Guacamole.Client only reaches CONNECTED on
+                    # the first "sync" instruction, so "which opcodes did guacd
+                    # actually emit" is THE question when a session appears to
+                    # hang. Log a bounded prefix of the real stream (opcodes
+                    # only carry no credentials; an "error" instruction's own
+                    # reason text is exactly what's wanted here).
+                    if logged < 12:
+                        logged += 1
+                        logger.info(
+                            "Connect-mode session %s: guacd -> browser [%d] %s",
+                            session_id_hex, logged, text[:200].replace("\n", " "),
+                        )
                     await websocket.send_text(text)
         except Exception:  # noqa: BLE001 - browser disconnected or guacd went away, either way stop forwarding
             pass
+        finally:
+            logger.info(
+                "Connect-mode session %s: guacd->browser leg ended after %d chars.", session_id_hex, total,
+            )
 
-    # Replay guacd's "ready" to the browser FIRST - this backend consumed it
-    # during its own handshake, but Guacamole.Client only reaches
-    # STATE_CONNECTED on receiving it (see open_guacd_connection). Without
-    # this the session hangs at "Establishing a secure session" and dies at
-    # the client's 15s receive timeout with "Server timeout".
+    # Replay guacd's "ready" (consumed by this backend's own handshake) so the
+    # browser's tunnel flips from CONNECTING to OPEN on a real instruction.
+    # NOTE, checked against guacamole-common-js 1.5.5's actual source rather
+    # than assumed: Guacamole.Client has NO "ready" handler and silently drops
+    # the opcode - the ONLY thing that moves the CLIENT to STATE_CONNECTED is
+    # the first "sync" instruction, which guacd emits once the RDP session is
+    # genuinely up. So this is tunnel-state hygiene, not what makes a session
+    # connect: a session still stuck on the spinner means no "sync" arrived,
+    # i.e. the RDP leg never came up (see the guacd->browser logging below).
     await websocket.send_text(ready_instruction)
 
     forward_task = asyncio.create_task(_from_guacd_to_browser())
