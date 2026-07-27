@@ -45,14 +45,20 @@ namespace DeployCoreAgent;
 ///     `if (as_user) CreateEnvironmentBlock(...)` never runs either -
 ///     lpEnvironment stays NULL.
 ///
-/// This class now matches that exactly: always winlogon.exe's own token
-/// (even once someone's logged in - that's what the real reference does),
-/// lpDesktop left unset, no custom environment block. Per
-/// STARTUPINFO.lpDesktop's own documented behavior, leaving it NULL under
-/// CreateProcessAsUser does not mean "inherit this Session-0 service's own
-/// desktop" the way plain same-session CreateProcess would - the token
-/// being for a different session is what actually determines where the
-/// new process lands.
+/// FOURTH REVISION (the working one). The token/environment lessons above
+/// hold - always winlogon.exe's own token, no custom environment block - but
+/// the "leave lpDesktop unset like RustDesk's show=FALSE" conclusion was
+/// WRONG for a spawned gdigrab and was the real reason ffmpeg kept dying
+/// before main() with no -report. RustDesk's show=FALSE launch works for IT
+/// only because its "--server" is RustDesk's OWN in-process DXGI/GDI capture
+/// engine, not a separate gdigrab child that needs the interactive desktop.
+/// Per the CreateProcessAsUser docs, a NULL lpDesktop makes the child inherit
+/// the PARENT's window station - here this Session-0 service's non-interactive
+/// service station - which, being both non-interactive and cross-session,
+/// win32k/csrss cannot bind, so the process is destroyed during init. The fix
+/// (see StartInActiveSession) is to set lpDesktop = "winsta0\default"
+/// explicitly, with CharSet.Unicode on the STARTUPINFO struct so the string
+/// actually survives marshalling into CreateProcessAsUserW.
 ///
 /// Requires SeDebugPrivilege (see EnsureDebugPrivilege), not just
 /// SeTcbPrivilege - confirmed via rustdesk-org's own "impersonate-system"
@@ -114,7 +120,16 @@ internal static class SessionCapture
         public uint dwThreadId;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    // CharSet.Unicode is REQUIRED, not cosmetic: CreateProcessAsUser below is
+    // declared CharSet.Unicode (so it binds CreateProcessAsUserW, which reads
+    // a STARTUPINFOW with wide-char lpDesktop). Without this attribute the
+    // struct defaults to ANSI marshalling, so the "winsta0\default" string set
+    // in StartInActiveSession would be written as ANSI bytes into a field the
+    // W function reads as UTF-16 - a garbage desktop name. This is exactly
+    // what defeated an earlier revision that DID set lpDesktop but still never
+    // captured. Mirrors the DEVMODE struct in Win32Interop.cs, which already
+    // gets this right.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct STARTUPINFO
     {
         public int cb;
@@ -316,10 +331,10 @@ internal static class SessionCapture
     /// System.Diagnostics.Process.GetProcessById/.Kill(), which works on any
     /// process this SYSTEM-context service has rights over regardless of who
     /// actually started it). Works whether or not anyone is logged in - see
-    /// this class's own doc comment for the mechanism, and specifically why
-    /// lpDesktop and the environment block are both deliberately left unset
-    /// (matching rustdesk/rustdesk's own real, working call for this exact
-    /// job) rather than set to anything this project constructed itself.
+    /// this class's own doc comment for the mechanism, including why lpDesktop
+    /// is set to "winsta0\default" (the child needs the interactive desktop)
+    /// while the environment block is left unset (matching rustdesk's own
+    /// call).
     /// </summary>
     public static uint StartInActiveSession(string commandLine, string? workingDirectory, ILogger logger)
     {
@@ -341,15 +356,30 @@ internal static class SessionCapture
 
         try
         {
-            // cb is the only field STARTUPINFO needs set here - lpDesktop
-            // and every other field deliberately left at its zero/null
-            // default, matching rustdesk/rustdesk's own real call
-            // (LaunchProcessWin with show=FALSE, which never sets
-            // si.lpDesktop at all) rather than the "winsta0\default" this
-            // project set here previously, which - together with the
-            // custom environment block the previous revision also built -
-            // did not actually work on real hardware.
-            var startupInfo = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
+            // lpDesktop MUST be "winsta0\default" (the interactive desktop of
+            // the active session). This is the fix for the whole "ffmpeg dies
+            // before main(), no -report file" saga. Per the CreateProcessAsUser
+            // docs, when lpDesktop is NULL the new process inherits the
+            // PARENT's window station/desktop - and the parent here is this
+            // Session-0 service, whose window station is the non-interactive
+            // service station (Service-0x0-3e7$). The winlogon token puts the
+            // process in the right session, but the inherited window station is
+            // both non-interactive AND cross-session, so win32k/csrss can't
+            // bind it and the process is torn down during initialization
+            // (which is exactly why no -report was ever written: ffmpeg never
+            // reached main()). gdigrab does a GetDC of the interactive desktop
+            // and cannot recover from this. RustDesk's show=FALSE (no lpDesktop)
+            // is safe for ITS launch only because its "--server" is its own
+            // in-process capture engine, not a spawned gdigrab - copying that
+            // flag for a spawned ffmpeg was the wrong lesson. winlogon's SYSTEM
+            // token already has DACL access to winsta0\default, so no ACL edit
+            // is needed. (Requires the CharSet.Unicode on STARTUPINFO above, or
+            // this string is silently ANSI-corrupted.)
+            var startupInfo = new STARTUPINFO
+            {
+                cb = Marshal.SizeOf<STARTUPINFO>(),
+                lpDesktop = @"winsta0\default",
+            };
 
             if (!CreateProcessAsUser(hToken, null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
                     CREATE_NO_WINDOW, IntPtr.Zero, workingDirectory, ref startupInfo, out var processInfo))

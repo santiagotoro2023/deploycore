@@ -535,6 +535,17 @@ class ESXiDriver(HypervisorDriver):
     async def power_off(self, vm_ref: str, hard: bool = False) -> None:
         await asyncio.to_thread(self._power_off_sync, vm_ref, hard)
 
+    def _reset_sync(self, vm_ref: str) -> None:
+        service_instance = self._connect_sync()
+        try:
+            vm = self._find_vm_sync(service_instance, vm_ref)
+            WaitForTask(vm.ResetVM_Task())
+        finally:
+            connect.Disconnect(service_instance)
+
+    async def reset(self, vm_ref: str) -> None:
+        await asyncio.to_thread(self._reset_sync, vm_ref)
+
     def _get_power_state_sync(self, vm_ref: str) -> PowerState:
         service_instance = self._connect_sync()
         try:

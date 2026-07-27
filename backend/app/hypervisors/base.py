@@ -123,6 +123,14 @@ class HypervisorDriver(ABC):
     async def power_off(self, vm_ref: str, hard: bool = False) -> None: ...
 
     @abstractmethod
+    async def reset(self, vm_ref: str) -> None:
+        """A single hard reset (the hypervisor's own reset, not a
+        guest-initiated reboot) - the "Reset" action on Remote Management's
+        power menu, matching an ESXi console's own Reset button. Only valid
+        on a powered-on VM; the hypervisor rejects it otherwise, surfaced to
+        the operator as a plain message like every other power action."""
+
+    @abstractmethod
     async def get_power_state(self, vm_ref: str) -> PowerState: ...
 
     @abstractmethod

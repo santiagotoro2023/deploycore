@@ -6,6 +6,13 @@ declare module "guacamole-common-js" {
   namespace Guacamole {
     class WebSocketTunnel {
       constructor(url: string);
+      // Guacamole.Client only ever wires the tunnel's oninstruction and fires
+      // client.onerror for in-protocol "error" instructions - it never chains
+      // tunnel-level failures (handshake refusal, a parser error, the 15s
+      // receive timeout). Those only reach tunnel.onerror, so it must be wired
+      // directly or every tunnel failure is swallowed and the UI hangs.
+      onerror: ((status: { message?: string; code?: number }) => void) | null;
+      onstatechange: ((state: number) => void) | null;
     }
 
     class Client {

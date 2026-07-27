@@ -1,4 +1,5 @@
 import asyncio
+import codecs
 import json
 import logging
 import uuid
@@ -12,10 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import SessionLocal, get_db
+from app.hypervisors import get_driver
 from app.models.app_asset import AppAsset
+from app.models.deployment import Deployment
+from app.models.hypervisor import HypervisorHost
 from app.models.managed_host import ManagedHost
 from app.models.user import ROLE_ORDER, Role, User
 from app.redis import get_redis
+from app.schemas.deployment import PowerAction, PowerStateRead
 from app.schemas.managed_host import (
     ManagedHostCreate,
     ManagedHostRdpCredentials,
@@ -212,6 +217,128 @@ async def delete_managed_host(
     await db.commit()
 
 
+async def _power_target_for_host(db: AsyncSession, host: ManagedHost) -> tuple[object, str] | None:
+    """Resolve the hypervisor driver + VM moref for a managed host so its
+    power can be read/changed exactly the way a Deployment's own power
+    controls already work (see deployments.py). Only a host DeployCore
+    itself deployed - one linked to a Deployment that still has a live VM -
+    can be powered from here; a standalone (agent-only) host has no VM this
+    app knows how to reach, so no power control is offered for it. Returns
+    (driver, vm_moref), or None when there's no controllable VM."""
+    if host.deployment_id is None:
+        return None
+    deployment = await db.get(Deployment, host.deployment_id)
+    if deployment is None or deployment.vm_moref is None:
+        return None
+    hv_host = await db.get(HypervisorHost, deployment.hypervisor_host_id)
+    if hv_host is None:
+        return None
+    return get_driver(hv_host), deployment.vm_moref
+
+
+async def _require_power_target(
+    db: AsyncSession, org_id: uuid.UUID, host_id: uuid.UUID
+) -> tuple[ManagedHost, object, str]:
+    host = await _get_org_managed_host(db, org_id, host_id)
+    target = await _power_target_for_host(db, host)
+    if target is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "power control isn't available for this host - it isn't linked to a VM that DeployCore deployed",
+        )
+    driver, vm_moref = target
+    return host, driver, vm_moref
+
+
+@router.get(
+    "/api/organizations/{org_id}/managed-hosts/{host_id}/power",
+    response_model=PowerStateRead,
+    dependencies=[Depends(require_role(Role.READONLY))],
+)
+async def get_managed_host_power(
+    org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> PowerStateRead:
+    """Current hypervisor power state, or a null power_state for a host with
+    no controllable VM (standalone/agent-only) - the frontend hides the
+    power menu entirely in that case rather than showing dead buttons."""
+    host = await _get_org_managed_host(db, org_id, host_id)
+    target = await _power_target_for_host(db, host)
+    if target is None:
+        return PowerStateRead(power_state=None)
+    driver, vm_moref = target
+    state = await driver.get_power_state(vm_moref)
+    return PowerStateRead(power_state=state.value)
+
+
+async def _run_power_action(
+    db: AsyncSession, org_id: uuid.UUID, host_id: uuid.UUID, current_user: User, action: str, hard: bool = False
+) -> PowerStateRead:
+    """Shared body for the three power-change endpoints below - resolves the
+    target, runs the action, audits it, and returns the resulting state.
+    A hypervisor fault (resetting an already-off VM, VMware Tools missing
+    for a graceful shutdown, etc.) is surfaced as a clean 502 with the
+    hypervisor's own message instead of a bare 500 traceback."""
+    host, driver, vm_moref = await _require_power_target(db, org_id, host_id)
+    try:
+        if action == "on":
+            await driver.power_on(vm_moref)
+        elif action == "off":
+            await driver.power_off(vm_moref, hard=hard)
+        elif action == "reset":
+            await driver.reset(vm_moref)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - hypervisor faults reach the operator as a readable message
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"the hypervisor rejected the power action: {str(exc)[:200]}")
+    audit.record(
+        db, action=f"managed_host.power_{action}", target_type="managed_host", org_id=org_id,
+        user_id=current_user.id, target_id=host.id,
+        detail={"name": host.name, **({"hard": hard} if action == "off" else {})},
+    )
+    await db.commit()
+    state = await driver.get_power_state(vm_moref)
+    return PowerStateRead(power_state=state.value)
+
+
+@router.post(
+    "/api/organizations/{org_id}/managed-hosts/{host_id}/power/on",
+    response_model=PowerStateRead,
+    dependencies=[Depends(require_role(Role.OPERATOR))],
+)
+async def power_on_managed_host(
+    org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PowerStateRead:
+    return await _run_power_action(db, org_id, host_id, current_user, "on")
+
+
+@router.post(
+    "/api/organizations/{org_id}/managed-hosts/{host_id}/power/off",
+    response_model=PowerStateRead,
+    dependencies=[Depends(require_role(Role.OPERATOR))],
+)
+async def power_off_managed_host(
+    org_id: uuid.UUID, host_id: uuid.UUID, body: PowerAction, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PowerStateRead:
+    """hard=false is a graceful guest shutdown (needs VMware Tools/the guest
+    to honor it); hard=true is an immediate power off, matching the ESXi
+    console's "Shut down guest" vs "Power off" distinction."""
+    return await _run_power_action(db, org_id, host_id, current_user, "off", hard=body.hard)
+
+
+@router.post(
+    "/api/organizations/{org_id}/managed-hosts/{host_id}/power/reset",
+    response_model=PowerStateRead,
+    dependencies=[Depends(require_role(Role.OPERATOR))],
+)
+async def reset_managed_host(
+    org_id: uuid.UUID, host_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PowerStateRead:
+    return await _run_power_action(db, org_id, host_id, current_user, "reset")
+
+
 async def _authenticate_ws(
     websocket: WebSocket, org_id: uuid.UUID, host_id: uuid.UUID
 ) -> tuple[ManagedHost, str, str, int, int] | None:
@@ -258,8 +385,17 @@ async def _authenticate_ws(
             return None
         rdp_username, rdp_password = host.rdp_username, host.rdp_password
 
-    width = int(websocket.query_params.get("w", _DEFAULT_CONNECT_WIDTH))
-    height = int(websocket.query_params.get("h", _DEFAULT_CONNECT_HEIGHT))
+    # Defensive int parse: a malformed w/h must never raise here and kill the
+    # route before it can send a readable close - fall back to the defaults
+    # instead. (guacamole-common-js historically appended a stray "?undefined"
+    # to the query string when connect() was called with no data, which turned
+    # h into e.g. "800?undefined"; the frontend now passes params the correct
+    # way, but this stays as a belt-and-suspenders guard.)
+    try:
+        width = int(websocket.query_params.get("w", _DEFAULT_CONNECT_WIDTH))
+        height = int(websocket.query_params.get("h", _DEFAULT_CONNECT_HEIGHT))
+    except (TypeError, ValueError):
+        width, height = _DEFAULT_CONNECT_WIDTH, _DEFAULT_CONNECT_HEIGHT
     return host, mode, rdp_username, rdp_password, width, height
 
 
@@ -289,8 +425,22 @@ async def managed_host_session_ws(websocket: WebSocket, org_id: uuid.UUID, host_
     every other failure path here too - a bad token, insufficient role, an
     unenrolled host, a disconnected agent - not just this one. Accepting
     first means every close() below now delivers a normal, readable
-    close event to ws.onclose in the browser instead."""
-    await websocket.accept()
+    close event to ws.onclose in the browser instead.
+
+    Connect mode's client (guacamole-common-js WebSocketTunnel) opens the
+    socket REQUESTING the "guacamole" subprotocol; per RFC 6455 / the WHATWG
+    WebSocket spec, if the server's 101 response doesn't echo that
+    subprotocol back, the browser MUST fail the connection immediately (this
+    was an independent, fatal Connect-mode bug - the socket died right after
+    the handshake, before a single byte flowed). So the accepted subprotocol
+    is chosen from what the client actually offered: "guacamole" when present
+    (Connect), nothing when absent (Shadow's plain WebSocket offers none, and
+    replying with an unoffered subprotocol makes IT fail instead). Read from
+    the upgrade header directly, before the mode query param is even parsed,
+    since the two always agree by construction."""
+    offered_subprotocols = websocket.headers.get("sec-websocket-protocol", "")
+    subprotocol = "guacamole" if "guacamole" in offered_subprotocols else None
+    await websocket.accept(subprotocol=subprotocol)
 
     auth = await _authenticate_ws(websocket, org_id, host_id)
     if auth is None:
@@ -409,12 +559,25 @@ async def _pump_connect_tunnel(
         return
 
     async def _from_guacd_to_browser() -> None:
+        # The Guacamole protocol over a browser WebSocket is a TEXT protocol:
+        # guacamole-common-js's tunnel/parser do string operations on every
+        # frame and have zero binary handling, so a binary frame arrives as a
+        # Blob, throws in the parser, and silently closes the tunnel - the
+        # session then hangs forever at "Establishing a secure session". Decode
+        # guacd's raw bytes and send text frames instead. An incremental
+        # decoder is required because a 65536-byte TCP read can split a
+        # multi-byte UTF-8 sequence across a boundary; the parser itself
+        # already buffers partial *instructions* across frames, but only for
+        # valid strings.
+        decoder = codecs.getincrementaldecoder("utf-8")()
         try:
             while True:
                 chunk = await guacd_reader.read(65536)
                 if not chunk:
                     break
-                await websocket.send_bytes(chunk)
+                text = decoder.decode(chunk)
+                if text:
+                    await websocket.send_text(text)
         except Exception:  # noqa: BLE001 - browser disconnected or guacd went away, either way stop forwarding
             pass
 
@@ -424,11 +587,22 @@ async def _pump_connect_tunnel(
             raw = await websocket.receive()
             if raw["type"] == "websocket.disconnect":
                 break
-            if (data := raw.get("bytes")) is not None:
+            if (text := raw.get("text")) is not None:
+                # guacamole-common-js sends an internal keepalive ping every
+                # ~2s as an empty-opcode instruction ("0.,4.ping,...;") and
+                # expects the TUNNEL ENDPOINT to echo it back - guacd itself
+                # never answers it. Forwarding it into guacd (as this used to)
+                # means a quiet-but-healthy session - e.g. during a slow
+                # NLA/CredSSP handshake - gets no reply within the client's 15s
+                # receive timeout and is killed with "Server timeout". Echo the
+                # ping here instead; everything else passes through to guacd.
+                if text.startswith("0.,"):
+                    await websocket.send_text(text)
+                else:
+                    guacd_writer.write(text.encode())
+                    await guacd_writer.drain()
+            elif (data := raw.get("bytes")) is not None:
                 guacd_writer.write(data)
-                await guacd_writer.drain()
-            elif (text := raw.get("text")) is not None:
-                guacd_writer.write(text.encode())
                 await guacd_writer.drain()
     except WebSocketDisconnect:
         pass

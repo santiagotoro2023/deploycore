@@ -252,7 +252,16 @@ async def open_guacd_connection(
         "disable-audio": "true",
         "security": "any",  # let FreeRDP negotiate the best mode the target actually supports
     }
-    connect_args = [values.get(name, "") for name in arg_names]
+    # guacd prepends its own protocol version as the FIRST "arg" name (e.g.
+    # "VERSION_1_5_0"); the client is expected to echo a version back in that
+    # slot. Answering it with "" (as every other unknown arg is answered)
+    # silently downgrades the whole session to protocol 1.0.0, which disables
+    # guacd's newer "required"/argv credential-prompt and "msg" instructions.
+    # Echo the offered VERSION_* name back as its own value to negotiate that
+    # version; positionally this is safe (guacd requires argc == num_args + 1
+    # and joins from argv+1, so the real hostname/port/credentials still line
+    # up regardless).
+    connect_args = [name if name.startswith("VERSION_") else values.get(name, "") for name in arg_names]
     writer.write(_encode_instruction("connect", *connect_args))
     await writer.drain()
 

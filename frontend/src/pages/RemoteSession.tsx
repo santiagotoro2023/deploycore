@@ -1,12 +1,13 @@
-import { ArrowLeft, ClipboardCheck, Copy, Keyboard, KeySquare, Loader2, Maximize, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ClipboardCheck, Copy, Keyboard, KeySquare, Loader2, Maximize, Power, PowerOff, RefreshCw, RotateCcw, X } from "lucide-react";
 // Namespace import, not a default import: the ambient declaration below
 // uses `export =` (matching the real package's CommonJS shape), and this
 // tsconfig has no esModuleInterop set - `import * as X` is the form that
 // works correctly against `export =` regardless of that flag.
 import * as Guacamole from "guacamole-common-js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, ApiError, getToken } from "../api/client";
+import ConfirmDialog from "../components/ConfirmDialog";
 import { ManagedHost, ManagedHostRdpCredentials } from "../api/types";
 import { useOrg } from "../state/org";
 
@@ -288,13 +289,26 @@ export default function RemoteSession() {
         const token = getToken() ?? "";
         const width = viewerRef.current?.clientWidth || 1280;
         const height = viewerRef.current?.clientHeight || 800;
+        // The tunnel URL must be the bare session endpoint with NO query
+        // string. Guacamole.Client.connect(data) hands `data` to
+        // WebSocketTunnel.connect, which builds the socket URL as
+        // `tunnelURL + "?" + data` itself. Passing the params in the
+        // constructor URL and then calling connect() with no argument made the
+        // tunnel append the literal "?undefined", corrupting the last query
+        // param (e.g. h="800?undefined") and crashing the backend route before
+        // the guacd handshake. So: bare URL here, params via connect() below.
         const tunnel = new GuacamoleLib.WebSocketTunnel(
-          `${wsProto}://${location.host}/api/organizations/${selectedOrgId}/managed-hosts/${hostId}/session` +
-            `?mode=connect&token=${encodeURIComponent(token)}&w=${width}&h=${height}`
+          `${wsProto}://${location.host}/api/organizations/${selectedOrgId}/managed-hosts/${hostId}/session`
         );
         const client = new GuacamoleLib.Client(tunnel);
         guacClientRef.current = client;
 
+        // Client.onerror only fires for guacd's own in-protocol "error"
+        // instructions; tunnel-level failures (subprotocol refusal, a parser
+        // error, the receive timeout) ONLY reach tunnel.onerror. Wiring both
+        // is what turns the old silent "Establishing a secure session..."
+        // forever-spinner into a real, readable error.
+        tunnel.onerror = (status) => setError(status.message || "The remote session's connection failed.");
         client.onerror = (status) => setError(status.message || "The remote desktop session failed.");
         client.onstatechange = (state) => {
           if (state === GUAC_STATE_CONNECTED) setSessionReady(true);
@@ -315,7 +329,10 @@ export default function RemoteSession() {
         if (viewerRef.current) {
           viewerRef.current.replaceChildren(display.getElement());
         }
-        client.connect();
+        // Params go here (not in the tunnel URL) - see the bare-URL comment
+        // above. WebSocketTunnel turns this into the "?..." query string the
+        // backend's session route parses.
+        client.connect(`mode=connect&token=${encodeURIComponent(token)}&w=${width}&h=${height}`);
 
         const displayElement = display.getElement();
         const mouse = new GuacamoleLib.Mouse(displayElement);
@@ -390,12 +407,15 @@ export default function RemoteSession() {
     return wireShadowInput();
   }, [isConnectMode, sessionReady, wireShadowInput]);
 
-  // Keeps the remote screen matched to the viewer box's actual size -
-  // Shadow sends its own resize over the data channel (the agent applies it
-  // exactly, no snapping - see PROTOCOL.md); Connect uses Guacamole's own
-  // sendSize, which rides RDP's native Display Control channel for a real,
-  // live resize. Debounced since a resize drag fires this dozens of times a
-  // second.
+  // Keeps the remote screen matched to the viewer box's actual size. Shadow
+  // sends its own resize over the data channel: the agent switches the real
+  // console to the NEAREST supported display mode (ChangeDisplaySettingsEx)
+  // and then scales the encoded video to these exact pixels, so the picture
+  // always fills the box even when the console can't do this precise mode
+  // (see remote-agent/PROTOCOL.md and ShadowSession.cs). Connect uses
+  // Guacamole's own sendSize, which rides RDP's native Display Control
+  // channel for a real, live, exact resize. Debounced since a resize drag
+  // fires this dozens of times a second.
   useEffect(() => {
     if (!sessionReady || !viewerRef.current) return;
     let debounce: ReturnType<typeof setTimeout>;
@@ -493,6 +513,9 @@ export default function RemoteSession() {
             <h1 className="truncate text-xs font-semibold">{host ? host.name : "Connecting..."}</h1>
             {host?.enrolled && (
               <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                {selectedOrgId && id && host?.deployment_id && (
+                  <PowerMenu orgId={selectedOrgId} hostId={id} />
+                )}
                 <span
                   className="hidden items-center gap-1 text-xs text-neutral-400 sm:flex"
                   title="Copy on your computer and paste into the remote session (and vice-versa) - clipboard is shared automatically while connected."
@@ -612,5 +635,144 @@ export default function RemoteSession() {
         </div>
       </div>
     </div>
+  );
+}
+
+type PowerState = "poweredOn" | "poweredOff" | "suspended" | null;
+
+// ESXi-console-style power controls for a host DeployCore itself deployed
+// (has a linked VM). Deliberately NOT gated on the remote session being up:
+// the whole point of "Power on" is to start a machine that's currently off
+// so it can then be connected to, and "Reset" is for a hung one that can't
+// be reached at all. Talks to the same hypervisor driver the Deployments
+// page's own power buttons use (see managed_hosts.py's power endpoints).
+function PowerMenu({ orgId, hostId }: { orgId: string; hostId: string }) {
+  const [state, setState] = useState<PowerState>(null);
+  // null = still loading; false = host has no controllable VM (hide entirely).
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ action: "off" | "reset"; label: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const base = `/organizations/${orgId}/managed-hosts/${hostId}/power`;
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await api.get<{ power_state: PowerState }>(base);
+      setState(res.power_state);
+      setAvailable(res.power_state !== null);
+    } catch {
+      setAvailable(false);
+    }
+  }, [base]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // A hypervisor power op takes a few seconds to settle (and a graceful
+  // guest shutdown longer) - re-poll a couple times so the indicator catches
+  // up on its own rather than needing a manual refresh.
+  const repoll = useCallback(() => {
+    setTimeout(refresh, 2500);
+    setTimeout(refresh, 7000);
+  }, [refresh]);
+
+  const run = useCallback(
+    async (action: "on" | "off" | "reset", hard = false) => {
+      setBusy(action);
+      setErr(null);
+      setOpen(false);
+      try {
+        const res = await api.post<{ power_state: PowerState }>(`${base}/${action}`, action === "off" ? { hard } : {});
+        setState(res.power_state);
+        repoll();
+      } catch (e) {
+        setErr(e instanceof ApiError ? e.message : "Power action failed.");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [base, repoll]
+  );
+
+  if (!available) return null;
+
+  const on = state === "poweredOn";
+  const dot = on ? "bg-emerald-500" : state === "suspended" ? "bg-amber-500" : "bg-neutral-400";
+
+  return (
+    <div className="relative">
+      <button
+        className="flex items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
+        title={`Power controls — currently ${state ?? "unknown"}`}
+        disabled={!!busy}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+        <Power size={12} strokeWidth={1.75} />
+        Power
+        <ChevronDown size={11} strokeWidth={1.75} />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-50 mt-1 w-48 rounded-md border border-neutral-200 bg-white py-1 text-xs shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+            <PowerItem icon={<Power size={12} strokeWidth={1.75} />} label="Power on" disabled={on} onClick={() => run("on")} />
+            <PowerItem icon={<PowerOff size={12} strokeWidth={1.75} />} label="Shut down guest" disabled={!on} onClick={() => run("off", false)} />
+            <PowerItem icon={<PowerOff size={12} strokeWidth={1.75} />} label="Power off (hard)" disabled={!on} danger onClick={() => setConfirm({ action: "off", label: "Power off (hard)" })} />
+            <PowerItem icon={<RotateCcw size={12} strokeWidth={1.75} />} label="Reset" disabled={!on} danger onClick={() => setConfirm({ action: "reset", label: "Reset" })} />
+          </div>
+        </>
+      )}
+
+      {err && <span className="absolute right-0 top-full z-50 mt-1 whitespace-nowrap text-[11px] text-red-500">{err}</span>}
+
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.label ?? ""}
+        message={
+          confirm?.action === "reset"
+            ? "Hard-reset this machine now? This is the hypervisor's own reset - like a physical reset button, so any unsaved work in the running OS is lost."
+            : "Force this machine off now? This is an immediate power cut, not a graceful shutdown - unsaved work is lost."
+        }
+        confirmLabel={confirm?.label ?? "Confirm"}
+        onConfirm={() => {
+          if (confirm?.action === "reset") run("reset");
+          else run("off", true);
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+    </div>
+  );
+}
+
+function PowerItem({
+  icon,
+  label,
+  disabled,
+  danger,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  disabled?: boolean;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40 ${
+        danger ? "text-red-600 dark:text-red-400" : ""
+      }`}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
