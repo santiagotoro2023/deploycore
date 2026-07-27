@@ -286,8 +286,9 @@ function UploadAppForm({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function onSelectFile(f: File) {
+  function onSelectFile(f: File | null) {
     setFile(f);
+    if (!f) return; // FileDropzone passes null when the selection is cleared
     setKind(inferKind(f.name));
     if (!name) setName(f.name.replace(/\.(msi|exe)$/i, ""));
   }

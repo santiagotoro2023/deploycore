@@ -150,6 +150,7 @@ export interface DeploymentTemplate {
   disk_provisioning: DiskProvisioning;
   network_name: string;
   network_adapter_type: NetworkAdapterType;
+  preferred_datastore: string | null;
   locale: string;
   timezone: string;
   keyboard_layout: string;
