@@ -60,11 +60,11 @@ internal static class SessionHelper
         {
             var json = JsonSerializer.Serialize(msg);
             await writeSem.WaitAsync();
-            try
-            {
-                await writer.WriteLineAsync(json);
-                await writer.FlushAsync(); // explicit, not just AutoFlush - the latter is unreliable to push through an async named pipe
-            }
+            // AutoFlush pushes each line to the pipe. Safe against the
+            // pipe-Flush-blocks-until-peer-reads gotcha because the service
+            // (ShadowSession) enters its read loop immediately on connect, so
+            // it's always reading while we write.
+            try { await writer.WriteLineAsync(json); }
             catch (Exception ex) { logger.LogDebug(ex, "session-helper: send failed (pipe closing?)."); }
             finally { writeSem.Release(); }
         }

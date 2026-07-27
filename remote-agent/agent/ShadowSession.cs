@@ -393,11 +393,9 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     {
         var json = JsonSerializer.Serialize(message);
         await _helperWriteSem.WaitAsync();
-        try
-        {
-            await writer.WriteLineAsync(json);
-            await writer.FlushAsync(); // explicit, not just AutoFlush - see SessionHelper.SendAsync
-        }
+        // AutoFlush delivers each line; the helper is always in its own read
+        // loop, so this never blocks on the pipe-Flush-waits-for-peer gotcha.
+        try { await writer.WriteLineAsync(json); }
         catch (Exception ex) { logger.LogDebug(ex, "Shadow session {SessionId}: send to helper failed.", sessionId); }
         finally { _helperWriteSem.Release(); }
     }

@@ -134,28 +134,41 @@ internal static class SelfTest
         var writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true };
         var reader = new StreamReader(server, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false);
 
-        // The helper sends a "screensize" immediately on connect and again
-        // after a "resize". Send a resize and confirm a screensize reply comes
-        // back - proves the whole JSON pipe protocol round-trips both ways.
-        await writer.WriteLineAsync("{\"t\":\"resize\",\"w\":800,\"h\":600}");
-        await writer.FlushAsync();
-        Console.WriteLine("    sent resize to helper");
-
-        string? gotScreensize = null;
-        for (var i = 0; i < 8 && gotScreensize is null; i++)
+        // Read on a SEPARATE task, concurrently with writing. A named-pipe
+        // Flush blocks until the peer reads, so if both ends write-then-flush
+        // before reading, they deadlock - which is exactly what an earlier run
+        // hit here (both "connected" but neither's write completed). Production
+        // avoids this because ShadowSession reads immediately on connect; the
+        // test must do the same. The helper sends a "screensize" on connect and
+        // again after a "resize"; either one satisfies the check.
+        var readTask = Task.Run(async () =>
         {
-            var line = await reader.ReadLineAsync();
-            Console.WriteLine($"    read[{i}]: {(line is null ? "<null/EOF>" : line)}");
-            if (line is null) break;
-            try
+            for (var i = 0; i < 8; i++)
             {
-                var msg = JsonDocument.Parse(line).RootElement;
-                if (msg.TryGetProperty("t", out var t) && t.GetString() == "screensize"
-                    && msg.TryGetProperty("w", out var w) && w.GetInt32() > 0)
-                    gotScreensize = line;
+                var line = await reader.ReadLineAsync();
+                Console.WriteLine($"    read[{i}]: {(line is null ? "<null/EOF>" : line)}");
+                if (line is null) return (string?)null;
+                try
+                {
+                    var msg = JsonDocument.Parse(line).RootElement;
+                    if (msg.TryGetProperty("t", out var t) && t.GetString() == "screensize"
+                        && msg.TryGetProperty("w", out var w) && w.GetInt32() > 0)
+                        return line;
+                }
+                catch (JsonException) { /* ignore non-JSON */ }
             }
-            catch (JsonException) { /* ignore non-JSON */ }
+            return (string?)null;
+        });
+
+        await Task.Delay(250); // let the reader drain the helper's initial screensize first
+        try
+        {
+            await writer.WriteLineAsync("{\"t\":\"resize\",\"w\":800,\"h\":600}");
+            Console.WriteLine("    sent resize to helper");
         }
+        catch (Exception ex) { Console.WriteLine("    write to helper failed: " + ex.Message); }
+
+        var gotScreensize = await readTask;
         if (gotScreensize is null) throw new Exception("no valid 'screensize' reply from the helper");
         Console.WriteLine($"    helper replied: {gotScreensize}");
     }
