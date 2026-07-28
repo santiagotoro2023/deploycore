@@ -109,14 +109,22 @@ internal static class SelfTest
         var exe = Path.Combine(AppContext.BaseDirectory, "DeployCoreAgent.exe");
         using var child = Process.Start(new ProcessStartInfo(exe, $"--session-helper {pipeName}") { UseShellExecute = false })
                           ?? throw new Exception("could not launch --session-helper child");
+        // Pass/fail is decided ONLY by "did the helper's reply come back",
+        // captured here before any cleanup runs. Teardown of a named pipe plus
+        // a child process is noisy by nature (a broken-pipe write, a dispose
+        // racing a pending read, a child that needs killing), and letting that
+        // noise decide the verdict made a genuinely successful round-trip
+        // report as a failure. Task.WaitAsync still bounds the round-trip hard
+        // so this can never stall the self-test.
+        string? reply = null;
+        Exception? failure = null;
         try
         {
-            // Task.WaitAsync bounds the WHOLE round-trip hard: unlike a
-            // CancellationToken (which a named-pipe WaitForConnection/ReadLine
-            // may not actually honor - that's what hung an earlier run), this
-            // abandons the wait after the timeout no matter what, throwing
-            // TimeoutException, so this check can never stall the self-test.
-            await DoHelperRoundTripAsync(server).WaitAsync(TimeSpan.FromSeconds(25));
+            reply = await DoHelperRoundTripAsync(server).WaitAsync(TimeSpan.FromSeconds(25));
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
         }
         finally
         {
@@ -124,9 +132,12 @@ internal static class SelfTest
             try { if (!child.WaitForExit(3000)) child.Kill(entireProcessTree: true); } catch { /* ignore */ }
             DumpAgentLog(); // the helper's own log - shows its side of the round-trip
         }
+
+        if (reply is null) throw failure ?? new Exception("no valid 'screensize' reply from the helper");
+        Console.WriteLine($"    helper replied: {reply}");
     }
 
-    private static async Task DoHelperRoundTripAsync(System.IO.Pipes.NamedPipeServerStream server)
+    private static async Task<string?> DoHelperRoundTripAsync(System.IO.Pipes.NamedPipeServerStream server)
     {
         await server.WaitForConnectionAsync();
         Console.WriteLine("    helper connected to the pipe");
@@ -168,9 +179,7 @@ internal static class SelfTest
         }
         catch (Exception ex) { Console.WriteLine("    write to helper failed: " + ex.Message); }
 
-        var gotScreensize = await readTask;
-        if (gotScreensize is null) throw new Exception("no valid 'screensize' reply from the helper");
-        Console.WriteLine($"    helper replied: {gotScreensize}");
+        return await readTask;
     }
 
     private static void DumpAgentLog()

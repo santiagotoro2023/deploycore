@@ -196,10 +196,14 @@ internal static class SessionHelper
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "session-helper: pipe read loop ended.");
+            logger.LogWarning(ex, "session-helper: pipe read loop ended with an error.");
         }
         finally
         {
+            // Why the helper is going away is load-bearing information: if it
+            // exits early, input/clipboard/resolution silently stop working
+            // for the rest of the session while video keeps flowing.
+            logger.LogInformation("session-helper: exiting (pipe closed or read loop ended).");
             cts.Cancel();
             try { await clipTask; } catch { /* ignore */ }
             try { await desktopWatchTask; } catch { /* ignore */ }
