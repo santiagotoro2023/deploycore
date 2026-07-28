@@ -145,41 +145,78 @@ internal static class SelfTest
         var writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true };
         var reader = new StreamReader(server, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false);
 
-        // Read on a SEPARATE task, concurrently with writing. A named-pipe
-        // Flush blocks until the peer reads, so if both ends write-then-flush
-        // before reading, they deadlock - which is exactly what an earlier run
-        // hit here (both "connected" but neither's write completed). Production
-        // avoids this because ShadowSession reads immediately on connect; the
-        // test must do the same. The helper sends a "screensize" on connect and
-        // again after a "resize"; either one satisfies the check.
-        var readTask = Task.Run(async () =>
+        // Strictly SEQUENTIAL: read, then write, then read. Overlapping a read
+        // and a write on the same pipe stream wedged this check (the write
+        // failed with "operation was canceled" and the pending read then never
+        // completed, burning the full timeout) even though the helper itself
+        // was healthy the whole time - its own log showed it alive until the
+        // test tore the pipe down. Sequential is safe here because the helper
+        // sends its first message unprompted the moment it connects, so there
+        // is never a moment where both ends are waiting on each other.
+        async Task<string?> ReadLineBoundedAsync(int index)
         {
-            for (var i = 0; i < 8; i++)
+            string? line;
+            try
             {
-                var line = await reader.ReadLineAsync();
-                Console.WriteLine($"    read[{i}]: {(line is null ? "<null/EOF>" : line)}");
-                if (line is null) return (string?)null;
-                try
-                {
-                    var msg = JsonDocument.Parse(line).RootElement;
-                    if (msg.TryGetProperty("t", out var t) && t.GetString() == "screensize"
-                        && msg.TryGetProperty("w", out var w) && w.GetInt32() > 0)
-                        return line;
-                }
-                catch (JsonException) { /* ignore non-JSON */ }
+                line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(8));
             }
-            return (string?)null;
-        });
+            catch (TimeoutException)
+            {
+                Console.WriteLine($"    read[{index}]: <timed out>");
+                return null;
+            }
+            Console.WriteLine($"    read[{index}]: {(line is null ? "<null/EOF>" : line)}");
+            return line;
+        }
 
-        await Task.Delay(250); // let the reader drain the helper's initial screensize first
+        static bool IsScreensize(string? line)
+        {
+            if (line is null) return false;
+            try
+            {
+                var msg = JsonDocument.Parse(line).RootElement;
+                return msg.TryGetProperty("t", out var t) && t.GetString() == "screensize"
+                       && msg.TryGetProperty("w", out var w) && w.TryGetInt32(out var width) && width > 0;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        // 1. The helper's unprompted greeting (screensize, and possibly a
+        //    "desktop" message right behind it).
+        string? greeting = null;
+        for (var i = 0; i < 3 && greeting is null; i++)
+        {
+            var line = await ReadLineBoundedAsync(i);
+            if (line is null) break;
+            if (IsScreensize(line)) greeting = line;
+        }
+        if (greeting is null) return null;
+
+        // 2. Drive it: ask for a resolution change, which it answers with a
+        //    fresh screensize. This is what proves the service -> helper
+        //    direction works, not just the helper's greeting.
         try
         {
             await writer.WriteLineAsync("{\"t\":\"resize\",\"w\":800,\"h\":600}");
             Console.WriteLine("    sent resize to helper");
         }
-        catch (Exception ex) { Console.WriteLine("    write to helper failed: " + ex.Message); }
+        catch (Exception ex)
+        {
+            Console.WriteLine("    write to helper failed: " + ex.Message);
+            return null;
+        }
 
-        return await readTask;
+        // 3. Its reply. Skips over any "desktop" message that arrives first.
+        for (var i = 3; i < 8; i++)
+        {
+            var line = await ReadLineBoundedAsync(i);
+            if (line is null) break;
+            if (IsScreensize(line)) return line;
+        }
+        return null;
     }
 
     private static void DumpAgentLog()
