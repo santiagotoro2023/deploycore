@@ -63,6 +63,12 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     // sign-in desktop while the user was on Default. Null until the helper
     // reports; capture restarts whenever it changes (sign-in, lock, UAC).
     private string? _inputDesktop;
+
+    // Access-unit assembly for the video path: NALs are buffered until a
+    // complete frame is ready, then handed to SIPSorcery in Annex-B form WITH
+    // start codes (see FlushAccessUnit and the tail loop).
+    private readonly List<byte[]> _pendingNals = new();
+    private bool _pendingHasVcl;
     // The desktop the CURRENT helper process was launched on, and a counter so
     // each relaunch gets its own pipe name (a fresh server can't reuse the
     // name while the old one is still tearing down).
@@ -836,7 +842,9 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
 
         var splitter = new AnnexBNalSplitter();
         var buffer = new byte[65536];
-        long nalCount = 0, byteCount = 0;
+        long frameCount = 0, byteCount = 0;
+        _pendingNals.Clear();
+        _pendingHasVcl = false;
         var lastProgressLog = DateTime.UtcNow;
         try
         {
@@ -859,53 +867,31 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
 
                     foreach (var nal in splitter.Append(buffer.AsSpan(0, read)))
                     {
-                        if (_pc is null) continue;
+                        if (_pc is null || nal.Length == 0) continue;
 
-                        // SIPSorcery 6.2.3 (confirmed live via the first
-                        // real CI build, CS4008 "cannot await 'void'"):
-                        // SendVideo is synchronous, not awaitable - fixed
-                        // here, not just guessed at.
+                        // Assemble ACCESS UNITS (whole frames) and hand them to
+                        // SIPSorcery in Annex-B form, START CODES INCLUDED.
+                        // This is the difference between a healthy-looking
+                        // session and a black one: SIPSorcery's H264 path scans
+                        // its input for Annex-B start codes to find NAL
+                        // boundaries, so a bare NAL with the start code stripped
+                        // yields no NALs and therefore no RTP at all - the agent
+                        // happily counts "NAL units sent" while the browser
+                        // receives nothing and renders black.
                         //
-                        // Per-NAL try/catch, not just the outer one around
-                        // this whole loop: confirmed against SIPSorcery's
-                        // own source (MediaStream.GetSendingFormat, called
-                        // internally by SendVideo) that it can throw if no
-                        // compatible format is resolved yet - a real
-                        // possibility right after StartAsync, since capture
-                        // starts immediately while the SDP answer is still
-                        // in flight over the signaling round-trip. An
-                        // unhandled exception here previously propagated
-                        // out of this whole loop's own try block,
-                        // permanently ending frame forwarding for the rest
-                        // of the session after the very first failure -
-                        // "connects, then black forever" is exactly what
-                        // that looks like from the browser side. Now it
-                        // just skips that one NAL.
-                        try
-                        {
-                            _pc.SendVideo(FrameDurationRtpUnits, nal);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogDebug(ex, "Shadow session {SessionId}: SendVideo failed for one NAL (skipping it).", sessionId);
-                            continue;
-                        }
-
-                        // ponytail: passes the full per-frame RTP duration
-                        // on EVERY NAL of a multi-NAL access unit (SPS/PPS/
-                        // slice), not just the last one - would over-advance
-                        // SIPSorcery's internal RTP timestamp for keyframes
-                        // (3 NALs) versus regular frames (1 NAL). H264
-                        // decodability never depends on RTP timestamps (only
-                        // jitter-buffer pacing does), so this trades
-                        // perfectly smooth pacing for a much simpler v1 - a
-                        // real corner cut, named here rather than glossed
-                        // over. Upgrade path: parse the NAL header type (low
-                        // 5 bits of the first byte after the start code) and
-                        // only pass a nonzero duration on the first VCL NAL
-                        // (types 1/5) of each access unit, 0 on SPS/PPS/SEI.
-                        nalCount++;
-                        byteCount += nal.Length;
+                        // Sending per access unit rather than per NAL also fixes
+                        // the timestamp handling this file used to call out as a
+                        // corner cut: the frame duration is now passed once per
+                        // frame instead of on every NAL of a multi-NAL frame
+                        // (SPS+PPS+IDR), which was over-advancing RTP time on
+                        // keyframes.
+                        var nalType = nal[0] & 0x1F;
+                        var isVcl = nalType is >= 1 and <= 5; // coded slice = this frame's picture data
+                        // A new coded slice means the previous access unit is
+                        // complete (its SPS/PPS/SEI already buffered ahead of it).
+                        if (isVcl && _pendingHasVcl) FlushAccessUnit(ref frameCount, ref byteCount);
+                        _pendingNals.Add(nal);
+                        if (isVcl) _pendingHasVcl = true;
                     }
 
                     // Added specifically because the first real end-to-end
@@ -915,7 +901,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                     // the browser side alone.
                     if (DateTime.UtcNow - lastProgressLog > TimeSpan.FromSeconds(5))
                     {
-                        logger.LogInformation("Shadow session {SessionId}: {NalCount} NAL units / {ByteCount} bytes sent to SIPSorcery so far.", sessionId, nalCount, byteCount);
+                        logger.LogInformation("Shadow session {SessionId}: {FrameCount} frames / {ByteCount} bytes sent to SIPSorcery so far.", sessionId, frameCount, byteCount);
                         lastProgressLog = DateTime.UtcNow;
                     }
                 }
@@ -929,6 +915,57 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         {
             logger.LogWarning(ex, "Shadow session {SessionId}: capture tail loop ended.", sessionId);
         }
+    }
+
+    /// <summary>
+    /// Concatenates the buffered NALs into one Annex-B access unit - each NAL
+    /// prefixed with a 4-byte start code - and hands it to SIPSorcery as a
+    /// single frame.
+    ///
+    /// The start codes are the load-bearing part. SIPSorcery's H264 send path
+    /// parses its input BY SCANNING FOR ANNEX-B START CODES; given a bare NAL
+    /// with the start code stripped it finds no NAL boundaries and emits no
+    /// RTP at all. That produced the worst possible failure mode: the agent
+    /// logged frames "sent" and the peer connection reported connected, while
+    /// the browser received nothing and rendered black.
+    /// </summary>
+    private void FlushAccessUnit(ref long frameCount, ref long byteCount)
+    {
+        if (_pendingNals.Count == 0) return;
+
+        var total = 0;
+        foreach (var nal in _pendingNals) total += 4 + nal.Length;
+        var accessUnit = new byte[total];
+        var offset = 0;
+        foreach (var nal in _pendingNals)
+        {
+            accessUnit[offset] = 0x00;
+            accessUnit[offset + 1] = 0x00;
+            accessUnit[offset + 2] = 0x00;
+            accessUnit[offset + 3] = 0x01;
+            offset += 4;
+            Buffer.BlockCopy(nal, 0, accessUnit, offset, nal.Length);
+            offset += nal.Length;
+        }
+        _pendingNals.Clear();
+        _pendingHasVcl = false;
+
+        try
+        {
+            // Per-frame try/catch: SIPSorcery's GetSendingFormat can throw
+            // before the SDP answer has landed (capture starts immediately,
+            // signalling is still in flight). Skipping one frame is right;
+            // letting it escape would end video for the whole session.
+            _pc?.SendVideo(FrameDurationRtpUnits, accessUnit);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Shadow session {SessionId}: SendVideo failed for one frame (skipping it).", sessionId);
+            return;
+        }
+
+        frameCount++;
+        byteCount += accessUnit.Length;
     }
 
     // --- Mouse coordinate rescaling ---
