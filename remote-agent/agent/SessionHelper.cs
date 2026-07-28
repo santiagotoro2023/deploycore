@@ -82,10 +82,17 @@ internal static class SessionHelper
         // how a session ends up as a perfectly-encoded picture of a blank
         // screen. Also attaches this thread to that desktop so SendInput, the
         // clipboard, and ChangeDisplaySettingsEx all act on it.
+        // QUERY ONLY - deliberately does not call SetThreadDesktop. Switching
+        // the desktop of a thread-pool thread out from under the async pipe
+        // I/O broke the helper outright (CI caught it: the pipe died within
+        // 250ms of the first switch). Instead the SERVICE relaunches this
+        // helper on the reported desktop, so the helper is genuinely ON that
+        // desktop from process start and SendInput/clipboard/display calls
+        // just work - no thread juggling.
         string? lastDesktop = null;
         async Task SyncInputDesktopAsync()
         {
-            var name = Win32Interop.AttachThreadToInputDesktop() ?? Win32Interop.GetInputDesktopName();
+            var name = Win32Interop.GetInputDesktopName();
             if (name is null || name == lastDesktop) return;
             lastDesktop = name;
             logger.LogInformation("session-helper: input desktop is now '{Desktop}'.", name);

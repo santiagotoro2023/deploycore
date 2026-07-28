@@ -63,6 +63,11 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     // sign-in desktop while the user was on Default. Null until the helper
     // reports; capture restarts whenever it changes (sign-in, lock, UAC).
     private string? _inputDesktop;
+    // The desktop the CURRENT helper process was launched on, and a counter so
+    // each relaunch gets its own pipe name (a fresh server can't reuse the
+    // name while the old one is still tearing down).
+    private string? _helperDesktop;
+    private int _helperGeneration;
     // The size/desktop the current capture was started with, so a desktop
     // change can relaunch ffmpeg with the same dimensions.
     private int? _requestedWidth;
@@ -308,7 +313,8 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     /// </summary>
     private void StartHelper()
     {
-        var pipeName = $"DeployCoreAgentSession-{sessionId}";
+        var pipeName = $"DeployCoreAgentSession-{sessionId}-{++_helperGeneration}";
+        _helperDesktop = _inputDesktop;
         try
         {
             _helperPipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
@@ -324,8 +330,10 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         var commandLine = $"\"{exePath}\" --session-helper {pipeName}";
         try
         {
-            _helperProcessId = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory, logger);
-            logger.LogInformation("Shadow session {SessionId}: launched session-helper (pid {Pid}).", sessionId, _helperProcessId);
+            _helperProcessId = SessionCapture.StartInActiveSession(commandLine, AppContext.BaseDirectory, logger, _inputDesktop);
+            logger.LogInformation(
+                "Shadow session {SessionId}: launched session-helper (pid {Pid}) on desktop '{Desktop}'.",
+                sessionId, _helperProcessId, _inputDesktop ?? "(bootstrap)");
         }
         catch (Exception ex)
         {
@@ -400,6 +408,17 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                             "Shadow session {SessionId}: input desktop is '{Desktop}' (was '{Previous}') - restarting capture on it.",
                             sessionId, name, previous ?? "unknown");
                         StartCapture(_requestedWidth, _requestedHeight);
+                        // Put the helper itself on that desktop too, so its
+                        // SendInput/clipboard/display calls act on the desktop
+                        // the operator is actually looking at. The relaunched
+                        // helper reports the same desktop back, which is then a
+                        // no-op - so this converges rather than looping.
+                        if (_helperDesktop != name)
+                        {
+                            logger.LogInformation(
+                                "Shadow session {SessionId}: relaunching the session-helper on desktop '{Desktop}'.", sessionId, name);
+                            _ = Task.Run(() => { StopHelper(); StartHelper(); });
+                        }
                         break;
                     }
                 }
