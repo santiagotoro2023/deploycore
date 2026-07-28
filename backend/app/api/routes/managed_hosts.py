@@ -547,7 +547,10 @@ async def _pump_connect_tunnel(
             remote_session.unregister_tunnel_writer(session_id_hex)
             writer.close()
 
+    guacd_dialed_back = asyncio.Event()
+
     def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        guacd_dialed_back.set()
         asyncio.create_task(_bridge_listener_to_agent(reader, writer))
 
     listener = await asyncio.start_server(_handle_client, host="0.0.0.0", port=0)
@@ -624,6 +627,27 @@ async def _pump_connect_tunnel(
     # connect: a session still stuck on the spinner means no "sync" arrived,
     # i.e. the RDP leg never came up (see the guacd->browser logging below).
     await websocket.send_text(ready_instruction)
+
+    # guacd must now dial the per-session listener above. If it never does, the
+    # session would otherwise just sit there until the browser's own 15s
+    # receive timeout reports a bare "Server timeout" with no cause - which is
+    # exactly what "Connect loads forever" looked like. Say what actually
+    # happened instead.
+    try:
+        await asyncio.wait_for(guacd_dialed_back.wait(), timeout=10)
+        logger.info("Connect-mode session %s: guacd dialed the session tunnel.", session_id_hex)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Connect-mode session %s: guacd never connected to the session tunnel at port %d.",
+            session_id_hex, ephemeral_port,
+        )
+        guacd_writer.close()
+        listener.close()
+        await websocket.close(
+            code=4504,
+            reason="The remote desktop daemon could not reach this session's tunnel - check the api and guacd containers.",
+        )
+        return
 
     forward_task = asyncio.create_task(_from_guacd_to_browser())
     try:

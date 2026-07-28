@@ -75,6 +75,36 @@ internal static class SessionHelper
 
         using var cts = new CancellationTokenSource();
 
+        // Tell the service which desktop is ACTUALLY on the monitor, and keep
+        // telling it when that changes (sign-in, lock, UAC, screen saver).
+        // The service can't determine this from Session 0 - only a process
+        // inside the session can - and capturing the wrong desktop is exactly
+        // how a session ends up as a perfectly-encoded picture of a blank
+        // screen. Also attaches this thread to that desktop so SendInput, the
+        // clipboard, and ChangeDisplaySettingsEx all act on it.
+        string? lastDesktop = null;
+        async Task SyncInputDesktopAsync()
+        {
+            var name = Win32Interop.AttachThreadToInputDesktop() ?? Win32Interop.GetInputDesktopName();
+            if (name is null || name == lastDesktop) return;
+            lastDesktop = name;
+            logger.LogInformation("session-helper: input desktop is now '{Desktop}'.", name);
+            await SendAsync(new { t = "desktop", name });
+        }
+
+        await SyncInputDesktopAsync();
+
+        var desktopWatchTask = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(cts.Token)) await SyncInputDesktopAsync();
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { logger.LogDebug(ex, "session-helper: desktop watch ended."); }
+        });
+
         // Clipboard poll loop, IN-SESSION (so it reads the logged-in user's
         // own clipboard, not Session 0's). Seed lastClip with the current
         // value so the very first real change is what gets pushed, not the
@@ -165,6 +195,7 @@ internal static class SessionHelper
         {
             cts.Cancel();
             try { await clipTask; } catch { /* ignore */ }
+            try { await desktopWatchTask; } catch { /* ignore */ }
 
             // Best-effort restore of the console resolution we started at.
             try

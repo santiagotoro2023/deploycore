@@ -56,6 +56,18 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     private readonly SemaphoreSlim _helperWriteSem = new(1, 1);
     private uint? _helperProcessId;
 
+    // The desktop actually receiving input, as reported by the in-session
+    // helper (OpenInputDesktop). ffmpeg must be launched on THIS desktop or it
+    // captures a blank screen - confirmed live: a session that encoded real
+    // H.264 at 30fps the whole time was faithfully recording the empty
+    // sign-in desktop while the user was on Default. Null until the helper
+    // reports; capture restarts whenever it changes (sign-in, lock, UAC).
+    private string? _inputDesktop;
+    // The size/desktop the current capture was started with, so a desktop
+    // change can relaunch ffmpeg with the same dimensions.
+    private int? _requestedWidth;
+    private int? _requestedHeight;
+
     private RTCPeerConnection? _pc;
     private RTCDataChannel? _dataChannel;
 
@@ -372,6 +384,24 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                             _nativeScreenSize = (wEl.GetInt32(), hEl.GetInt32());
                         break;
                     }
+                    case "desktop":
+                    {
+                        // The helper (inside the session) told us which desktop
+                        // is genuinely receiving input. Relaunch capture there
+                        // if it isn't already - this is what turns "encoding a
+                        // blank screen at 30fps" into an actual picture, and
+                        // what keeps the picture alive across sign-in, lock,
+                        // and UAC prompts.
+                        var name = msg.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : null;
+                        if (string.IsNullOrEmpty(name) || name == _inputDesktop) break;
+                        var previous = _inputDesktop;
+                        _inputDesktop = name;
+                        logger.LogInformation(
+                            "Shadow session {SessionId}: input desktop is '{Desktop}' (was '{Previous}') - restarting capture on it.",
+                            sessionId, name, previous ?? "unknown");
+                        StartCapture(_requestedWidth, _requestedHeight);
+                        break;
+                    }
                 }
             }
         }
@@ -508,7 +538,13 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         // service with no console - a real, silent hang this project has
         // already been burned by once elsewhere, in the old RustDesk
         // install script's own UAC-prompt hang).
-        const string encodeArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f h264 -y";
+        // -g 30 / -keyint_min 30: an IDR every second. libx264's default GOP is
+        // ~250 frames (8+ seconds at 30fps), and a browser can decode NOTHING
+        // until it receives a keyframe with its SPS/PPS - so a viewer that
+        // joins mid-GOP (always, since capture starts before the WebRTC
+        // handshake finishes) stares at a black video element until the next
+        // one. Also makes recovery from any dropped packet a second, not eight.
+        const string encodeArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -g 30 -keyint_min 30 -pix_fmt yuv420p -f h264 -y";
         var quotedOutput = $"\"{outputPath}\"";
 
         if (width is null || height is null)
@@ -531,6 +567,8 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     private void StartCapture(int? width, int? height)
     {
         StopCapture();
+        _requestedWidth = width;
+        _requestedHeight = height;
 
         var bundled = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
         var ffmpegPath = File.Exists(bundled) ? bundled : "ffmpeg.exe"; // PATH fallback
@@ -557,7 +595,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
             // dataDir, not AppContext.BaseDirectory - this is where -report's
             // own log file lands (ffmpeg writes it relative to its working
             // directory), the same place TailCaptureFileAsync looks for it.
-            pid = SessionCapture.StartInActiveSession(commandLine, dataDir, logger);
+            pid = SessionCapture.StartInActiveSession(commandLine, dataDir, logger, _inputDesktop);
         }
         catch (Exception ex)
         {

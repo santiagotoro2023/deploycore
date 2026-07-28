@@ -415,6 +415,63 @@ internal static class Win32Interop
     private const int UOI_FLAGS = 1;
     private const uint WSF_VISIBLE = 0x0001;
 
+    // OpenInputDesktop returns the desktop CURRENTLY RECEIVING INPUT on the
+    // calling process's window station - i.e. the one actually on the monitor
+    // right now, whether that's Default (signed in), Winlogon (sign-in/lock/
+    // UAC), or a screen-saver desktop. This is the only correct way to know
+    // which desktop to capture; inferring it from "is someone signed in" gets
+    // it wrong for the lock screen and UAC, and gets it wrong entirely if the
+    // inference itself fails.
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetThreadDesktop(IntPtr hDesktop);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool CloseDesktop(IntPtr hDesktop);
+
+    private const uint DESKTOP_GENERIC_ALL = 0x10000000; // GENERIC_ALL
+
+    /// <summary>
+    /// The name of the desktop currently receiving input ("Default",
+    /// "Winlogon", "Screen-saver", ...), or null if it can't be determined.
+    /// Only meaningful when called from a process already inside the target
+    /// session on winsta0 - which is exactly what the session helper is.
+    /// </summary>
+    public static string? GetInputDesktopName()
+    {
+        var hDesktop = OpenInputDesktop(0, false, DESKTOP_GENERIC_ALL);
+        if (hDesktop == IntPtr.Zero) return null;
+        try
+        {
+            return ObjectName(hDesktop);
+        }
+        finally
+        {
+            CloseDesktop(hDesktop);
+        }
+    }
+
+    /// <summary>
+    /// Attaches THIS THREAD to the desktop currently receiving input, so
+    /// SendInput, the clipboard, and ChangeDisplaySettingsEx act on the
+    /// desktop the user is actually looking at rather than whichever one this
+    /// process happened to start on. Returns the desktop's name on success.
+    /// Must be called on a thread that owns no windows/hooks (a plain worker
+    /// thread), per SetThreadDesktop's own documented requirement.
+    /// </summary>
+    public static string? AttachThreadToInputDesktop()
+    {
+        var hDesktop = OpenInputDesktop(0, false, DESKTOP_GENERIC_ALL);
+        if (hDesktop == IntPtr.Zero) return null;
+        // Deliberately NOT closed on success: the thread keeps using it, and
+        // closing a desktop a thread is attached to is invalid. These are
+        // process-lifetime handles for a short-lived helper, not a leak that
+        // accumulates (one per actual desktop switch).
+        return SetThreadDesktop(hDesktop) ? ObjectName(hDesktop) : null;
+    }
+
     private static string ObjectName(IntPtr handle)
     {
         var buffer = new byte[512];

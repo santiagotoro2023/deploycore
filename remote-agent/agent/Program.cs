@@ -104,7 +104,17 @@ namespace DeployCoreAgent
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            logger.LogInformation("DeployCore Remote Management Agent starting.");
+            // Build stamp on the very first line: several rounds of live
+            // debugging were muddied by not being able to tell from a log
+            // whether the machine was even running the build being discussed.
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            var version = asm.GetName().Version?.ToString() ?? "unknown";
+            var built = System.IO.File.Exists(asm.Location)
+                ? System.IO.File.GetLastWriteTime(asm.Location).ToString("yyyy-MM-dd HH:mm:ss")
+                : "unknown";
+            logger.LogInformation(
+                "DeployCore Remote Management Agent starting (version {Version}, binary built/installed {Built}).",
+                version, built);
 
             // Machine-wide policy, not per-session state - see Win32Interop's own
             // doc-comment on why this runs once here rather than lazily inside

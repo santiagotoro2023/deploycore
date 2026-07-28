@@ -394,7 +394,16 @@ internal static class SessionCapture
     /// while the environment block is left unset (matching rustdesk's own
     /// call).
     /// </summary>
-    public static uint StartInActiveSession(string commandLine, string? workingDirectory, ILogger logger)
+    /// <param name="desktopOverride">
+    /// The desktop to launch on, e.g. "Default" or "Winlogon" (bare name, no
+    /// "winsta0\" prefix), as reported by the in-session helper from
+    /// OpenInputDesktop. ALWAYS prefer this: only a process inside the session
+    /// can see which desktop is genuinely receiving input, and capturing the
+    /// wrong one produces a perfectly-encoded video of a blank screen. The
+    /// signed-in/sign-in heuristic below is only a bootstrap for before the
+    /// helper has reported in.
+    /// </param>
+    public static uint StartInActiveSession(string commandLine, string? workingDirectory, ILogger logger, string? desktopOverride = null)
     {
         var sessionId = GetActiveConsoleSessionId();
         if (sessionId == INVALID_SESSION_ID)
@@ -423,7 +432,13 @@ internal static class SessionCapture
         // the session is the signal for "somebody is signed in".
         var explorerPid = FindProcessIdInSession(sessionId, "explorer");
         var userSignedIn = explorerPid != 0;
-        var desktop = userSignedIn ? DesktopDefault : DesktopWinlogon;
+        // desktopOverride is the in-session helper's own OpenInputDesktop
+        // answer - authoritative. The explorer heuristic is only the bootstrap
+        // used before the helper has reported (and for launching the helper
+        // itself).
+        var desktop = desktopOverride is { Length: > 0 }
+            ? $@"winsta0\{desktopOverride}"
+            : (userSignedIn ? DesktopDefault : DesktopWinlogon);
 
         var hToken = IntPtr.Zero;
         var tokenKind = "winlogon.exe's token";
