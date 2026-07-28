@@ -576,7 +576,16 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         // joins mid-GOP (always, since capture starts before the WebRTC
         // handshake finishes) stares at a black video element until the next
         // one. Also makes recovery from any dropped packet a second, not eight.
-        const string encodeArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -g 30 -keyint_min 30 -pix_fmt yuv420p -f h264 -y";
+        // -flush_packets 1 is REQUIRED, not a tuning knob. ffmpeg buffers its
+        // output file, and this capture is a near-static desktop encoding to a
+        // few hundred bytes per frame, so the buffer takes an eternity to fill
+        // - the agent tails that file and therefore sees an EMPTY file while
+        // ffmpeg's own report happily shows frames being encoded. Confirmed
+        // live: "0 frames / 0 bytes actually sent (0 dropped)" alongside an
+        // ffmpeg report listing dozens of encoded frames. Flushing every packet
+        // makes each frame readable the moment it exists, which is exactly what
+        // a tail-the-file design needs.
+        const string encodeArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -g 30 -keyint_min 30 -pix_fmt yuv420p -flush_packets 1 -f h264 -y";
         var quotedOutput = $"\"{outputPath}\"";
 
         if (width is null || height is null)

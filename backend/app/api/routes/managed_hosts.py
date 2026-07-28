@@ -396,6 +396,13 @@ async def _authenticate_ws(
         height = int(websocket.query_params.get("h", _DEFAULT_CONNECT_HEIGHT))
     except (TypeError, ValueError):
         width, height = _DEFAULT_CONNECT_WIDTH, _DEFAULT_CONNECT_HEIGHT
+    # Align to a multiple of 4 and keep it sane. These come straight from the
+    # browser viewport, so they are arbitrary - a live session negotiated
+    # 1984x857, and an ODD framebuffer height is a well-known way to get a
+    # blank/garbled RDP surface. Rounding down never asks for more room than
+    # the viewport actually has.
+    width = max(640, width - (width % 4))
+    height = max(480, height - (height % 4))
     return host, mode, rdp_username, rdp_password, width, height
 
 
