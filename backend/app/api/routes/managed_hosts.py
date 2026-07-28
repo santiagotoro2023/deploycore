@@ -557,7 +557,7 @@ async def _pump_connect_tunnel(
     ephemeral_port = listener.sockets[0].getsockname()[1]
 
     try:
-        guacd_reader, guacd_writer, ready_instruction = await remote_session.open_guacd_connection(
+        guacd_reader, guacd_writer, ready_instruction, tunnel_host = await remote_session.open_guacd_connection(
             host="api", port=ephemeral_port, username=rdp_username, password=rdp_password, width=width, height=height,
         )
     except Exception as exc:  # noqa: BLE001 - surfaced as a close reason, not a stack trace to the browser
@@ -628,19 +628,27 @@ async def _pump_connect_tunnel(
     # i.e. the RDP leg never came up (see the guacd->browser logging below).
     await websocket.send_text(ready_instruction)
 
+    # Start forwarding guacd's output BEFORE waiting on the dial-back. guacd
+    # reports its own failures as an "error" instruction on this stream, and
+    # waiting first meant anything it said during that window was thrown away -
+    # turning a specific, actionable reason ("Connection refused", a security
+    # negotiation failure) into a generic "couldn't reach the tunnel". Now
+    # whatever guacd says reaches both the log and the browser.
+    forward_task = asyncio.create_task(_from_guacd_to_browser())
+
     # guacd must now dial the per-session listener above. If it never does, the
     # session would otherwise just sit there until the browser's own 15s
-    # receive timeout reports a bare "Server timeout" with no cause - which is
-    # exactly what "Connect loads forever" looked like. Say what actually
-    # happened instead.
+    # receive timeout reports a bare "Server timeout" with no cause.
     try:
         await asyncio.wait_for(guacd_dialed_back.wait(), timeout=10)
         logger.info("Connect-mode session %s: guacd dialed the session tunnel.", session_id_hex)
     except asyncio.TimeoutError:
         logger.warning(
-            "Connect-mode session %s: guacd never connected to the session tunnel at port %d.",
-            session_id_hex, ephemeral_port,
+            "Connect-mode session %s: guacd never connected to the session tunnel at %s:%d. "
+            "guacd's own output for this session is logged above, if it said anything.",
+            session_id_hex, tunnel_host, ephemeral_port,
         )
+        forward_task.cancel()
         guacd_writer.close()
         listener.close()
         await websocket.close(
@@ -648,8 +656,6 @@ async def _pump_connect_tunnel(
             reason="The remote desktop daemon could not reach this session's tunnel - check the api and guacd containers.",
         )
         return
-
-    forward_task = asyncio.create_task(_from_guacd_to_browser())
     try:
         while True:
             raw = await websocket.receive()

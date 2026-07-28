@@ -206,7 +206,7 @@ async def _read_instruction(reader: asyncio.StreamReader) -> list[str]:
 
 async def open_guacd_connection(
     *, host: str, port: int, username: str | None, password: str | None, width: int, height: int, dpi: int = 96,
-) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str, str]:
     """Does the select/args/connect/ready handshake with guacd on the
     operator's behalf - the browser (guacamole-common-js) never sees RDP
     credentials or connection parameters at all, only the raw protocol
@@ -303,4 +303,6 @@ async def open_guacd_connection(
     # first instruction of any opcode). It does NOT connect the client -
     # verified against 1.5.5's source that Guacamole.Client has no "ready"
     # handler at all and only reaches STATE_CONNECTED on the first "sync".
-    return reader, writer, _encode_instruction(*ready).decode()
+    # host is returned too so the caller can name the exact address guacd was
+    # told to dial when reporting a tunnel that never got connected.
+    return reader, writer, _encode_instruction(*ready).decode(), host

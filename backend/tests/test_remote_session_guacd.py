@@ -116,7 +116,7 @@ async def test_open_guacd_connection_echoes_version_and_aligns_args(monkeypatch)
     await fake.start()
     _point_settings_at(monkeypatch, fake.port)
     try:
-        reader, writer, ready_instruction = await remote_session.open_guacd_connection(
+        reader, writer, ready_instruction, tunnel_host = await remote_session.open_guacd_connection(
             host="api", port=54321, username="Administrator", password="s3cret",
             width=1280, height=800,
         )
@@ -146,6 +146,9 @@ async def test_open_guacd_connection_echoes_version_and_aligns_args(monkeypatch)
     # point of the assertion is that it is the CONNECTION's address, not the
     # "api" string passed in.
     assert values["hostname"] == "127.0.0.1"
+    # Same address is handed back to the caller, so a tunnel that never gets
+    # dialed can name the exact address guacd was told to use.
+    assert tunnel_host == "127.0.0.1"
     assert values["port"] == "54321"
     assert values["username"] == "Administrator"
     assert values["password"] == "s3cret"
