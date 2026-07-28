@@ -240,6 +240,35 @@ async def open_guacd_connection(
     args_instruction = await asyncio.wait_for(_read_instruction(reader), timeout=_GUACD_CONNECT_TIMEOUT_SECONDS)
     arg_names = args_instruction[1:]  # args_instruction[0] == "args"
 
+    # THE CLIENT HANDSHAKE. This is not optional, and leaving it out is why
+    # Connect mode never worked: between "args" and "connect" the client MUST
+    # send its display/codec parameters. guacd stores them in guac_user_info,
+    # and guac_rdp_parse_args then does this UNCONDITIONALLY, before it ever
+    # looks at the width/height/dpi passed as connect args
+    # (guacamole-server 1.5.5, src/protocols/rdp/settings.c):
+    #
+    #     settings->width = user->info.optimal_width
+    #                     * settings->resolution
+    #                     / user->info.optimal_resolution;
+    #
+    # With no "size" instruction optimal_resolution is 0 - an integer division
+    # by zero, so the guacd CHILD PROCESS takes SIGFPE and dies inside argument
+    # parsing: before FreeRDP is constructed, before any TCP connect, and
+    # before it can send an "error" instruction (the process that would send it
+    # is already gone). guacd logs nothing above DEBUG and the parent just
+    # reports the connection removed. The only visible symptom is that guacd
+    # never dials the session tunnel - which looks exactly like a network or
+    # container-networking problem, and is not one. Passing width/height/dpi in
+    # "connect" does NOT prevent it.
+    #
+    # dpi must be > 0 for the same reason ("size,W,H,0" reproduces the crash
+    # identically).
+    writer.write(_encode_instruction("size", str(width), str(height), str(dpi if dpi > 0 else 96)))
+    writer.write(_encode_instruction("audio", "audio/L16"))
+    writer.write(_encode_instruction("video"))
+    writer.write(_encode_instruction("image", "image/png", "image/jpeg", "image/webp"))
+    await writer.drain()
+
     values = {
         "hostname": host,
         "port": str(port),

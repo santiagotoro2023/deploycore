@@ -57,6 +57,7 @@ class _FakeGuacd:
         self.error_reason = error_reason
         self.select: list[str] | None = None
         self.connect: list[str] | None = None
+        self.handshake: list[list[str]] = []
         self._server: asyncio.AbstractServer | None = None
         self.port = 0
 
@@ -74,7 +75,14 @@ class _FakeGuacd:
             self.select = await _read_one_instruction(reader)  # ["select", "rdp"]
             writer.write(_encode("args", *self.arg_names))
             await writer.drain()
-            self.connect = await _read_one_instruction(reader)  # ["connect", <value per arg_name>...]
+            # Everything the client sends between "args" and "connect" - the
+            # display/codec handshake. Real guacd REQUIRES it (see below).
+            while True:
+                instruction = await _read_one_instruction(reader)
+                if not instruction or instruction[0] == "connect":
+                    self.connect = instruction
+                    break
+                self.handshake.append(instruction)
             if self.error_reason is not None:
                 writer.write(_encode("error", self.error_reason, "769"))
             elif self.respond_ready:
@@ -132,6 +140,20 @@ async def test_open_guacd_connection_echoes_version_and_aligns_args(monkeypatch)
 
     assert fake.select == ["select", "rdp"]
     assert fake.connect is not None
+
+    # The client handshake MUST be sent between "args" and "connect". Omitting
+    # "size" leaves guacd's optimal_resolution at 0, and its RDP settings parser
+    # divides by it unconditionally - the guacd child process dies of SIGFPE
+    # before FreeRDP is constructed, before any TCP connect, and before it can
+    # report an error. The only symptom is that guacd never dials the session
+    # tunnel, which looks like a network fault and is not one. This was the
+    # actual reason Connect mode never worked, so it is asserted here.
+    handshake = {i[0]: i[1:] for i in fake.handshake}
+    assert "size" in handshake, f"no size instruction sent; got {list(handshake)}"
+    assert handshake["size"][:2] == ["1280", "800"]
+    # dpi must be non-zero for the same division-by-zero reason.
+    assert int(handshake["size"][2]) > 0
+    assert "audio" in handshake and "video" in handshake and "image" in handshake
     # connect[0] == "connect"; the rest align positionally with arg_names.
     values = dict(zip(arg_names, fake.connect[1:]))
     # The fix: the VERSION_* slot is answered with the version, NOT "" (which

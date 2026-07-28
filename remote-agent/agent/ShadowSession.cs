@@ -69,6 +69,7 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
     // start codes (see FlushAccessUnit and the tail loop).
     private readonly List<byte[]> _pendingNals = new();
     private bool _pendingHasVcl;
+    private long _framesDroppedBeforeConnected;
     // The desktop the CURRENT helper process was launched on, and a counter so
     // each relaunch gets its own pipe name (a fresh server can't reuse the
     // name while the old one is still tearing down).
@@ -887,9 +888,19 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                         // keyframes.
                         var nalType = nal[0] & 0x1F;
                         var isVcl = nalType is >= 1 and <= 5; // coded slice = this frame's picture data
-                        // A new coded slice means the previous access unit is
-                        // complete (its SPS/PPS/SEI already buffered ahead of it).
-                        if (isVcl && _pendingHasVcl) FlushAccessUnit(ref frameCount, ref byteCount);
+                        // A new PICTURE starts at a slice whose first_mb_in_slice
+                        // is 0 - not merely at "another VCL NAL". Those are the
+                        // same thing only for single-slice pictures; with
+                        // multiple slices per frame, treating each slice as a new
+                        // access unit splits one picture across several RTP
+                        // timestamps and puts the parameter sets in a different
+                        // frame from the slice that needs them, which is exactly
+                        // the black screen this fix exists to remove.
+                        // first_mb_in_slice is the first ue(v) field of the slice
+                        // header, so the value is 0 iff the top bit of the byte
+                        // after the NAL header is set.
+                        var startsNewPicture = isVcl && nal.Length > 1 && (nal[1] & 0x80) != 0;
+                        if (startsNewPicture && _pendingHasVcl) FlushAccessUnit(ref frameCount, ref byteCount);
                         _pendingNals.Add(nal);
                         if (isVcl) _pendingHasVcl = true;
                     }
@@ -901,7 +912,9 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
                     // the browser side alone.
                     if (DateTime.UtcNow - lastProgressLog > TimeSpan.FromSeconds(5))
                     {
-                        logger.LogInformation("Shadow session {SessionId}: {FrameCount} frames / {ByteCount} bytes sent to SIPSorcery so far.", sessionId, frameCount, byteCount);
+                        logger.LogInformation(
+                            "Shadow session {SessionId}: {FrameCount} frames / {ByteCount} bytes actually sent ({Dropped} dropped before the connection was ready).",
+                            sessionId, frameCount, byteCount, _framesDroppedBeforeConnected);
                         lastProgressLog = DateTime.UtcNow;
                     }
                 }
@@ -950,13 +963,27 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         _pendingNals.Clear();
         _pendingHasVcl = false;
 
+        // SendVideo silently DISCARDS frames until the DTLS handshake has
+        // completed - it logs internally and returns normally rather than
+        // throwing. Counting those as "sent" is how a log can look perfectly
+        // healthy while the browser has received nothing, which is the exact
+        // trap that made this bug so hard to see. So the counter only advances
+        // once the connection is genuinely up, and the frames dropped before
+        // then are reported separately. (-g 30 bounds the wait: a fresh
+        // keyframe follows within a second of connecting, and SIPSorcery 6.2.x
+        // exposes no hook to answer a browser's keyframe request.)
+        if (_pc is null || _pc.connectionState != RTCPeerConnectionState.connected)
+        {
+            _framesDroppedBeforeConnected++;
+            return;
+        }
+
         try
         {
             // Per-frame try/catch: SIPSorcery's GetSendingFormat can throw
-            // before the SDP answer has landed (capture starts immediately,
-            // signalling is still in flight). Skipping one frame is right;
+            // before a format is negotiated. Skipping one frame is right;
             // letting it escape would end video for the whole session.
-            _pc?.SendVideo(FrameDurationRtpUnits, accessUnit);
+            _pc.SendVideo(FrameDurationRtpUnits, accessUnit);
         }
         catch (Exception ex)
         {
