@@ -158,6 +158,24 @@ Write-Step "Enabling Remote Desktop..."
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
 
+# Windows 10 1903+ (and every Windows 11) serves RDP through a WDDM indirect
+# display driver by default. guacd 1.5.5 embeds FreeRDP 2.x, which commonly
+# renders that path as a permanently BLANK framebuffer: the session
+# authenticates, the protocol streams, sync flows - and the desktop stays solid
+# black. Observed as exactly that shape on a real VM: guacd negotiated a
+# 1984x857 desktop, sent ONE ~8KB PNG for it (i.e. a solid colour), then
+# nothing but sync and cursor updates.
+#
+# Turning the policy off makes RDP fall back to the classic XDDM path FreeRDP
+# 2.x renders correctly. Same setting as the group policy "Use WDDM graphics
+# display driver for Remote Desktop Connections" -> Disabled. Machine-wide and
+# idempotent, and it only changes how RDP draws - nothing about the physical
+# console that Shadow mode captures.
+$tsPolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+if (-not (Test-Path $tsPolicyPath)) { New-Item -Path $tsPolicyPath -Force | Out-Null }
+New-ItemProperty -Path $tsPolicyPath -Name "fEnableWddmDriver" -Value 0 -PropertyType DWord -Force | Out-Null
+Write-Step "Disabled the WDDM RDP display driver (standard fix for a black RDP screen)."
+
 # 5. Enroll BEFORE installing the service (unlike the RustDesk-based version,
 #    which had to enroll last because the ID/password could only be read
 #    back from an already-running process) - agent_key is minted by
