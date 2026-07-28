@@ -317,8 +317,14 @@ internal sealed class ShadowSession(string sessionId, AgentConfig config, Contro
         _helperDesktop = _inputDesktop;
         try
         {
+            // Explicit 64KB buffers, NOT the default 0. With a zero-size out
+            // buffer a named-pipe write does not complete until the peer
+            // physically reads it - so a burst of mouse-move messages can
+            // block on the helper's read loop instead of completing locally.
+            // Confirmed live in CI: a single 30-byte write hung indefinitely
+            // and only unblocked when the pipe was disposed.
             _helperPipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 65536, 65536);
         }
         catch (Exception ex)
         {

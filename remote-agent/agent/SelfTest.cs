@@ -102,9 +102,11 @@ internal static class SelfTest
     private static async Task CheckHelperPipeRoundTripAsync()
     {
         var pipeName = "DeployCoreAgentSelfTest-" + Guid.NewGuid().ToString("N");
+        // Explicit buffer sizes - matches ShadowSession, and without them a
+        // write blocks until the peer reads rather than completing locally.
         using var server = new System.IO.Pipes.NamedPipeServerStream(
             pipeName, System.IO.Pipes.PipeDirection.InOut, 1,
-            System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+            System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous, 65536, 65536);
 
         var exe = Path.Combine(AppContext.BaseDirectory, "DeployCoreAgent.exe");
         using var child = Process.Start(new ProcessStartInfo(exe, $"--session-helper {pipeName}") { UseShellExecute = false })
